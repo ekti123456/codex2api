@@ -585,6 +585,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at);
 
 	ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS allowed_group_ids JSONB DEFAULT '[]'::jsonb;
+	ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS limits JSONB DEFAULT '{}'::jsonb;
 
 			CREATE TABLE IF NOT EXISTS system_settings (
 				id                 INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -634,6 +635,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_probe_max_age_minutes INT DEFAULT 10;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS recovery_probe_interval_minutes INT DEFAULT 30;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS scheduler_mode VARCHAR(20) DEFAULT 'round_robin';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS affinity_mode VARCHAR(16) DEFAULT 'bounded';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS resin_url TEXT DEFAULT '';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS resin_platform_name TEXT DEFAULT '';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_enabled BOOLEAN DEFAULT FALSE;
@@ -815,7 +817,35 @@ type APIKeyRow struct {
 	QuotaUsed       float64      `json:"quota_used"`
 	ExpiresAt       sql.NullTime `json:"expires_at"`
 	AllowedGroupIDs []int64      `json:"allowed_group_ids"`
+	Limits          APIKeyLimits `json:"limits"`
 	CreatedAt       time.Time    `json:"created_at"`
+}
+
+// APIKeyLimits 是 API Key 级别的细粒度限流/配额配置。
+// 0 或空字段表示该项不限。落库为 JSON,允许平滑扩展字段。
+//
+// - ModelAllow / ModelDeny: 模型白/黑名单。同时配置时白名单生效,黑名单忽略。
+// - RPM: 每分钟请求数 (滑动 60s 窗口)。
+// - RPD: 每天请求数 (滑动 24h 窗口)。
+// - CostLimit5h / CostLimit7d: 美元成本上限,滑动 5h / 7d 窗口,与账号侧窗口语义一致。
+// - TokenLimit5h / TokenLimit7d: token 上限,滑动 5h / 7d 窗口。
+type APIKeyLimits struct {
+	ModelAllow    []string `json:"model_allow,omitempty"`
+	ModelDeny     []string `json:"model_deny,omitempty"`
+	RPM           int      `json:"rpm,omitempty"`
+	RPD           int      `json:"rpd,omitempty"`
+	CostLimit5h   float64  `json:"cost_limit_5h,omitempty"`
+	CostLimit7d   float64  `json:"cost_limit_7d,omitempty"`
+	TokenLimit5h  int64    `json:"token_limit_5h,omitempty"`
+	TokenLimit7d  int64    `json:"token_limit_7d,omitempty"`
+}
+
+// IsZero 判断是否为空 limits(全部字段都未配置)
+func (l APIKeyLimits) IsZero() bool {
+	return len(l.ModelAllow) == 0 && len(l.ModelDeny) == 0 &&
+		l.RPM == 0 && l.RPD == 0 &&
+		l.CostLimit5h == 0 && l.CostLimit7d == 0 &&
+		l.TokenLimit5h == 0 && l.TokenLimit7d == 0
 }
 
 type APIKeyInput struct {
@@ -825,6 +855,7 @@ type APIKeyInput struct {
 	QuotaUsed       float64
 	ExpiresAt       sql.NullTime
 	AllowedGroupIDs []int64
+	Limits          APIKeyLimits
 }
 
 type APIKeyUpdate struct {
@@ -836,9 +867,11 @@ type APIKeyUpdate struct {
 	ExpiresAtSet       bool
 	AllowedGroupIDs    []int64
 	AllowedGroupIDsSet bool
+	Limits             APIKeyLimits
+	LimitsSet          bool
 }
 
-const apiKeySelectColumns = `id, name, key, created_at, COALESCE(quota_limit, 0), COALESCE(quota_used, 0), expires_at, COALESCE(allowed_group_ids, '[]')`
+const apiKeySelectColumns = `id, name, key, created_at, COALESCE(quota_limit, 0), COALESCE(quota_used, 0), expires_at, COALESCE(allowed_group_ids, '[]'), COALESCE(limits, '{}')`
 
 // ListAPIKeys 获取所有 API 密钥
 func (db *DB) ListAPIKeys(ctx context.Context) ([]*APIKeyRow, error) {
@@ -894,9 +927,9 @@ func (db *DB) InsertAPIKeyWithOptions(ctx context.Context, input APIKeyInput) (i
 		input.QuotaUsed = 0
 	}
 	return db.insertRowID(ctx,
-		`INSERT INTO api_keys (name, key, quota_limit, quota_used, expires_at, allowed_group_ids) VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id`,
-		`INSERT INTO api_keys (name, key, quota_limit, quota_used, expires_at, allowed_group_ids) VALUES ($1, $2, $3, $4, $5, $6)`,
-		input.Name, input.Key, input.QuotaLimit, input.QuotaUsed, nullableTimeArg(input.ExpiresAt), encodeInt64SliceJSON(input.AllowedGroupIDs),
+		`INSERT INTO api_keys (name, key, quota_limit, quota_used, expires_at, allowed_group_ids, limits) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb) RETURNING id`,
+		`INSERT INTO api_keys (name, key, quota_limit, quota_used, expires_at, allowed_group_ids, limits) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		input.Name, input.Key, input.QuotaLimit, input.QuotaUsed, nullableTimeArg(input.ExpiresAt), encodeInt64SliceJSON(input.AllowedGroupIDs), encodeAPIKeyLimits(input.Limits),
 	)
 }
 
@@ -916,7 +949,7 @@ func (row *APIKeyRow) IsQuotaExhausted() bool {
 }
 
 func (row *APIKeyRow) HasAccessConstraints() bool {
-	return row != nil && (row.QuotaLimit > 0 || row.ExpiresAt.Valid || len(row.AllowedGroupIDs) > 0)
+	return row != nil && (row.QuotaLimit > 0 || row.ExpiresAt.Valid || len(row.AllowedGroupIDs) > 0 || !row.Limits.IsZero())
 }
 
 // UpdateAPIKeyName updates the display name of an API key without changing the key value.
@@ -1000,6 +1033,32 @@ func (db *DB) UpdateAPIKeyAllowedGroupIDs(ctx context.Context, id int64, groupID
 	return db.UpdateAPIKeyAllowedGroups(ctx, id, groupIDs)
 }
 
+// UpdateAPIKeyLimits persists the per-key rate / quota / model limit configuration.
+// 空 APIKeyLimits 等价于"清除所有限制",对应数据库列为 '{}'。
+func (db *DB) UpdateAPIKeyLimits(ctx context.Context, id int64, limits APIKeyLimits) error {
+	payload := encodeAPIKeyLimits(limits)
+	var (
+		res sql.Result
+		err error
+	)
+	if db.isSQLite() {
+		res, err = db.conn.ExecContext(ctx, `UPDATE api_keys SET limits = $1 WHERE id = $2`, payload, id)
+	} else {
+		res, err = db.conn.ExecContext(ctx, `UPDATE api_keys SET limits = $1::jsonb WHERE id = $2`, payload, id)
+	}
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // UpdateAPIKey applies multiple editable fields in one transaction.
 // Omitted fields keep their existing values.
 func (db *DB) UpdateAPIKey(ctx context.Context, id int64, update APIKeyUpdate) error {
@@ -1037,6 +1096,15 @@ func (db *DB) UpdateAPIKey(ctx context.Context, id int64, update APIKeyUpdate) e
 			sets = append(sets, "allowed_group_ids = "+ph)
 		} else {
 			sets = append(sets, "allowed_group_ids = "+ph+"::jsonb")
+		}
+	}
+	if update.LimitsSet {
+		payload := encodeAPIKeyLimits(update.Limits)
+		ph := setArg(payload)
+		if db.isSQLite() {
+			sets = append(sets, "limits = "+ph)
+		} else {
+			sets = append(sets, "limits = "+ph+"::jsonb")
 		}
 	}
 	if len(sets) == 0 {
@@ -1102,6 +1170,7 @@ type SystemSettings struct {
 	UsageProbeMaxAgeMinutes          int
 	RecoveryProbeIntervalMinutes     int
 	SchedulerMode                    string
+	AffinityMode                     string // session 粘性模式: bounded / off / strict
 	ResinURL                         string // Resin 代理池地址（含 Token），例如 http://127.0.0.1:2260/my-token
 	ResinPlatformName                string // Resin 平台标识，例如 codex2api
 	PromptFilterEnabled              bool
@@ -1143,6 +1212,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(usage_probe_max_age_minutes, 10),
 		       COALESCE(recovery_probe_interval_minutes, 30),
 		       COALESCE(scheduler_mode, 'round_robin'),
+		       COALESCE(affinity_mode, 'bounded'),
 		       COALESCE(resin_url, ''),
 		       COALESCE(resin_platform_name, ''),
 		       COALESCE(prompt_filter_enabled, false),
@@ -1171,6 +1241,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.AutoCleanError, &s.AutoCleanExpired, &s.LazyMode, &s.ModelMapping,
 		&s.BackgroundRefreshIntervalMinutes, &s.UsageProbeMaxAgeMinutes, &s.RecoveryProbeIntervalMinutes,
 		&s.SchedulerMode,
+		&s.AffinityMode,
 		&s.ResinURL, &s.ResinPlatformName,
 		&s.PromptFilterEnabled, &s.PromptFilterMode, &s.PromptFilterThreshold, &s.PromptFilterStrictThreshold,
 		&s.PromptFilterLogMatches, &s.PromptFilterMaxTextLength, &s.PromptFilterSensitiveWords,
@@ -1201,9 +1272,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				client_compat_mode, codex_min_cli_version, usage_log_mode, usage_log_batch_size,
 				usage_log_flush_interval_seconds, stream_flush_policy, stream_flush_interval_ms,
 				image_storage_config,
-				scheduler_mode
+				scheduler_mode,
+				affinity_mode
 			)
-			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46)
 			ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -1249,7 +1321,8 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				stream_flush_policy = EXCLUDED.stream_flush_policy,
 				stream_flush_interval_ms = EXCLUDED.stream_flush_interval_ms,
 				image_storage_config = EXCLUDED.image_storage_config,
-				scheduler_mode = EXCLUDED.scheduler_mode
+				scheduler_mode = EXCLUDED.scheduler_mode,
+				affinity_mode = EXCLUDED.affinity_mode
 		`, NormalizeSiteName(s.SiteName), strings.TrimSpace(s.SiteLogo),
 		s.MaxConcurrency, s.GlobalRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 		s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, s.AutoCleanFullUsage, s.ProxyPoolEnabled,
@@ -1260,8 +1333,18 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.PromptFilterSensitiveWords, s.PromptFilterCustomPatterns, s.PromptFilterDisabledPatterns,
 		s.ClientCompatMode, s.CodexMinCLIVersion, s.UsageLogMode, s.UsageLogBatchSize,
 		s.UsageLogFlushIntervalSeconds, s.StreamFlushPolicy, s.StreamFlushIntervalMS,
-		s.ImageStorageConfig, s.SchedulerMode)
+		s.ImageStorageConfig, s.SchedulerMode, normalizeAffinityMode(s.AffinityMode))
 	return err
+}
+
+// normalizeAffinityMode 把 SystemSettings.AffinityMode 落库前归一,空字符串 → "bounded"。
+func normalizeAffinityMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "bounded", "off", "strict":
+		return strings.TrimSpace(mode)
+	default:
+		return "bounded"
+	}
 }
 
 // DeleteAPIKey 删除 API 密钥

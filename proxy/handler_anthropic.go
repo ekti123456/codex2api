@@ -113,6 +113,9 @@ func (h *Handler) Messages(c *gin.Context) {
 		sendAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", fmt.Sprintf("model %s is only supported on /v1/images/generations and /v1/images/edits", effectiveModel))
 		return
 	}
+	if h.enforceAPIKeyLimitsAndReply(c, effectiveModel) {
+		return
+	}
 	accountFilter := accountFilterForModel(effectiveModel)
 	accountFilter = h.withModelCooldownFilter(effectiveModel, accountFilter)
 

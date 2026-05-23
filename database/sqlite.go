@@ -140,7 +140,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				stream_flush_policy TEXT DEFAULT 'immediate',
 				stream_flush_interval_ms INTEGER DEFAULT 20,
 				image_storage_config TEXT DEFAULT '{}',
-				scheduler_mode TEXT DEFAULT 'round_robin'
+				scheduler_mode TEXT DEFAULT 'round_robin',
+				affinity_mode TEXT DEFAULT 'bounded'
 			);`,
 		`CREATE TABLE IF NOT EXISTS model_registry (
 			id TEXT PRIMARY KEY,
@@ -288,6 +289,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"api_keys", "quota_limit", "REAL DEFAULT 0"},
 		{"api_keys", "quota_used", "REAL DEFAULT 0"},
 		{"api_keys", "allowed_group_ids", "TEXT DEFAULT '[]'"},
+		{"api_keys", "limits", "TEXT DEFAULT '{}'"},
 		{"api_keys", "expires_at", "TIMESTAMP NULL"},
 		{"account_groups", "description", "TEXT DEFAULT ''"},
 		{"account_groups", "color", "TEXT DEFAULT ''"},
@@ -334,6 +336,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "stream_flush_interval_ms", "INTEGER DEFAULT 20"},
 		{"system_settings", "image_storage_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "scheduler_mode", "TEXT DEFAULT 'round_robin'"},
+		{"system_settings", "affinity_mode", "TEXT DEFAULT 'bounded'"},
 		{"accounts", "enabled", "INTEGER DEFAULT 1"},
 		{"accounts", "locked", "INTEGER DEFAULT 0"},
 		{"accounts", "credit_enabled", "INTEGER DEFAULT 0"},

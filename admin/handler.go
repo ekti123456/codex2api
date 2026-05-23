@@ -3388,13 +3388,14 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 }
 
 type createKeyReq struct {
-	Name            string          `json:"name"`
-	Key             string          `json:"key"`
-	QuotaLimit      *float64        `json:"quota_limit"`
-	Quota           *float64        `json:"quota"`
-	ExpiresAt       string          `json:"expires_at"`
-	ExpiresInDays   *int            `json:"expires_in_days"`
-	AllowedGroupIDs json.RawMessage `json:"allowed_group_ids"`
+	Name            string                 `json:"name"`
+	Key             string                 `json:"key"`
+	QuotaLimit      *float64               `json:"quota_limit"`
+	Quota           *float64               `json:"quota"`
+	ExpiresAt       string                 `json:"expires_at"`
+	ExpiresInDays   *int                   `json:"expires_in_days"`
+	AllowedGroupIDs json.RawMessage        `json:"allowed_group_ids"`
+	Limits          *database.APIKeyLimits `json:"limits"`
 }
 
 // generateKey 生成随机 API Key
@@ -3486,12 +3487,18 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		}
 	}
 
+	var limits database.APIKeyLimits
+	if req.Limits != nil {
+		limits = sanitizeAPIKeyLimits(*req.Limits)
+	}
+
 	id, err := h.db.InsertAPIKeyWithOptions(ctx, database.APIKeyInput{
 		Name:            req.Name,
 		Key:             key,
 		QuotaLimit:      quotaLimit,
 		ExpiresAt:       expiresAt,
 		AllowedGroupIDs: allowedGroupIDs.Values,
+		Limits:          limits,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "创建失败: "+err.Error())
@@ -3525,12 +3532,13 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 }
 
 type updateAPIKeyReq struct {
-	Name            *string         `json:"name"`
-	QuotaLimit      json.RawMessage `json:"quota_limit"`
-	Quota           json.RawMessage `json:"quota"`
-	ExpiresAt       json.RawMessage `json:"expires_at"`
-	ExpiresInDays   *int            `json:"expires_in_days"`
-	AllowedGroupIDs json.RawMessage `json:"allowed_group_ids"`
+	Name            *string                `json:"name"`
+	QuotaLimit      json.RawMessage        `json:"quota_limit"`
+	Quota           json.RawMessage        `json:"quota"`
+	ExpiresAt       json.RawMessage        `json:"expires_at"`
+	ExpiresInDays   *int                   `json:"expires_in_days"`
+	AllowedGroupIDs json.RawMessage        `json:"allowed_group_ids"`
+	Limits          *database.APIKeyLimits `json:"limits"`
 }
 
 func (h *Handler) UpdateAPIKey(c *gin.Context) {
@@ -3623,6 +3631,10 @@ func (h *Handler) UpdateAPIKey(c *gin.Context) {
 		update.Name = *req.Name
 		update.NameSet = true
 	}
+	if req.Limits != nil {
+		update.Limits = sanitizeAPIKeyLimits(*req.Limits)
+		update.LimitsSet = true
+	}
 	if err := h.db.UpdateAPIKey(ctx, id, update); err != nil {
 		writeInternalError(c, err)
 		return
@@ -3632,6 +3644,63 @@ func (h *Handler) UpdateAPIKey(c *gin.Context) {
 	}
 	h.invalidateAPIKeyRuntimeCaches(ctx, row.Key)
 	writeMessage(c, http.StatusOK, "API Key 已更新")
+}
+
+// sanitizeAPIKeyLimits 把请求体里来的 limits 归一:负值置 0,空白模型名过滤,字符串小写。
+// 同时配置 ModelAllow + ModelDeny 时白名单优先(在 enforce 时已生效),这里不强制清空黑名单。
+func sanitizeAPIKeyLimits(in database.APIKeyLimits) database.APIKeyLimits {
+	clean := func(items []string) []string {
+		if len(items) == 0 {
+			return nil
+		}
+		seen := make(map[string]struct{}, len(items))
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			lower := strings.ToLower(item)
+			if _, ok := seen[lower]; ok {
+				continue
+			}
+			seen[lower] = struct{}{}
+			out = append(out, item)
+		}
+		return out
+	}
+	out := database.APIKeyLimits{
+		ModelAllow:   clean(in.ModelAllow),
+		ModelDeny:    clean(in.ModelDeny),
+		RPM:          maxInt(in.RPM, 0),
+		RPD:          maxInt(in.RPD, 0),
+		CostLimit5h:  maxFloat(in.CostLimit5h, 0),
+		CostLimit7d:  maxFloat(in.CostLimit7d, 0),
+		TokenLimit5h: maxInt64(in.TokenLimit5h, 0),
+		TokenLimit7d: maxInt64(in.TokenLimit7d, 0),
+	}
+	return out
+}
+
+func maxInt(v, lo int) int {
+	if v < lo {
+		return lo
+	}
+	return v
+}
+
+func maxInt64(v, lo int64) int64 {
+	if v < lo {
+		return lo
+	}
+	return v
+}
+
+func maxFloat(v, lo float64) float64 {
+	if v < lo {
+		return lo
+	}
+	return v
 }
 
 func parseOptionalAPIKeyQuota(quotaLimitRaw, quotaRaw json.RawMessage) (float64, bool, error) {
@@ -3764,6 +3833,7 @@ type settingsResponse struct {
 	ProxyPoolEnabled                 bool   `json:"proxy_pool_enabled"`
 	FastSchedulerEnabled             bool   `json:"fast_scheduler_enabled"`
 	SchedulerMode                    string `json:"scheduler_mode"`
+	AffinityMode                     string `json:"affinity_mode"`
 	MaxRetries                       int    `json:"max_retries"`
 	MaxRateLimitRetries              int    `json:"max_rate_limit_retries"`
 	AllowRemoteMigration             bool   `json:"allow_remote_migration"`
@@ -3824,6 +3894,7 @@ type updateSettingsReq struct {
 	ProxyPoolEnabled                 *bool   `json:"proxy_pool_enabled"`
 	FastSchedulerEnabled             *bool   `json:"fast_scheduler_enabled"`
 	SchedulerMode                    *string `json:"scheduler_mode"`
+	AffinityMode                     *string `json:"affinity_mode"`
 	MaxRetries                       *int    `json:"max_retries"`
 	MaxRateLimitRetries              *int    `json:"max_rate_limit_retries"`
 	AllowRemoteMigration             *bool   `json:"allow_remote_migration"`
@@ -3966,6 +4037,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
 		SchedulerMode:                    h.store.GetSchedulerMode(),
+		AffinityMode:                     h.store.GetAffinityMode(),
 		MaxRetries:                       h.store.GetMaxRetries(),
 		MaxRateLimitRetries:              h.store.GetMaxRateLimitRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
@@ -4206,6 +4278,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if req.SchedulerMode != nil {
 		h.store.SetSchedulerMode(*req.SchedulerMode)
 		log.Printf("设置已更新: scheduler_mode = %s", *req.SchedulerMode)
+	}
+
+	if req.AffinityMode != nil {
+		h.store.SetAffinityMode(*req.AffinityMode)
+		log.Printf("设置已更新: affinity_mode = %s", *req.AffinityMode)
 	}
 
 	if req.MaxRetries != nil {
@@ -4451,6 +4528,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
 		SchedulerMode:                    h.store.GetSchedulerMode(),
+		AffinityMode:                     h.store.GetAffinityMode(),
 		MaxRetries:                       h.store.GetMaxRetries(),
 		MaxRateLimitRetries:              h.store.GetMaxRateLimitRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && hasAdminSecret,
@@ -4516,6 +4594,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
 		SchedulerMode:                    h.store.GetSchedulerMode(),
+		AffinityMode:                     h.store.GetAffinityMode(),
 		MaxRetries:                       h.store.GetMaxRetries(),
 		MaxRateLimitRetries:              h.store.GetMaxRateLimitRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",

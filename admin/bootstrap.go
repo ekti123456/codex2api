@@ -237,5 +237,6 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		UsageLogFlushIntervalSeconds:     5,
 		StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 		StreamFlushIntervalMS:            20,
+		AffinityMode:                     "bounded",
 	}
 }
