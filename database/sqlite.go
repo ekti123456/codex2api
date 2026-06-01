@@ -4,14 +4,75 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"sort"
+	"strings"
 	"time"
 )
 
+const (
+	defaultSQLiteMaxOpenConns = 8
+	maxSQLiteOpenConns        = 16
+	sqliteBusyTimeoutMillis   = 15000
+)
+
+func sqliteConnectDSN(dsn string) string {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" || dsn == ":memory:" {
+		return dsn
+	}
+
+	q := url.Values{}
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeoutMillis))
+	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "synchronous(NORMAL)")
+
+	if strings.HasPrefix(strings.ToLower(dsn), "file:") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		return dsn + sep + q.Encode()
+	}
+
+	return "file:" + dsn + "?" + q.Encode()
+}
+
+func applySQLiteConnLimits(conn *sql.DB, n int) {
+	if conn == nil {
+		return
+	}
+	if n <= 0 {
+		n = defaultSQLiteMaxOpenConns
+	}
+	if n > maxSQLiteOpenConns {
+		n = maxSQLiteOpenConns
+	}
+	if n < 2 {
+		n = 2
+	}
+	conn.SetMaxOpenConns(n)
+	conn.SetMaxIdleConns(n)
+	conn.SetConnMaxLifetime(0)
+}
+
+func (db *DB) withSQLiteWriteLock(ctx context.Context, fn func() error) error {
+	if !db.isSQLite() || db.sqliteWriteSem == nil {
+		return fn()
+	}
+	select {
+	case db.sqliteWriteSem <- struct{}{}:
+		defer func() { <-db.sqliteWriteSem }()
+		return fn()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (db *DB) configureSQLite(ctx context.Context) error {
 	pragmas := []string{
+		fmt.Sprintf(`PRAGMA busy_timeout=%d;`, sqliteBusyTimeoutMillis),
 		`PRAGMA journal_mode=WAL;`,
-		`PRAGMA busy_timeout=15000;`,
 		`PRAGMA synchronous=NORMAL;`,
 	}
 	for _, pragma := range pragmas {

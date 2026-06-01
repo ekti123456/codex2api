@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -50,6 +51,130 @@ func TestSQLiteAPIKeyLookupAndCount(t *testing.T) {
 	}
 	if row.ID != id || row.Name != "lookup" || row.Key != key {
 		t.Fatalf("API key row = %#v, want id=%d name=lookup key=%s", row, id, key)
+	}
+}
+
+func TestSQLiteAPIKeyReadDoesNotWaitBehindAccountWrite(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, err := db.InsertAPIKey(ctx, "lookup", "sk-test-lookup-1234567890"); err != nil {
+		t.Fatalf("InsertAPIKey 返回错误: %v", err)
+	}
+	accountID, err := db.InsertAccount(ctx, "writer", "rt-writer", "")
+	if err != nil {
+		t.Fatalf("InsertAccount 返回错误: %v", err)
+	}
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx 返回错误: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET updated_at = CURRENT_TIMESTAMP WHERE id = $1`, accountID); err != nil {
+		t.Fatalf("hold write transaction: %v", err)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	count, err := db.CountAPIKeys(readCtx)
+	if err != nil {
+		t.Fatalf("CountAPIKeys while account write is open 返回错误: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("CountAPIKeys = %d, want 1", count)
+	}
+}
+
+func TestSQLiteQueuedAccountWritesDoNotBlockAPIKeyReads(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, err := db.InsertAPIKey(ctx, "lookup", "sk-test-lookup-1234567890"); err != nil {
+		t.Fatalf("InsertAPIKey 返回错误: %v", err)
+	}
+	accountIDs := make([]int64, 0, maxSQLiteOpenConns*2)
+	for i := 0; i < maxSQLiteOpenConns*2; i++ {
+		id, err := db.InsertAccount(ctx, "writer", "rt-writer", "")
+		if err != nil {
+			t.Fatalf("InsertAccount 返回错误: %v", err)
+		}
+		accountIDs = append(accountIDs, id)
+	}
+
+	db.sqliteWriteSem <- struct{}{}
+	var wg sync.WaitGroup
+	for _, accountID := range accountIDs {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			_ = db.UpdateCredentials(writeCtx, id, map[string]interface{}{"codex_7d_used_percent": 1})
+		}(accountID)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	count, err := db.CountAPIKeys(readCtx)
+	<-db.sqliteWriteSem
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("CountAPIKeys while account writes are queued 返回错误: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("CountAPIKeys = %d, want 1", count)
+	}
+}
+
+func TestSQLiteUpdateCredentialsMergesAtomically(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	accountID, err := db.InsertAccountWithCredentials(ctx, "merge", map[string]interface{}{
+		"refresh_token": "rt-merge",
+		"email":         "old@example.com",
+	}, "")
+	if err != nil {
+		t.Fatalf("InsertAccountWithCredentials 返回错误: %v", err)
+	}
+	if err := db.UpdateCredentials(ctx, accountID, map[string]interface{}{
+		"codex_7d_used_percent": 42.5,
+		"email":                 "new@example.com",
+	}); err != nil {
+		t.Fatalf("UpdateCredentials 返回错误: %v", err)
+	}
+
+	row, err := db.GetAccountByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("GetAccountByID 返回错误: %v", err)
+	}
+	if got := row.GetCredential("refresh_token"); got != "rt-merge" {
+		t.Fatalf("refresh_token = %q, want rt-merge", got)
+	}
+	if got := row.GetCredential("email"); got != "new@example.com" {
+		t.Fatalf("email = %q, want new@example.com", got)
+	}
+	if got := row.GetCredential("codex_7d_used_percent"); got != "42.5" {
+		t.Fatalf("codex_7d_used_percent = %q, want 42.5", got)
 	}
 }
 
@@ -1459,5 +1584,52 @@ func TestSQLiteUsageLogsTimeRangeUsesUTCStorage(t *testing.T) {
 	}
 	if got := page.Logs[0].Model; got != "gpt-image-2" {
 		t.Fatalf("Model = %q, want gpt-image-2", got)
+	}
+}
+
+func TestGetAccountsBilledSinceUsesPerAccountWindows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	insertUsage := func(accountID int64, statusCode int, billed float64, createdAt time.Time) {
+		t.Helper()
+		if _, err := db.conn.ExecContext(ctx, `
+			INSERT INTO usage_logs (account_id, status_code, account_billed, created_at)
+			VALUES ($1, $2, $3, $4)
+		`, accountID, statusCode, billed, sqliteTimeParam(createdAt)); err != nil {
+			t.Fatalf("insert usage log: %v", err)
+		}
+	}
+
+	insertUsage(1, 200, 1.25, now.Add(-4*time.Hour))
+	insertUsage(1, 200, 9.99, now.Add(-6*time.Hour))
+	insertUsage(1, 499, 7.77, now.Add(-30*time.Minute))
+	insertUsage(2, 200, 2.50, now.AddDate(0, 0, -6))
+	insertUsage(2, 200, 8.88, now.AddDate(0, 0, -8))
+
+	got, err := db.GetAccountsBilledSince(ctx, map[int64]time.Time{
+		1: now.Add(-5 * time.Hour),
+		2: now.AddDate(0, 0, -7),
+		3: now.Add(-1 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("GetAccountsBilledSince 返回错误: %v", err)
+	}
+
+	if got[1] != 1.25 {
+		t.Fatalf("account 1 billed = %.2f, want 1.25", got[1])
+	}
+	if got[2] != 2.50 {
+		t.Fatalf("account 2 billed = %.2f, want 2.50", got[2])
+	}
+	if got[3] != 0 {
+		t.Fatalf("account 3 billed = %.2f, want 0", got[3])
 	}
 }

@@ -1333,6 +1333,93 @@ func TestExportAccountsSkipsAccountsWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestListAccountsPopulatesBilledWindows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := newTestAdminDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	accountID, err := db.InsertAccountWithCredentials(ctx, "cost-account", map[string]interface{}{
+		"refresh_token":           "rt_cost_account",
+		"codex_5h_used_percent":   12.5,
+		"codex_5h_reset_at":       now.Add(30 * time.Minute).Format(time.RFC3339),
+		"codex_7d_used_percent":   34.5,
+		"codex_7d_reset_at":       now.Add(24 * time.Hour).Format(time.RFC3339),
+		"codex_usage_updated_at":  now.Format(time.RFC3339),
+		"email":                   "cost@example.com",
+		"plan_type":               "plus",
+		"subscription_expires_at": now.AddDate(0, 1, 0).Format(time.RFC3339),
+	}, "")
+	if err != nil {
+		t.Fatalf("InsertAccountWithCredentials 返回错误: %v", err)
+	}
+
+	db.SetUsageLogConfig(database.UsageLogModeFull, 1, 1)
+	if err := db.InsertUsageLog(ctx, &database.UsageLogInput{
+		AccountID:      accountID,
+		Endpoint:       "/v1/responses",
+		Model:          "gpt-5.4",
+		EffectiveModel: "gpt-5.4",
+		StatusCode:     http.StatusOK,
+		InputTokens:    1000,
+		OutputTokens:   500,
+		TotalTokens:    1500,
+	}); err != nil {
+		t.Fatalf("InsertUsageLog 返回错误: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		usage, err := db.GetAccountTimeRangeUsage(ctx, now.Add(-time.Hour))
+		if err == nil {
+			if row, ok := usage[accountID]; ok && row.AccountBilled > 0 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("usage log was not flushed before deadline")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	store := auth.NewStore(db, nil, nil)
+	store.SetLazyMode(true)
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("store.Init 返回错误: %v", err)
+	}
+	handler := &Handler{db: db, store: store}
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts", nil)
+
+	handler.ListAccounts(ginCtx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload accountsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Accounts) != 1 {
+		t.Fatalf("accounts len = %d, want 1", len(payload.Accounts))
+	}
+	account := payload.Accounts[0]
+	if account.Billed5h == nil || *account.Billed5h <= 0 {
+		t.Fatalf("Billed5h = %v, want positive value", account.Billed5h)
+	}
+	if account.Billed7d == nil || *account.Billed7d <= 0 {
+		t.Fatalf("Billed7d = %v, want positive value", account.Billed7d)
+	}
+	if account.Usage5hDetail == nil || account.Usage5hDetail.AccountBilled <= 0 {
+		t.Fatalf("Usage5hDetail = %#v, want positive account_billed", account.Usage5hDetail)
+	}
+	if account.Usage7dDetail == nil || account.Usage7dDetail.AccountBilled <= 0 {
+		t.Fatalf("Usage7dDetail = %#v, want positive account_billed", account.Usage7dDetail)
+	}
+}
+
 func newTestAdminDB(t *testing.T) *database.DB {
 	t.Helper()
 

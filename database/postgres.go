@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -138,6 +139,8 @@ type DB struct {
 	usageLogFlushInterval int64 // ns
 	logFlushNotify        chan struct{}
 	accountInsertMu       sync.Mutex
+	sqliteWriteSem        chan struct{}
+	sqliteSingleConn      bool
 }
 
 const (
@@ -237,12 +240,14 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	driverName := driver
 	if driver == "sqlite" {
 		driverName = "sqlite"
+		dsn = sqliteConnectDSN(dsn)
 	}
 
 	pgSchema := ""
 	if len(schema) > 0 {
 		pgSchema = strings.TrimSpace(schema[0])
 	}
+	sqliteSingleConn := driver == "sqlite" && strings.TrimSpace(dsn) == ":memory:"
 
 	conn, err := sql.Open(driverName, dsn)
 	if err != nil {
@@ -251,8 +256,12 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 
 	// ==================== 连接池优化 ====================
 	if driver == "sqlite" {
-		conn.SetMaxOpenConns(1)
-		conn.SetMaxIdleConns(1)
+		if sqliteSingleConn {
+			conn.SetMaxOpenConns(1)
+			conn.SetMaxIdleConns(1)
+		} else {
+			applySQLiteConnLimits(conn, defaultSQLiteMaxOpenConns)
+		}
 	} else {
 		// 高并发场景：大量 RT 刷新 + 前端查询 + 使用日志写入 并行
 		conn.SetMaxOpenConns(100)                 // 增加最大打开连接数以处理更高并发
@@ -269,10 +278,14 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	}
 
 	db := &DB{
-		conn:           conn,
-		driver:         driver,
-		logStop:        make(chan struct{}),
-		logFlushNotify: make(chan struct{}, 1),
+		conn:             conn,
+		driver:           driver,
+		logStop:          make(chan struct{}),
+		logFlushNotify:   make(chan struct{}, 1),
+		sqliteSingleConn: sqliteSingleConn,
+	}
+	if db.isSQLite() {
+		db.sqliteWriteSem = make(chan struct{}, 1)
 	}
 	db.SetUsageLogConfig(defaultUsageLogMode, defaultUsageLogBatchSize, defaultUsageLogFlushIntervalSeconds)
 	if db.isSQLite() {
@@ -3168,6 +3181,87 @@ func (db *DB) GetAccountBilledSince(ctx context.Context, accountID int64, since 
 	return billed, err
 }
 
+// GetAccountsBilledSince 批量返回每个账号在各自 since 之后的 account_billed 总和。
+func (db *DB) GetAccountsBilledSince(ctx context.Context, windows map[int64]time.Time) (map[int64]float64, error) {
+	result := make(map[int64]float64, len(windows))
+	if len(windows) == 0 {
+		return result, nil
+	}
+
+	ids := make([]int64, 0, len(windows))
+	for accountID, since := range windows {
+		if accountID <= 0 || since.IsZero() {
+			continue
+		}
+		ids = append(ids, accountID)
+		result[accountID] = 0
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	const maxRowsPerBatch = 1000
+	for start := 0; start < len(ids); start += maxRowsPerBatch {
+		end := start + maxRowsPerBatch
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if err := db.getAccountsBilledSinceChunk(ctx, ids[start:end], windows, result); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (db *DB) getAccountsBilledSinceChunk(ctx context.Context, ids []int64, windows map[int64]time.Time, result map[int64]float64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	values := make([]string, 0, len(ids))
+	args := make([]interface{}, 0, len(ids)*2)
+	argIdx := 1
+	for _, accountID := range ids {
+		if db.isSQLite() {
+			values = append(values, fmt.Sprintf("($%d, $%d)", argIdx, argIdx+1))
+		} else {
+			values = append(values, fmt.Sprintf("($%d::BIGINT, $%d::TIMESTAMPTZ)", argIdx, argIdx+1))
+		}
+		args = append(args, accountID, db.timeArg(windows[accountID]))
+		argIdx += 2
+	}
+
+	query := fmt.Sprintf(`
+	WITH billing_windows(account_id, since_at) AS (
+		VALUES %s
+	)
+	SELECT billing_windows.account_id, COALESCE(SUM(usage_logs.account_billed), 0) AS account_billed
+	FROM billing_windows
+	LEFT JOIN usage_logs
+		ON usage_logs.account_id = billing_windows.account_id
+		AND usage_logs.created_at >= billing_windows.since_at
+		AND usage_logs.status_code <> 499
+	GROUP BY billing_windows.account_id
+	`, strings.Join(values, ","))
+
+	rows, err := db.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var accountID int64
+		var billed float64
+		if err := rows.Scan(&accountID, &billed); err != nil {
+			return err
+		}
+		result[accountID] = billed
+	}
+	return rows.Err()
+}
+
 // ==================== Accounts ====================
 
 // ListActive 获取所有未删除账号。
@@ -3632,6 +3726,13 @@ func (db *DB) UpdateAccountCredit(ctx context.Context, id int64, creditEnabled, 
 // UpdateCredentials 原子合并更新账号的 credentials（JSONB || 运算符，不覆盖已有字段）
 // 解决并发刷新时一个进程覆盖另一个进程写入的字段的问题
 func (db *DB) UpdateCredentials(ctx context.Context, id int64, credentials map[string]interface{}) error {
+	if db.isSQLite() {
+		return db.updateCredentialsSQLite(ctx, id, credentials)
+	}
+	return db.updateCredentialsReadMerge(ctx, id, credentials)
+}
+
+func (db *DB) updateCredentialsReadMerge(ctx context.Context, id int64, credentials map[string]interface{}) error {
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -3639,9 +3740,7 @@ func (db *DB) UpdateCredentials(ctx context.Context, id int64, credentials map[s
 	defer tx.Rollback()
 
 	selectQuery := `SELECT credentials FROM accounts WHERE id = $1`
-	if !db.isSQLite() {
-		selectQuery += ` FOR UPDATE`
-	}
+	selectQuery += ` FOR UPDATE`
 
 	var currentRaw interface{}
 	if err := tx.QueryRowContext(ctx, selectQuery, id).Scan(&currentRaw); err != nil {
@@ -3662,6 +3761,84 @@ func (db *DB) UpdateCredentials(ctx context.Context, id int64, credentials map[s
 		return err
 	}
 	return tx.Commit()
+}
+
+func (db *DB) updateCredentialsSQLite(ctx context.Context, id int64, credentials map[string]interface{}) error {
+	return db.withSQLiteWriteLock(ctx, func() error {
+		if len(credentials) == 0 {
+			return nil
+		}
+
+		args := make([]interface{}, 0, len(credentials)*2+1)
+		jsonSetArgs := make([]string, 0, len(credentials)*2)
+		argIdx := 1
+		for key, value := range credentials {
+			if !sqliteJSONSetKeySupported(key) {
+				return db.updateCredentialsReadMergeSQLite(ctx, id, credentials)
+			}
+			valueJSON, err := json.Marshal(value)
+			if err != nil {
+				return fmt.Errorf("序列化 credentials 失败: %w", err)
+			}
+			jsonSetArgs = append(jsonSetArgs, fmt.Sprintf("$%d, json($%d)", argIdx, argIdx+1))
+			args = append(args, "$."+key, string(valueJSON))
+			argIdx += 2
+		}
+		args = append(args, id)
+
+		query := fmt.Sprintf(
+			`UPDATE accounts SET credentials = json_set(COALESCE(NULLIF(credentials, ''), '{}'), %s), updated_at = CURRENT_TIMESTAMP WHERE id = $%d`,
+			strings.Join(jsonSetArgs, ", "), argIdx,
+		)
+		res, err := db.conn.ExecContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	})
+}
+
+func (db *DB) updateCredentialsReadMergeSQLite(ctx context.Context, id int64, credentials map[string]interface{}) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var currentRaw interface{}
+	if err := tx.QueryRowContext(ctx, `SELECT credentials FROM accounts WHERE id = $1`, id).Scan(&currentRaw); err != nil {
+		return err
+	}
+
+	merged := mergeCredentialMaps(decodeCredentials(currentRaw), credentials)
+	credJSON, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("序列化 credentials 失败: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET credentials = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, credJSON, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func sqliteJSONSetKeySupported(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, r := range key {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (db *DB) UpdateOpenAIResponsesAccount(ctx context.Context, id int64, name string, credentials map[string]interface{}, proxyURL string) error {
@@ -3727,9 +3904,11 @@ func (db *DB) UpdateUsageSnapshotFull(ctx context.Context, id int64, pct7d float
 
 // SetError 标记账号错误状态
 func (db *DB) SetError(ctx context.Context, id int64, errorMsg string) error {
-	query := `UPDATE accounts SET status = 'error', error_message = $1, cooldown_reason = '', cooldown_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
-	_, err := db.conn.ExecContext(ctx, query, errorMsg, id)
-	return err
+	return db.withSQLiteWriteLock(ctx, func() error {
+		query := `UPDATE accounts SET status = 'error', error_message = $1, cooldown_reason = '', cooldown_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
+		_, err := db.conn.ExecContext(ctx, query, errorMsg, id)
+		return err
+	})
 }
 
 // BatchSetError 批量标记账号错误状态，分批执行避免 SQL 参数过多
@@ -3869,30 +4048,38 @@ func (db *DB) BatchInsertAccountEventsAsync(ids []int64, eventType string, sourc
 
 // ClearError 清除账号错误状态
 func (db *DB) ClearError(ctx context.Context, id int64) error {
-	query := `UPDATE accounts SET status = 'active', error_message = '', cooldown_reason = '', cooldown_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`
-	_, err := db.conn.ExecContext(ctx, query, id)
-	return err
+	return db.withSQLiteWriteLock(ctx, func() error {
+		query := `UPDATE accounts SET status = 'active', error_message = '', cooldown_reason = '', cooldown_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`
+		_, err := db.conn.ExecContext(ctx, query, id)
+		return err
+	})
 }
 
 // SetCooldown 持久化账号冷却状态
 func (db *DB) SetCooldown(ctx context.Context, id int64, reason string, until time.Time) error {
-	query := `UPDATE accounts SET cooldown_reason = $1, cooldown_until = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`
-	_, err := db.conn.ExecContext(ctx, query, reason, until, id)
-	return err
+	return db.withSQLiteWriteLock(ctx, func() error {
+		query := `UPDATE accounts SET cooldown_reason = $1, cooldown_until = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`
+		_, err := db.conn.ExecContext(ctx, query, reason, until, id)
+		return err
+	})
 }
 
 // SetCooldownWithError 持久化账号冷却状态，并保留本次错误详情。
 func (db *DB) SetCooldownWithError(ctx context.Context, id int64, reason string, until time.Time, errorMsg string) error {
-	query := `UPDATE accounts SET cooldown_reason = $1, cooldown_until = $2, error_message = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4`
-	_, err := db.conn.ExecContext(ctx, query, reason, until, errorMsg, id)
-	return err
+	return db.withSQLiteWriteLock(ctx, func() error {
+		query := `UPDATE accounts SET cooldown_reason = $1, cooldown_until = $2, error_message = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4`
+		_, err := db.conn.ExecContext(ctx, query, reason, until, errorMsg, id)
+		return err
+	})
 }
 
 // ClearCooldown 清除账号冷却状态
 func (db *DB) ClearCooldown(ctx context.Context, id int64) error {
-	query := `UPDATE accounts SET cooldown_reason = '', cooldown_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`
-	_, err := db.conn.ExecContext(ctx, query, id)
-	return err
+	return db.withSQLiteWriteLock(ctx, func() error {
+		query := `UPDATE accounts SET cooldown_reason = '', cooldown_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`
+		_, err := db.conn.ExecContext(ctx, query, id)
+		return err
+	})
 }
 
 // InsertAccount 插入新账号

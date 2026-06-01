@@ -694,23 +694,37 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 		accounts = append(accounts, resp)
 	}
 
-	// 批量查询各账号 5h / 7d 窗口内累计 account_billed
+	billing5hWindows := make(map[int64]time.Time)
+	billing7dWindows := make(map[int64]time.Time)
 	for i := range accounts {
 		acc, ok := accountMap[accounts[i].ID]
 		if !ok {
 			continue
 		}
 		if t := acc.GetReset5hAt(); !t.IsZero() {
-			billed, err := h.db.GetAccountBilledSince(ctx, accounts[i].ID, t.Add(-5*time.Hour))
-			if err == nil {
-				accounts[i].Billed5h = &billed
-			}
+			billing5hWindows[accounts[i].ID] = t.Add(-5 * time.Hour)
 		}
 		if t := acc.GetReset7dAt(); !t.IsZero() {
-			billed, err := h.db.GetAccountBilledSince(ctx, accounts[i].ID, t.AddDate(0, 0, -7))
-			if err == nil {
-				accounts[i].Billed7d = &billed
-			}
+			billing7dWindows[accounts[i].ID] = t.AddDate(0, 0, -7)
+		}
+	}
+
+	billed5h, err := h.db.GetAccountsBilledSince(ctx, billing5hWindows)
+	if err != nil {
+		log.Printf("批量获取账号 5h 成本失败: %v", err)
+		billed5h = nil
+	}
+	billed7d, err := h.db.GetAccountsBilledSince(ctx, billing7dWindows)
+	if err != nil {
+		log.Printf("批量获取账号 7d 成本失败: %v", err)
+		billed7d = nil
+	}
+	for i := range accounts {
+		if billed, ok := billed5h[accounts[i].ID]; ok {
+			accounts[i].Billed5h = &billed
+		}
+		if billed, ok := billed7d[accounts[i].ID]; ok {
+			accounts[i].Billed7d = &billed
 		}
 	}
 
