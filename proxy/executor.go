@@ -250,13 +250,18 @@ func IsolateCodexSessionID(apiKeyID int64, raw string) string {
 
 // ExecuteRequest 向 Codex 上游发送请求
 // sessionID 可选，用于 prompt cache 会话绑定
-// useWebsocket 可选，如果为 true 则使用 WebSocket 连接
+// useWebsocket 可选：未传时遵循全局强制 WS；传 true/false 时由调用方显式控制。
 // headers 下游请求头，用于设备指纹学习
 func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []byte, sessionID string, proxyOverride string, apiKey string, deviceCfg *DeviceProfileConfig, headers http.Header, useWebsocket ...bool) (*http.Response, error) {
-	// 检查是否使用 WebSocket：调用方显式要求，或全局开关 CodexForceWebsocket 开启
-	wantWebsocket := len(useWebsocket) > 0 && useWebsocket[0]
-	if !wantWebsocket && CurrentRuntimeSettings().CodexForceWebsocket {
-		wantWebsocket = true
+	wantWebsocket := CurrentRuntimeSettings().CodexForceWebsocket
+	if len(useWebsocket) > 0 {
+		wantWebsocket = useWebsocket[0]
+	}
+	if wantWebsocket {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
+			sessionID = statelessWebsocketSessionID()
+		}
 	}
 	if wantWebsocket && WebsocketExecuteFunc != nil {
 		return WebsocketExecuteFunc(ctx, account, requestBody, sessionID, proxyOverride, apiKey, deviceCfg, headers)
@@ -383,6 +388,52 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 			recyclePooledClient(account, proxyURL)
 		}
 		return nil, ErrUpstream(0, "请求 OpenAI Responses API 失败", err)
+	}
+	return resp, nil
+}
+
+// ExecuteOpenAIResponsesCompactRequest 向中转（OpenAI Responses API）账号发送
+// /responses/compact 请求。与 ExecuteOpenAIResponsesRequest 行为一致，但命中的是
+// 上游自己的 compact 端点，从而让没有官方 Codex OAuth 账号、仅接入中转的用户也能
+// 触发上下文自动压缩（参见 issue #174）。compact 始终为非流式。
+func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Account, requestBody []byte, proxyOverride string, headers http.Header) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	baseURL, apiKey := account.OpenAIResponsesCredentials()
+	account.Mu().RLock()
+	proxyURL := account.ProxyURL
+	account.Mu().RUnlock()
+	if proxyOverride != "" {
+		proxyURL = proxyOverride
+	}
+	if baseURL == "" || apiKey == "" {
+		return nil, ErrNoAvailableAccount()
+	}
+
+	endpoint := auth.OpenAIResponsesEndpoint(baseURL, "/v1/responses/compact")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
+	if err != nil {
+		return nil, ErrInternalError("创建请求失败", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if headers != nil {
+		for _, key := range []string{"OpenAI-Organization", "OpenAI-Project", "Idempotency-Key"} {
+			if value := strings.TrimSpace(headers.Get(key)); value != "" {
+				req.Header.Set(key, value)
+			}
+		}
+	}
+
+	resp, err := getPooledClient(account, proxyURL).Do(req)
+	if err != nil {
+		if shouldRecyclePooledClient(err) {
+			recyclePooledClient(account, proxyURL)
+		}
+		return nil, ErrUpstream(0, "请求 OpenAI Responses API compact 失败", err)
 	}
 	return resp, nil
 }
@@ -598,6 +649,26 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 //  4. Body:   prompt_cache_key
 //  5. 基于 Bearer API Key 的确定性 UUID
 func ResolveSessionID(headers http.Header, body []byte) string {
+	if explicit := ResolveExplicitSessionID(headers, body); explicit != "" {
+		return explicit
+	}
+
+	// 基于下游用户的 API Key 生成确定性 cache key（参考 CLIProxyAPI codex_executor.go:621）
+	authHeader := ""
+	if headers != nil {
+		authHeader = headers.Get("Authorization")
+	}
+	apiKey := strings.TrimPrefix(authHeader, "Bearer ")
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" {
+		return uuid.NewSHA1(uuid.NameSpaceOID, []byte("codex2api:prompt-cache:"+apiKey)).String()
+	}
+
+	// 最后兜底：生成随机 UUID
+	return uuid.New().String()
+}
+
+func ResolveExplicitSessionID(headers http.Header, body []byte) string {
 	if headers != nil {
 		if v := strings.TrimSpace(headers.Get("Session_id")); v != "" {
 			return v
@@ -614,19 +685,11 @@ func ResolveSessionID(headers http.Header, body []byte) string {
 		return v
 	}
 
-	// 基于下游用户的 API Key 生成确定性 cache key（参考 CLIProxyAPI codex_executor.go:621）
-	authHeader := ""
-	if headers != nil {
-		authHeader = headers.Get("Authorization")
-	}
-	apiKey := strings.TrimPrefix(authHeader, "Bearer ")
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey != "" {
-		return uuid.NewSHA1(uuid.NameSpaceOID, []byte("codex2api:prompt-cache:"+apiKey)).String()
-	}
+	return ""
+}
 
-	// 最后兜底：生成随机 UUID
-	return uuid.New().String()
+func statelessWebsocketSessionID() string {
+	return "stateless-" + uuid.NewString()
 }
 
 // ReadSSEStream 从上游 SSE 响应读取事件流

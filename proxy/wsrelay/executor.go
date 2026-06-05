@@ -475,7 +475,14 @@ func ExecuteRequestWebsocket(ctx context.Context, account *auth.Account, request
 		}, nil
 	}
 
-	// 将 WebSocket 响应包装为 http.Response
+	return websocketResponseToHTTP(ctx, wsResp, statusCode, handshakeHeader), nil
+}
+
+func websocketResponseToHTTP(ctx context.Context, wsResp *WsResponse, statusCode int, handshakeHeader http.Header) *http.Response {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	pr, pw := io.Pipe()
 	resp := &http.Response{
 		StatusCode: statusCode,
@@ -484,8 +491,8 @@ func ExecuteRequestWebsocket(ctx context.Context, account *auth.Account, request
 	}
 
 	// 从 HTTP 握手响应中复制头信息
-	if wsResp.HTTPResponse() != nil {
-		for key, values := range wsResp.HTTPResponse().Header {
+	if handshakeHeader != nil {
+		for key, values := range handshakeHeader {
 			for _, v := range values {
 				resp.Header.Add(key, v)
 			}
@@ -497,8 +504,19 @@ func ExecuteRequestWebsocket(ctx context.Context, account *auth.Account, request
 	resp.Header.Set("Cache-Control", "no-cache")
 	resp.Header.Set("Connection", "keep-alive")
 
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = wsResp.Close()
+			_ = pw.CloseWithError(ctx.Err())
+		case <-done:
+		}
+	}()
+
 	// 在后台读取 WebSocket 流并写入 pipe
 	go func() {
+		defer close(done)
 		defer pw.Close()
 		defer wsResp.Close()
 
@@ -516,7 +534,7 @@ func ExecuteRequestWebsocket(ctx context.Context, account *auth.Account, request
 		}
 	}()
 
-	return resp, nil
+	return resp
 }
 
 func normalizeWebsocketHandshakeResponse(handshakeResp *http.Response) (statusCode int, header http.Header, failed bool) {

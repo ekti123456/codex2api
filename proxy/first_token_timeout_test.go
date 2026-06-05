@@ -29,7 +29,7 @@ func TestFirstTokenTimeoutGuardStopsOnFirstTokenEvent(t *testing.T) {
 	guard := newFirstTokenTimeoutGuard(30*time.Millisecond, cancel)
 	defer guard.Stop()
 
-	guard.MarkEvent("response.output_text.delta")
+	guard.MarkPayload([]byte(`{"type":"response.output_text.delta","delta":"hello"}`))
 
 	select {
 	case <-ctx.Done():

@@ -1560,6 +1560,17 @@ func PrepareCompactResponsesBody(rawBody []byte) ([]byte, string) {
 	return body, expandedInputRaw
 }
 
+// PrepareOpenAIResponsesCompactBody 为中转（OpenAI Responses API）账号准备
+// /responses/compact 请求体。它复用 OpenAI Responses 预处理，并移除 compact
+// 端点不接受的自动注入字段（include/store/stream）。
+func PrepareOpenAIResponsesCompactBody(rawBody []byte) []byte {
+	body := PrepareOpenAIResponsesBody(rawBody)
+	body, _ = sjson.DeleteBytes(body, "include")
+	body, _ = sjson.DeleteBytes(body, "store")
+	body, _ = sjson.DeleteBytes(body, "stream")
+	return body
+}
+
 // normalizeReasoningEffort 将 reasoning_effort 钳位到上游支持的值
 func normalizeReasoningEffort(effort string) string {
 	effort = strings.ToLower(strings.TrimSpace(effort))

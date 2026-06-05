@@ -1282,6 +1282,30 @@ func TestPrepareCompactResponsesBody_RemovesUnsupportedInjectedFields(t *testing
 	}
 }
 
+func TestPrepareOpenAIResponsesCompactBody_RemovesUnsupportedFields(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-4.1",
+		"input":"hello",
+		"include":["reasoning.encrypted_content"],
+		"store":true,
+		"stream":true
+	}`)
+
+	got := PrepareOpenAIResponsesCompactBody(raw)
+
+	for _, field := range []string{"include", "store", "stream"} {
+		if gjson.GetBytes(got, field).Exists() {
+			t.Fatalf("expected %s to be removed for OpenAI Responses compact body, got %s", field, got)
+		}
+	}
+	if model := gjson.GetBytes(got, "model").String(); model != "gpt-4.1" {
+		t.Fatalf("model = %q, want gpt-4.1; body=%s", model, got)
+	}
+	if input := gjson.GetBytes(got, "input").String(); input != "hello" {
+		t.Fatalf("input = %q, want hello; body=%s", input, got)
+	}
+}
+
 func TestPrepareCompactResponsesBody_RemovesClientSuppliedInclude(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-5.4",
