@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.3.2 - 2026-06-12
+
+### Features
+
+- **Group filter: ungrouped and exclude modes (#229).** The account group filter now supports an "ungrouped" quick option and per-group tri-state filtering (only / hide / off), so accounts outside chosen groups can be isolated, selected in bulk, and assigned to a group quickly. The groups column is also shown by default in the table view.
+
+### Fixes
+
+- **`gpt-5.3-codex-spark` no longer receives the default image tool (#230).** The Responses translator auto-injected the hosted `image_generation` tool (plus bridge instructions) into ordinary text requests; spark rejects hosted image tools, so text-only spark requests failed on the HTTP upstream path. The default injection is now skipped for spark while explicitly supplied image tools are still honored.
+- **Tools without a `type` field no longer fail requests (#219).** Tool definitions missing `type` (or with `type: null`) were forwarded verbatim and the upstream rejected the whole request with 400 `Unsupported tool type: None`. Function-shaped tools (a nested `function` object or a top-level `name`) are now treated as `type: "function"` per OpenAI SDK convention on both the Chat Completions and Responses paths; unrecognizable typeless tools are dropped instead of failing the request.
+- **Usage logs are requeued when a flush fails (#233).** Failed usage-log batches are put back at the front of the buffer and retried on the next flush instead of being dropped, and usage-log inserts plus API key quota updates now run in a single transaction on both SQLite and PostgreSQL.
+- **Reduced timer allocations while waiting for Redis token refresh (#231).** `WaitForRefreshComplete` now reuses a single ticker and timeout timer instead of allocating a new timer every 200ms poll (previously up to ~150 timers per 30s wait).
+
+### Performance
+
+- **Request bodies are read once and reused (#232).** `RequestSizeLimiter` caches the body it already reads, and the body-cache middleware plus all JSON proxy handlers reuse it, cutting up to ~2/3 of duplicated request-body buffer allocations on hot paths.
+
 ## v2.3.1 - 2026-06-11
 
 ### Features
