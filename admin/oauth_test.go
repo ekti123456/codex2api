@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
+	"github.com/codex2api/database"
 	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
@@ -221,5 +223,246 @@ func TestOAuthCallbackTriggersUsageProbe(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("usage probe was not triggered after OAuth callback account add")
+	}
+}
+
+func insertOAuthEditTestAccount(t *testing.T, db *database.DB, name string, refreshToken string, proxyURL string) int64 {
+	t.Helper()
+	id, err := db.InsertAccount(context.Background(), name, refreshToken, proxyURL)
+	if err != nil {
+		t.Fatalf("InsertAccount: %v", err)
+	}
+	return id
+}
+
+func newOAuthEditRequest(sessionID, code, state, proxyURL string) *http.Request {
+	body := fmt.Sprintf(`{"session_id":%q,"code":%q,"state":%q,"proxy_url":%q}`, sessionID, code, state, proxyURL)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/accounts/1/oauth/exchange-code", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestUpdateOAuthAccountCodeRejectsInvalidID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	handler := &Handler{db: db, store: store}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "bad"}}
+	ctx.Request = newOAuthEditRequest("session", "code", "state", "")
+
+	handler.UpdateOAuthAccountCode(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+func TestUpdateOAuthAccountCodeRejectsMissingFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	handler := &Handler{db: db, store: store}
+	id := insertOAuthEditTestAccount(t, db, "oauth-existing", "old-refresh", "")
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", id)}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/admin/accounts/1/oauth/exchange-code", strings.NewReader(`{"session_id":"","code":"code","state":"state"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.UpdateOAuthAccountCode(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+func TestUpdateOAuthAccountCodeRejectsMissingAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	handler := &Handler{db: db, store: store}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "999999"}}
+	ctx.Request = newOAuthEditRequest("session", "code", "state", "")
+
+	handler.UpdateOAuthAccountCode(ctx)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusNotFound, recorder.Body.String())
+	}
+}
+
+func TestUpdateOAuthAccountCodeRejectsNonOAuthAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	handler := &Handler{db: db, store: store}
+
+	id, err := db.InsertOpenAIResponsesAccount(context.Background(), "responses", map[string]interface{}{
+		"upstream_type": auth.UpstreamOpenAIResponses,
+		"base_url":      "https://api.openai.com",
+		"api_key":       "sk-test",
+		"models":        []string{"gpt-4.1"},
+		"plan_type":     "api",
+		"email":         "https://api.openai.com",
+	}, "")
+	if err != nil {
+		t.Fatalf("InsertOpenAIResponsesAccount: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", id)}}
+	ctx.Request = newOAuthEditRequest("session", "code", "state", "")
+
+	handler.UpdateOAuthAccountCode(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+func TestUpdateOAuthAccountCodeRejectsMissingSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	handler := &Handler{db: db, store: store}
+	id := insertOAuthEditTestAccount(t, db, "oauth-existing", "old-refresh", "")
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", id)}}
+	ctx.Request = newOAuthEditRequest("missing-session", "code", "state", "")
+
+	handler.UpdateOAuthAccountCode(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+func TestUpdateOAuthAccountCodeRejectsStateMismatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	handler := &Handler{db: db, store: store}
+	id := insertOAuthEditTestAccount(t, db, "oauth-existing", "old-refresh", "")
+
+	sessionID := "oauth-edit-state-mismatch"
+	globalOAuthStore.set(sessionID, &oauthSession{
+		State:        "expected-state",
+		CodeVerifier: "verifier-test",
+		RedirectURI:  oauthDefaultRedirectURI,
+		CreatedAt:    time.Now(),
+	})
+	t.Cleanup(func() { globalOAuthStore.delete(sessionID) })
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", id)}}
+	ctx.Request = newOAuthEditRequest(sessionID, "code", "wrong-state", "")
+
+	handler.UpdateOAuthAccountCode(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}
+
+func TestUpdateOAuthAccountCodeUpdatesExistingAccountInPlace(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	probed := make(chan int64, 1)
+	handler := &Handler{db: db, store: store}
+	handler.probeUsage = func(_ context.Context, account *auth.Account) error {
+		probed <- account.DBID
+		return nil
+	}
+
+	newOAuthExchangeTestServer(t)
+
+	id := insertOAuthEditTestAccount(t, db, "oauth-existing", "old-refresh", "http://old-proxy.example")
+	if err := store.LoadAccountByID(context.Background(), id); err != nil {
+		t.Fatalf("LoadAccountByID: %v", err)
+	}
+	beforeCount, err := db.CountAll(context.Background())
+	if err != nil {
+		t.Fatalf("CountAll before: %v", err)
+	}
+
+	sessionID := "oauth-edit-success-session"
+	globalOAuthStore.set(sessionID, &oauthSession{
+		State:        "state-success",
+		CodeVerifier: "verifier-success",
+		RedirectURI:  oauthDefaultRedirectURI,
+		CreatedAt:    time.Now(),
+	})
+	t.Cleanup(func() { globalOAuthStore.delete(sessionID) })
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", id)}}
+	ctx.Request = newOAuthEditRequest(sessionID, "code-success", "state-success", "http://new-proxy.example")
+
+	handler.UpdateOAuthAccountCode(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	afterCount, err := db.CountAll(context.Background())
+	if err != nil {
+		t.Fatalf("CountAll after: %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("account count = %d, want unchanged %d", afterCount, beforeCount)
+	}
+
+	row, err := db.GetAccountByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetAccountByID: %v", err)
+	}
+	if got := row.GetCredential("refresh_token"); got != "refresh-from-exchange" {
+		t.Fatalf("stored refresh_token = %q, want exchange refresh token", got)
+	}
+	if got := row.GetCredential("access_token"); got != "access-from-exchange" {
+		t.Fatalf("stored access_token = %q, want exchange access token", got)
+	}
+	if got := row.GetCredential("id_token"); got != "id-from-exchange" {
+		t.Fatalf("stored id_token = %q, want exchange id token", got)
+	}
+	if row.ProxyURL != "http://new-proxy.example" {
+		t.Fatalf("proxy_url = %q, want new proxy", row.ProxyURL)
+	}
+
+	account := store.FindByID(id)
+	if account == nil {
+		t.Fatalf("runtime account %d not found", id)
+	}
+	account.Mu().RLock()
+	accessToken := account.AccessToken
+	refreshToken := account.RefreshToken
+	proxyURL := account.ProxyURL
+	account.Mu().RUnlock()
+	if accessToken != "access-from-exchange" || refreshToken != "refresh-from-exchange" {
+		t.Fatalf("runtime tokens = access:%q refresh:%q, want exchange tokens", accessToken, refreshToken)
+	}
+	if proxyURL != "http://new-proxy.example" {
+		t.Fatalf("runtime proxy = %q, want new proxy", proxyURL)
+	}
+
+	select {
+	case dbID := <-probed:
+		if dbID != id {
+			t.Fatalf("usage probe ran for account %d, want %d", dbID, id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("usage probe was not triggered after OAuth account update")
 	}
 }
