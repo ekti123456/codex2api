@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.3.6 - 2026-06-18
+
+### Features
+
+- **API key self-service usage portal `/key-usage` (#271).** Added a public, login-free `/key-usage` page where a carpool/shared-key user can paste their own API key and view that key's usage (totals, model breakdown, recent logs) without admin access. The API key management page now surfaces the portal address with copy and open shortcuts, and each key has a shareable direct link, backed by a dedicated public usage endpoint that only exposes the data for the presented key.
+- **Per-key usage reset (#271).** A single API key's accumulated usage can now be reset (`reset_quota`) when editing the key, zeroing just that key's counters without minting a new key — so monthly re-accounting for shared/carpool keys no longer requires recreating keys.
+- **5h guard-band slowdown concurrency (#270).** Added a configurable "guard band" before the 5h usage auto-pause threshold: as an account's remaining 5h quota enters the band (default 5 percentage points), its scheduler dispatch score is progressively penalized and its dynamic concurrency is capped to a configured ceiling (default 1), giving accounts a soft landing instead of slamming into the hard auto-pause. Both the band width and the guard concurrency are configurable from Settings (with global defaults), and disabling either turns the slowdown off.
+
 ## v2.3.5 - 2026-06-17
 
 ### Features
