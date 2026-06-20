@@ -3144,7 +3144,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 					ttftRecorded = true
 				}
 				// 累计 delta 字符数（文本 + function call 参数）
-				if eventType == "response.output_text.delta" || eventType == "response.function_call_arguments.delta" {
+				if eventType == "response.output_text.delta" || isCodexToolInputDeltaEvent(eventType) {
 					deltaCharCount += len(parsed.Get("delta").String())
 				}
 				if eventType == "response.completed" {
@@ -3226,7 +3226,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 					fullContent.WriteString(delta)
 				case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 					fullReasoning.WriteString(parsed.Get("delta").String())
-				case "response.function_call_arguments.delta":
+				case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 					deltaCharCount += len(parsed.Get("delta").String())
 				case "response.completed":
 					usage = extractUsageFromResult(parsed.Get("response.usage"))
