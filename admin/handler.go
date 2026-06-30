@@ -5209,6 +5209,7 @@ type settingsResponse struct {
 	PromptFilterReviewFailClosed       bool    `json:"prompt_filter_review_fail_closed"`
 	ClientCompatMode                   string  `json:"client_compat_mode"`
 	CodexMinCLIVersion                 string  `json:"codex_min_cli_version"`
+	CodexUserAgentConfig               string  `json:"codex_user_agent_config"`
 	UsageLogMode                       string  `json:"usage_log_mode"`
 	UsageLogBatchSize                  int     `json:"usage_log_batch_size"`
 	UsageLogFlushIntervalSeconds       int     `json:"usage_log_flush_interval_seconds"`
@@ -5295,6 +5296,7 @@ type updateSettingsReq struct {
 	PromptFilterReviewFailClosed       *bool    `json:"prompt_filter_review_fail_closed"`
 	ClientCompatMode                   *string  `json:"client_compat_mode"`
 	CodexMinCLIVersion                 *string  `json:"codex_min_cli_version"`
+	CodexUserAgentConfig               *string  `json:"codex_user_agent_config"`
 	UsageLogMode                       *string  `json:"usage_log_mode"`
 	UsageLogBatchSize                  *int     `json:"usage_log_batch_size"`
 	UsageLogFlushIntervalSeconds       *int     `json:"usage_log_flush_interval_seconds"`
@@ -5876,6 +5878,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		PromptFilterReviewFailClosed:       promptFilterCfg.Review.FailClosed,
 		ClientCompatMode:                   runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:                 runtimeCfg.CodexMinCLIVersion,
+		CodexUserAgentConfig:               runtimeCfg.CodexUserAgentConfig,
 		UsageLogMode:                       h.db.GetUsageLogMode(),
 		UsageLogBatchSize:                  h.db.GetUsageLogBatchSize(),
 		UsageLogFlushIntervalSeconds:       h.db.GetUsageLogFlushIntervalSeconds(),
@@ -6286,6 +6289,15 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.CodexMinCLIVersion = strings.TrimSpace(*req.CodexMinCLIVersion)
 		log.Printf("设置已更新: codex_min_cli_version = %s", runtimeCfg.CodexMinCLIVersion)
 	}
+	if req.CodexUserAgentConfig != nil {
+		normalized, err := proxy.NormalizeCodexUserAgentConfigJSON(*req.CodexUserAgentConfig)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		runtimeCfg.CodexUserAgentConfig = normalized
+		log.Printf("设置已更新: codex_user_agent_config")
+	}
 	if req.StreamFlushPolicy != nil {
 		runtimeCfg.StreamFlushPolicy = proxy.NormalizeStreamFlushPolicy(*req.StreamFlushPolicy)
 		log.Printf("设置已更新: stream_flush_policy = %s", runtimeCfg.StreamFlushPolicy)
@@ -6589,6 +6601,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		PromptFilterReviewFailClosed:       promptFilterCfg.Review.FailClosed,
 		ClientCompatMode:                   runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:                 runtimeCfg.CodexMinCLIVersion,
+		CodexUserAgentConfig:               runtimeCfg.CodexUserAgentConfig,
 		UsageLogMode:                       usageLogMode,
 		UsageLogBatchSize:                  usageLogBatchSize,
 		UsageLogFlushIntervalSeconds:       usageLogFlushIntervalSeconds,
@@ -6691,6 +6704,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		PromptFilterReviewFailClosed:       promptFilterCfg.Review.FailClosed,
 		ClientCompatMode:                   runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:                 runtimeCfg.CodexMinCLIVersion,
+		CodexUserAgentConfig:               runtimeCfg.CodexUserAgentConfig,
 		UsageLogMode:                       usageLogMode,
 		UsageLogBatchSize:                  usageLogBatchSize,
 		UsageLogFlushIntervalSeconds:       usageLogFlushIntervalSeconds,
