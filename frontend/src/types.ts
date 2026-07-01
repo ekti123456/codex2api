@@ -584,6 +584,7 @@ export interface SystemSettings {
   prompt_filter_review_enabled: boolean
   prompt_filter_review_api_key?: string
   prompt_filter_review_api_key_configured?: boolean
+  prompt_filter_review_api_key_count?: number
   prompt_filter_review_base_url: string
   prompt_filter_review_model: string
   prompt_filter_review_timeout_seconds: number
