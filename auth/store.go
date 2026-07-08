@@ -5748,8 +5748,9 @@ const wsAuthVerifyMinInterval = 30 * time.Second
 // 背景：token 失效在 HTTP 通道会返回 401 → 走 applyCooldown 标记 unauthorized 冷却；
 // 但在 WS 通道上游是用 close 1008 踢连接，被归类为普通 transport 失败，账号不会被封、
 // 仍留在号池反复失败。这里用一次探针把"看不见的 401"补成与 HTTP 一致的处理：
-// 探针命中 401 时 usage_probe 会 MarkCooldownWithError(unauthorized)；若只是内容策略/
-// 网络抖动触发的 1008，探针返回正常，不会误封。带最小间隔节流。
+// wham 探针 401 时由 /responses 回退探针裁决，回退命中 401 才 MarkCooldownWithError
+// （wham 单方面 401 不定罪，避免误封 wham 恒 401 但流量可用的 codex_at 账号，issue #328）；
+// 若只是内容策略/网络抖动触发的 1008，探针返回正常，不会误封。带最小间隔节流。
 func (s *Store) VerifyAccountAuthAsync(account *Account) {
 	if s == nil || account == nil {
 		return
