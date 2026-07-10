@@ -281,6 +281,39 @@ func TestIgnoreUsageLimitStatusKeepsExhaustedAccountSchedulable(t *testing.T) {
 	}
 }
 
+func TestCleanFullUsageSkipsAccountsIgnoringUsageLimitStatus(t *testing.T) {
+	store := NewStore(nil, nil, &database.SystemSettings{
+		MaxConcurrency:         2,
+		TestConcurrency:        1,
+		TestModel:              "gpt-5.4",
+		IgnoreUsageLimitStatus: true,
+	})
+	account := &Account{
+		DBID:                106,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		PlanType:            "plus",
+		UsagePercent7d:      100,
+		UsagePercent7dValid: true,
+	}
+	store.AddAccount(account)
+
+	if cleaned := store.CleanFullUsageAccounts(context.Background()); cleaned != 0 {
+		t.Fatalf("CleanFullUsageAccounts() = %d, want 0: informational snapshots must not delete accounts", cleaned)
+	}
+	if store.FindByID(account.DBID) == nil {
+		t.Fatal("account ignoring usage-limit status should survive full-usage cleanup")
+	}
+
+	store.SetIgnoreUsageLimitStatus(false)
+	if cleaned := store.CleanFullUsageAccounts(context.Background()); cleaned != 1 {
+		t.Fatalf("CleanFullUsageAccounts() = %d, want 1 once snapshots are authoritative again", cleaned)
+	}
+	if store.FindByID(account.DBID) != nil {
+		t.Fatal("account should be cleaned when usage windows are authoritative")
+	}
+}
+
 func TestResponsesSuccessClearsOnlyUsageCooldownWhenIgnored(t *testing.T) {
 	store := NewStore(nil, nil, &database.SystemSettings{
 		MaxConcurrency:         2,

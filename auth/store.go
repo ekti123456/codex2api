@@ -6236,6 +6236,12 @@ func (s *Store) CleanFullUsageAccounts(ctx context.Context) int {
 			continue
 		}
 
+		// 用量窗口对该账号仅作展示参考时（忽略用量限制/重置券跳过窗口），
+		// 快照不构成"账号已耗尽"的依据，不做自动清理。
+		if acc.SkipsUsageWindowLimits() {
+			continue
+		}
+
 		// 检查用量是否 >= 100%
 		pct, valid := acc.GetUsagePercent7d()
 		if !valid || pct < 100.0 {
