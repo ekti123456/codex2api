@@ -695,6 +695,8 @@ type accountResponse struct {
 	AutoPause7dThreshold     *float64                   `json:"auto_pause_7d_threshold"`
 	AutoPause5hDisabled      bool                       `json:"auto_pause_5h_disabled"`
 	AutoPause7dDisabled      bool                       `json:"auto_pause_7d_disabled"`
+	UsageLimitOverride       *bool                      `json:"ignore_usage_limit_status_override"`
+	UsageLimitEffective      bool                       `json:"ignore_usage_limit_status_effective"`
 	DispatchCountLimit       *int64                     `json:"dispatch_count_limit"`
 	DispatchCountUsed        int64                      `json:"dispatch_count_used,omitempty"`
 	DispatchCountResetAt     string                     `json:"dispatch_count_reset_at,omitempty"`
@@ -822,6 +824,11 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 		if isOpenAIResponsesAccount {
 			codexClientMetadataMode = auth.NormalizeCodexClientMetadataMode(row.GetCredential("codex_client_metadata_mode"))
 		}
+		ignoreUsageLimitStatusOverride := row.GetCredentialOptionalBool("ignore_usage_limit_status_override")
+		ignoreUsageLimitStatusEffective := h.store.IgnoreUsageLimitStatus()
+		if ignoreUsageLimitStatusOverride != nil {
+			ignoreUsageLimitStatusEffective = *ignoreUsageLimitStatusOverride
+		}
 		resp := accountResponse{
 			ID:                       row.ID,
 			Name:                     row.Name,
@@ -857,6 +864,8 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			UpdatedAt:                row.UpdatedAt.Format(time.RFC3339),
 			CodexUsageUpdatedAt:      row.GetCredential("codex_usage_updated_at"),
 			Codex5HUsageUpdatedAt:    row.GetCredential("codex_5h_usage_updated_at"),
+			UsageLimitOverride:       ignoreUsageLimitStatusOverride,
+			UsageLimitEffective:      ignoreUsageLimitStatusEffective,
 		}
 		resp.AutoPause5hThreshold = accountQuotaAutoPauseThreshold(row, "auto_pause_5h_threshold")
 		resp.AutoPause7dThreshold = accountQuotaAutoPauseThreshold(row, "auto_pause_7d_threshold")
@@ -864,6 +873,8 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 		resp.AutoPause7dDisabled = row.GetCredentialBool("auto_pause_7d_disabled")
 		resp.DispatchCountLimit = accountDispatchCountLimit(row)
 		if acc, ok := accountMap[row.ID]; ok {
+			resp.UsageLimitOverride = acc.GetIgnoreUsageLimitStatusOverride()
+			resp.UsageLimitEffective = acc.IgnoresUsageLimitStatus()
 			acc.Mu().RLock()
 			resp.GroupIDs = append([]int64(nil), acc.GroupIDs...)
 			acc.Mu().RUnlock()
@@ -1042,6 +1053,7 @@ type updateAccountSchedulerReq struct {
 	AutoPause7dThreshold    json.RawMessage `json:"auto_pause_7d_threshold"`
 	AutoPause5hDisabled     json.RawMessage `json:"auto_pause_5h_disabled"`
 	AutoPause7dDisabled     json.RawMessage `json:"auto_pause_7d_disabled"`
+	UsageLimitOverride      json.RawMessage `json:"ignore_usage_limit_status_override"`
 	DispatchCountLimit      json.RawMessage `json:"dispatch_count_limit"`
 	ProxyURL                json.RawMessage `json:"proxy_url"`
 	CustomHeaders           json.RawMessage `json:"custom_headers"`
@@ -1058,6 +1070,7 @@ type accountSchedulerUpdate struct {
 	AutoPause7dThreshold    optionalFloat64
 	AutoPause5hDisabled     database.OptionalBool
 	AutoPause7dDisabled     database.OptionalBool
+	UsageLimitOverride      optionalNullableBool
 	DispatchCountLimit      database.OptionalNullInt64
 	ProxyURL                database.OptionalString
 	CustomHeaders           optionalCustomHeaders
@@ -1105,6 +1118,10 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	if err != nil {
 		return accountSchedulerUpdate{}, err
 	}
+	ignoreUsageLimitStatusOverride, err := parseOptionalNullableBoolField(req.UsageLimitOverride, "ignore_usage_limit_status_override")
+	if err != nil {
+		return accountSchedulerUpdate{}, err
+	}
 	dispatchCountLimit, err := parseOptionalIntegerField(req.DispatchCountLimit, "dispatch_count_limit", 0, 1000000)
 	if err != nil {
 		return accountSchedulerUpdate{}, err
@@ -1134,6 +1151,13 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	if autoPause7dDisabled.Set {
 		credentialUpdates["auto_pause_7d_disabled"] = autoPause7dDisabled.Value
 	}
+	if ignoreUsageLimitStatusOverride.Set {
+		if ignoreUsageLimitStatusOverride.Value == nil {
+			credentialUpdates["ignore_usage_limit_status_override"] = nil
+		} else {
+			credentialUpdates["ignore_usage_limit_status_override"] = *ignoreUsageLimitStatusOverride.Value
+		}
+	}
 	if dispatchCountLimit.Set {
 		if dispatchCountLimit.Value.Valid {
 			credentialUpdates["dispatch_count_limit"] = dispatchCountLimit.Value.Int64
@@ -1156,6 +1180,7 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 		AutoPause7dThreshold:    autoPause7dThreshold,
 		AutoPause5hDisabled:     autoPause5hDisabled,
 		AutoPause7dDisabled:     autoPause7dDisabled,
+		UsageLimitOverride:      ignoreUsageLimitStatusOverride,
 		DispatchCountLimit:      dispatchCountLimit,
 		ProxyURL:                proxyURL,
 		CustomHeaders:           customHeaders,
@@ -1174,6 +1199,7 @@ func (u accountSchedulerUpdate) hasChanges() bool {
 		u.AutoPause7dThreshold.Set ||
 		u.AutoPause5hDisabled.Set ||
 		u.AutoPause7dDisabled.Set ||
+		u.UsageLimitOverride.Set ||
 		u.DispatchCountLimit.Set ||
 		u.ProxyURL.Set
 }
@@ -1319,6 +1345,9 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 			optionalBoolPtr(update.AutoPause7dDisabled),
 		)
 	}
+	if update.UsageLimitOverride.Set {
+		h.store.ApplyAccountIgnoreUsageLimitStatus(id, update.UsageLimitOverride.Value)
+	}
 	if update.DispatchCountLimit.Set {
 		h.store.ApplyAccountDispatchCountLimit(id, nullableInt64Pointer(update.DispatchCountLimit.Value))
 	}
@@ -1339,6 +1368,11 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 type optionalCustomHeaders struct {
 	Set    bool
 	Values map[string]string
+}
+
+type optionalNullableBool struct {
+	Set   bool
+	Value *bool
 }
 
 func parseOptionalCustomHeadersField(raw json.RawMessage) (optionalCustomHeaders, error) {
@@ -1617,6 +1651,21 @@ func parseOptionalBoolField(raw json.RawMessage, field string) (database.Optiona
 		return database.OptionalBool{}, fmt.Errorf("%s 必须是布尔值或 null", field)
 	}
 	return database.OptionalBool{Set: true, Value: value}, nil
+}
+
+func parseOptionalNullableBoolField(raw json.RawMessage, field string) (optionalNullableBool, error) {
+	if len(raw) == 0 {
+		return optionalNullableBool{}, nil
+	}
+	if string(raw) == "null" {
+		return optionalNullableBool{Set: true}, nil
+	}
+
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return optionalNullableBool{}, fmt.Errorf("%s 必须是布尔值或 null", field)
+	}
+	return optionalNullableBool{Set: true, Value: &value}, nil
 }
 
 func parseOptionalIntegerSliceField(raw json.RawMessage, field string) (database.OptionalInt64Slice, error) {
@@ -6011,6 +6060,7 @@ type settingsResponse struct {
 	SmartPacingEnabled                 bool    `json:"smart_pacing_enabled"`
 	SmartPacingMinConcurrency          int     `json:"smart_pacing_min_concurrency"`
 	SmartPacingWindows                 string  `json:"smart_pacing_windows"`
+	IgnoreUsageLimitStatus             bool    `json:"ignore_usage_limit_status"`
 }
 
 type updateSettingsReq struct {
@@ -6108,6 +6158,7 @@ type updateSettingsReq struct {
 	SmartPacingEnabled                 *bool    `json:"smart_pacing_enabled"`
 	SmartPacingMinConcurrency          *int     `json:"smart_pacing_min_concurrency"`
 	SmartPacingWindows                 *string  `json:"smart_pacing_windows"`
+	IgnoreUsageLimitStatus             *bool    `json:"ignore_usage_limit_status"`
 }
 
 type brandingResponse struct {
@@ -6710,6 +6761,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		SmartPacingEnabled:                 h.store.GetSmartPacingEnabled(),
 		SmartPacingMinConcurrency:          h.store.GetSmartPacingMinConcurrency(),
 		SmartPacingWindows:                 h.store.GetSmartPacingWindows(),
+		IgnoreUsageLimitStatus:             h.store.IgnoreUsageLimitStatus(),
 	})
 }
 
@@ -7235,6 +7287,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		h.store.SetSmartPacingWindows(*req.SmartPacingWindows)
 		log.Printf("设置已更新: smart_pacing_windows = %s", h.store.GetSmartPacingWindows())
 	}
+	if req.IgnoreUsageLimitStatus != nil {
+		h.store.SetIgnoreUsageLimitStatus(*req.IgnoreUsageLimitStatus)
+		log.Printf("设置已更新: ignore_usage_limit_status = %t", *req.IgnoreUsageLimitStatus)
+	}
 	runtimeCfg = proxy.ApplyRuntimeSettings(runtimeCfg)
 
 	usageLogChanged := false
@@ -7518,6 +7574,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		SmartPacingEnabled:                 h.store.GetSmartPacingEnabled(),
 		SmartPacingMinConcurrency:          h.store.GetSmartPacingMinConcurrency(),
 		SmartPacingWindows:                 h.store.GetSmartPacingWindows(),
+		IgnoreUsageLimitStatus:             h.store.IgnoreUsageLimitStatus(),
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
@@ -7636,6 +7693,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		SmartPacingEnabled:                 h.store.GetSmartPacingEnabled(),
 		SmartPacingMinConcurrency:          h.store.GetSmartPacingMinConcurrency(),
 		SmartPacingWindows:                 h.store.GetSmartPacingWindows(),
+		IgnoreUsageLimitStatus:             h.store.IgnoreUsageLimitStatus(),
 	})
 }
 

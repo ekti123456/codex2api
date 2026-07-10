@@ -2956,6 +2956,58 @@ func TestResponses_PlainRequestNotPromotedOnRelayOnlyPool(t *testing.T) {
 	}
 }
 
+func TestResponsesRelaySuccessClearsUsageLimitCooldown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var store *auth.Store
+	account := &auth.Account{
+		DBID:         1,
+		UpstreamType: auth.UpstreamOpenAIResponses,
+		APIKey:       "sk-direct",
+		Models:       []string{"gpt-4.1-direct"},
+		PlanType:     "api",
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		store.MarkCooldown(account, time.Hour, "usage_limit")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_success_clears_limit",
+			"object":"response",
+			"status":"completed",
+			"model":"gpt-4.1-direct",
+			"output":[],
+			"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+		}`))
+	}))
+	defer upstream.Close()
+
+	account.BaseURL = upstream.URL
+	store = auth.NewStore(nil, nil, &database.SystemSettings{
+		MaxConcurrency:         2,
+		MaxRetries:             0,
+		MaxRateLimitRetries:    0,
+		IgnoreUsageLimitStatus: true,
+	})
+	store.AddAccount(account)
+	handler := NewHandler(store, nil, nil, nil)
+
+	body := []byte(`{"model":"gpt-4.1-direct","input":"hello"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = req
+
+	handler.Responses(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if account.HasActiveCooldown() || !account.IsAvailable() {
+		t.Fatal("successful relay Responses request should clear a concurrent usage-limit cooldown")
+	}
+}
+
 // 池中还有可用官方账号时,body-signal 请求被钉在官方账号上(不落中转)。
 func TestBodySignalCompactFilters(t *testing.T) {
 	relay := &auth.Account{

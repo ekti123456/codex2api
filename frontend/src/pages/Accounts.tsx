@@ -760,6 +760,8 @@ export default function Accounts() {
     useState(false);
   const [editAutoPause7dDisabled, setEditAutoPause7dDisabled] =
     useState(false);
+  const [editIgnoreUsageLimitStatusMode, setEditIgnoreUsageLimitStatusMode] =
+    useState<"inherit" | "enabled" | "disabled">("inherit");
   const [editDispatchCountLimitInput, setEditDispatchCountLimitInput] =
     useState("");
   const [allowedAPIKeySelection, setAllowedAPIKeySelection] = useState<
@@ -3312,6 +3314,13 @@ export default function Accounts() {
     );
     setEditAutoPause5hDisabled(account.auto_pause_5h_disabled ?? false);
     setEditAutoPause7dDisabled(account.auto_pause_7d_disabled ?? false);
+    setEditIgnoreUsageLimitStatusMode(
+      account.ignore_usage_limit_status_override === true
+        ? "enabled"
+        : account.ignore_usage_limit_status_override === false
+          ? "disabled"
+          : "inherit",
+    );
     setEditDispatchCountLimitInput(
       formatDispatchCountLimitInput(account.dispatch_count_limit),
     );
@@ -3361,6 +3370,7 @@ export default function Accounts() {
     setEditAutoPause7dThresholdInput("");
     setEditAutoPause5hDisabled(false);
     setEditAutoPause7dDisabled(false);
+    setEditIgnoreUsageLimitStatusMode("inherit");
     setEditDispatchCountLimitInput("");
     setAllowedAPIKeySelection([]);
     setEditProxyUrl("");
@@ -3506,6 +3516,10 @@ export default function Accounts() {
         ),
         auto_pause_5h_disabled: editAutoPause5hDisabled,
         auto_pause_7d_disabled: editAutoPause7dDisabled,
+        ignore_usage_limit_status_override:
+          editIgnoreUsageLimitStatusMode === "inherit"
+            ? null
+            : editIgnoreUsageLimitStatusMode === "enabled",
         dispatch_count_limit: dispatchCountLimitInputToValue(
           editDispatchCountLimitInput,
         ),
@@ -6731,6 +6745,33 @@ export default function Accounts() {
                         <div className="mt-1 text-xs text-muted-foreground">
                           {t("accounts.autoPauseHint")}
                         </div>
+                        <div className="mt-4 flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-foreground">
+                              {t("accounts.ignoreUsageLimitStatus")}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {t("accounts.ignoreUsageLimitStatusHint")}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <TogglePill
+                              active={editIgnoreUsageLimitStatusMode === "inherit"}
+                              onClick={() => setEditIgnoreUsageLimitStatusMode("inherit")}
+                              label={t("accounts.ignoreUsageLimitStatusInherit")}
+                            />
+                            <TogglePill
+                              active={editIgnoreUsageLimitStatusMode === "enabled"}
+                              onClick={() => setEditIgnoreUsageLimitStatusMode("enabled")}
+                              label={t("common.enabled")}
+                            />
+                            <TogglePill
+                              active={editIgnoreUsageLimitStatusMode === "disabled"}
+                              onClick={() => setEditIgnoreUsageLimitStatusMode("disabled")}
+                              label={t("common.disabled")}
+                            />
+                          </div>
+                        </div>
                         <div className="mt-4 grid gap-4 md:grid-cols-2">
                           <QuotaAutoPauseWindowEditor
                             disabledLabel={t("accounts.autoPause5hDisabled")}
@@ -8676,11 +8717,16 @@ function getAccountRateLimitWindow(
     reason === "rate_limited" ||
     reason === "rate_limited_5h" ||
     reason === "rate_limited_7d";
-  const has7dLimit = isActiveUsageWindowExhausted(
-    account.usage_percent_7d,
-    account.reset_7d_at,
-  );
+  const usageWindowsAreInformational =
+    account.ignore_usage_limit_status_effective === true;
+  const has7dLimit =
+    !usageWindowsAreInformational &&
+    isActiveUsageWindowExhausted(
+      account.usage_percent_7d,
+      account.reset_7d_at,
+    );
   const has5hLimit =
+    !usageWindowsAreInformational &&
     isPremiumUsagePlan(account.plan_type) &&
     isActiveUsageWindowExhausted(account.usage_percent_5h, account.reset_5h_at);
   const has5hAutoPause = isActiveAutoPauseWindowReached(

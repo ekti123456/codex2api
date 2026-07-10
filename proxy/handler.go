@@ -135,15 +135,16 @@ type usageLimitDetails struct {
 }
 
 type CodexUsageSyncResult struct {
-	UsagePct7d           float64
-	HasUsage7d           bool
-	Usage7dRateLimited   bool
-	UsagePct5h           float64
-	Reset5hAt            time.Time
-	HasUsage5h           bool
-	Used5hHeaders        bool
-	Persisted5hOnly      bool
-	Premium5hRateLimited bool
+	UsagePct7d               float64
+	HasUsage7d               bool
+	Usage7dRateLimited       bool
+	UsagePct5h               float64
+	Reset5hAt                time.Time
+	HasUsage5h               bool
+	Used5hHeaders            bool
+	Persisted5hOnly          bool
+	Premium5hRateLimited     bool
+	UsageWindowLimitsIgnored bool
 }
 
 type codexRateLimitWindow string
@@ -2191,6 +2192,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			} else if outcome.logStatusCode == http.StatusOK {
 				h.store.ClearModelCooldown(account, attemptEffectiveModel)
+				h.store.ConfirmResponsesAvailable(account)
 				h.store.ReportRequestSuccess(account, time.Duration(totalDuration)*time.Millisecond)
 			}
 			h.store.Release(account)
@@ -2708,6 +2710,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 		} else if outcome.logStatusCode == http.StatusOK {
 			h.store.ClearModelCooldown(account, effectiveModel)
+			h.store.ConfirmResponsesAvailable(account)
 			h.store.ReportRequestSuccess(account, time.Duration(totalDuration)*time.Millisecond)
 		}
 		h.store.Release(account)
@@ -4351,6 +4354,7 @@ func SyncCodexUsageState(store *auth.Store, account *auth.Account, resp *http.Re
 	if store != nil {
 		store.UpdateAccountPlanType(account, resp.Header.Get("x-codex-plan-type"))
 	}
+	result.UsageWindowLimitsIgnored = account.SkipsUsageWindowLimits()
 
 	result.Used5hHeaders = responseHasCodex5hHeaders(resp)
 	result.UsagePct7d, result.HasUsage7d = parseCodexUsageHeaders(resp, account)

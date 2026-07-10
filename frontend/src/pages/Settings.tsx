@@ -1205,6 +1205,7 @@ export default function Settings() {
     smart_pacing_enabled: false,
     smart_pacing_min_concurrency: 1,
     smart_pacing_windows: '5h,7d',
+    ignore_usage_limit_status: false,
   })
   const lazyModeActive = settingsForm.lazy_mode
   const [savingSettings, setSavingSettings] = useState(false)
@@ -2114,6 +2115,16 @@ export default function Settings() {
                 </SettingField>
               </div>
               <div className={SETTINGS_SWITCH_GRID}>
+                <SettingField
+                  label={t('settings.ignoreUsageLimitStatus')}
+                  description={t('settings.ignoreUsageLimitStatusHint')}
+                  layout="switch"
+                >
+                  <Switch
+                    checked={settingsForm.ignore_usage_limit_status}
+                    onCheckedChange={(checked) => autoSaveBooleanField('ignore_usage_limit_status', checked)}
+                  />
+                </SettingField>
                 <SettingField label={t('settings.smartPacingEnabled')} description={t('settings.smartPacingEnabledHint')} layout="switch">
                   <Switch
                     checked={settingsForm.smart_pacing_enabled}

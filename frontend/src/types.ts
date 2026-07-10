@@ -90,6 +90,8 @@ export interface AccountRow {
   auto_pause_7d_threshold?: number | null
   auto_pause_5h_disabled?: boolean
   auto_pause_7d_disabled?: boolean
+  ignore_usage_limit_status_override?: boolean | null
+  ignore_usage_limit_status_effective?: boolean
   dispatch_count_limit?: number | null
   dispatch_count_used?: number
   dispatch_count_reset_at?: ISODateString
@@ -254,6 +256,7 @@ export interface UpdateAccountSchedulerRequest {
   auto_pause_7d_threshold?: number | null
   auto_pause_5h_disabled?: boolean
   auto_pause_7d_disabled?: boolean
+  ignore_usage_limit_status_override?: boolean | null
   dispatch_count_limit?: number | null
   custom_headers?: Record<string, string> | null
 }
@@ -679,6 +682,7 @@ export interface SystemSettings {
   smart_pacing_enabled: boolean
   smart_pacing_min_concurrency: number
   smart_pacing_windows: string
+  ignore_usage_limit_status: boolean
 }
 
 export interface SetupHintsResponse {

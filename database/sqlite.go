@@ -237,7 +237,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 					codex_cli_version_sync_enabled INTEGER DEFAULT 1,
 					codex_cli_version_sync_interval_hours INTEGER DEFAULT 12,
 					model_pricing_overrides TEXT DEFAULT '{}',
-					model_pricing_sync_url TEXT DEFAULT ''
+					model_pricing_sync_url TEXT DEFAULT '',
+					ignore_usage_limit_status INTEGER DEFAULT 0
 				);`,
 		`CREATE TABLE IF NOT EXISTS model_registry (
 			id TEXT PRIMARY KEY,
@@ -440,6 +441,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "codex_cli_version_sync_interval_hours", "INTEGER DEFAULT 12"},
 		{"system_settings", "model_pricing_overrides", "TEXT DEFAULT '{}'"},
 		{"system_settings", "model_pricing_sync_url", "TEXT DEFAULT ''"},
+		{"system_settings", "ignore_usage_limit_status", "INTEGER DEFAULT 0"},
 		{"system_settings", "max_retries", "INTEGER DEFAULT 2"},
 		{"system_settings", "max_rate_limit_retries", "INTEGER DEFAULT 1"},
 		{"system_settings", "allow_remote_migration", "INTEGER DEFAULT 0"},
