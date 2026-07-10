@@ -32,12 +32,14 @@ import type {
 } from "../types";
 import { getErrorMessage } from "../utils/error";
 import { formatRelativeTime, formatBeijingTime } from "../utils/time";
+import { buildBatchMetadataUpdate } from "../lib/accountBatchUpdate";
 import { formatLongUsageWindowLabel } from "../lib/usageFormat";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -891,7 +893,9 @@ export default function Accounts() {
   });
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [showBatchMetaEditor, setShowBatchMetaEditor] = useState(false);
+  const [batchUpdateTags, setBatchUpdateTags] = useState(false);
   const [batchTags, setBatchTags] = useState<string[]>([]);
+  const [batchUpdateGroups, setBatchUpdateGroups] = useState(false);
   const [batchGroupIds, setBatchGroupIds] = useState<number[]>([]);
   const [batchMetaSubmitting, setBatchMetaSubmitting] = useState(false);
   const [showBatchQuotaAutoPauseEditor, setShowBatchQuotaAutoPauseEditor] =
@@ -3083,30 +3087,27 @@ export default function Accounts() {
   };
 
   const openBatchMetaEditor = () => {
-    const selectedAccounts = accounts.filter((account) =>
-      selected.has(account.id),
-    );
-    const tagSet = new Set<string>();
-    const groupSet = new Set<number>();
-    for (const account of selectedAccounts) {
-      for (const tag of account.tags ?? []) tagSet.add(tag);
-      for (const id of account.group_ids ?? []) groupSet.add(id);
-    }
-    setBatchTags(Array.from(tagSet).sort());
-    setBatchGroupIds(Array.from(groupSet).sort((a, b) => a - b));
+    setBatchUpdateTags(false);
+    setBatchTags([]);
+    setBatchUpdateGroups(false);
+    setBatchGroupIds([]);
     setShowBatchMetaEditor(true);
   };
 
   const handleBatchSaveMeta = async () => {
     const ids = Array.from(selected);
-    if (ids.length === 0) return;
+    if (ids.length === 0 || (!batchUpdateTags && !batchUpdateGroups)) return;
     setBatchMetaSubmitting(true);
     try {
-      const result = await api.batchUpdateAccounts({
-        ids,
-        tags: batchTags,
-        group_ids: batchGroupIds,
-      });
+      const result = await api.batchUpdateAccounts(
+        buildBatchMetadataUpdate({
+          ids,
+          updateTags: batchUpdateTags,
+          tags: batchTags,
+          updateGroups: batchUpdateGroups,
+          groupIds: batchGroupIds,
+        }),
+      );
       showToast(
         t("accounts.batchMetaDone", {
           success: result.success,
@@ -6848,7 +6849,10 @@ export default function Accounts() {
                 <Button
                   type="button"
                   onClick={() => void handleBatchSaveMeta()}
-                  disabled={batchMetaSubmitting}
+                  disabled={
+                    batchMetaSubmitting ||
+                    (!batchUpdateTags && !batchUpdateGroups)
+                  }
                 >
                   {batchMetaSubmitting ? t("common.saving") : t("common.save")}
                 </Button>
@@ -6860,33 +6864,93 @@ export default function Accounts() {
                 {t("accounts.batchMetaDesc", { count: selected.size })}
               </div>
               <div className="rounded-xl border border-border p-4">
-                <div className="text-sm font-semibold text-foreground">
-                  {t("accounts.tagsLabel")}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-foreground">
+                      {t("accounts.tagsLabel")}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {t("accounts.batchMetaFieldHint")}
+                    </div>
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <span>
+                      {t(
+                        batchUpdateTags
+                          ? "common.enabled"
+                          : "common.disabled",
+                      )}
+                    </span>
+                    <Switch
+                      checked={batchUpdateTags}
+                      onCheckedChange={setBatchUpdateTags}
+                      aria-label={`${t("accounts.batchMetaTitle")}: ${t("accounts.tagsLabel")}`}
+                    />
+                  </label>
                 </div>
                 <ChipInput
                   className="mt-3"
                   value={batchTags}
                   onChange={setBatchTags}
-                  placeholder={t("accounts.tagsPlaceholder")}
+                  placeholder={t(
+                    batchUpdateTags
+                      ? "accounts.tagsPlaceholder"
+                      : "accounts.batchMetaFieldHint",
+                  )}
+                  disabled={!batchUpdateTags}
                   maxVisible={6}
                 />
               </div>
               <div className="rounded-xl border border-border p-4">
-                <div className="text-sm font-semibold text-foreground">
-                  {t("accounts.groupsLabel")}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-foreground">
+                      {t("accounts.groupsLabel")}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {t("accounts.batchMetaFieldHint")}
+                    </div>
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <span>
+                      {t(
+                        batchUpdateGroups
+                          ? "common.enabled"
+                          : "common.disabled",
+                      )}
+                    </span>
+                    <Switch
+                      checked={batchUpdateGroups}
+                      onCheckedChange={setBatchUpdateGroups}
+                      aria-label={`${t("accounts.batchMetaTitle")}: ${t("accounts.groupsLabel")}`}
+                    />
+                  </label>
                 </div>
                 <div className="mt-3">
                   <AccountGroupMultiSelect
                     groups={allGroups}
                     value={batchGroupIds}
                     onChange={setBatchGroupIds}
-                    allLabel={t("accounts.groupsUnbound")}
+                    allLabel={t(
+                      batchUpdateGroups
+                        ? "accounts.groupsUnbound"
+                        : "accounts.batchMetaFieldHint",
+                    )}
                     selectedLabel={t("accounts.groupsSelected", {
                       count: batchGroupIds.length,
                     })}
-                    placeholder={t("accounts.groupsPlaceholder")}
+                    placeholder={t(
+                      batchUpdateGroups
+                        ? "accounts.groupsPlaceholder"
+                        : "accounts.batchMetaFieldHint",
+                    )}
                     emptyLabel={t("accounts.groupsNone")}
-                    emptyHint={t("accounts.groupsSelectHint")}
+                    emptyHint={t(
+                      batchUpdateGroups
+                        ? "accounts.groupsSelectHint"
+                        : "accounts.batchMetaFieldHint",
+                    )}
+                    disabled={!batchUpdateGroups}
                   />
                 </div>
               </div>
