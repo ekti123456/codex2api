@@ -973,7 +973,7 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 
 	style := strings.TrimSpace(gjson.GetBytes(rawBody, "style").String())
 	promptForRequest := AppendImageStyleToPrompt(prompt, style)
-	if h.inspectPromptFilterTextOpenAI(c, promptForRequest, "/v1/images/generations", imageModel) {
+	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/images/generations", imageModel) {
 		return
 	}
 	if h.enforceAPIKeyLimitsAndReply(c, imageModel) {
@@ -1206,7 +1206,7 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 
 	style := strings.TrimSpace(gjson.GetBytes(rawBody, "style").String())
 	promptForRequest := AppendImageStyleToPrompt(prompt, style)
-	if h.inspectPromptFilterTextOpenAI(c, promptForRequest, "/v1/images/edits", imageModel) {
+	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/images/edits", imageModel) {
 		return
 	}
 	if h.enforceAPIKeyLimitsAndReply(c, imageModel) {
