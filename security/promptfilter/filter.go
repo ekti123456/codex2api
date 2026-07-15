@@ -717,17 +717,16 @@ func ExtractText(body []byte, endpoint string, maxLen int) string {
 
 	switch endpoint {
 	case "chat", "chat_completions", "/v1/chat/completions":
-		addResultText(gjson.GetBytes(body, "messages"))
+		collectUserMessageText(gjson.GetBytes(body, "messages"), &parts)
 	case "messages", "anthropic", "/v1/messages":
-		addResultText(gjson.GetBytes(body, "system"))
-		addResultText(gjson.GetBytes(body, "messages"))
+		collectUserMessageText(gjson.GetBytes(body, "messages"), &parts)
 	case "response", "responses", "/v1/responses":
 		// Top-level instructions are application-owned context for the Responses
 		// API. Scanning them causes platform safety and tool instructions to be
 		// attributed to the end user. User-controlled content remains in input.
-		addResultText(gjson.GetBytes(body, "input"))
+		collectUserMessageText(gjson.GetBytes(body, "input"), &parts)
 		addResultText(gjson.GetBytes(body, "prompt"))
-		addResultText(gjson.GetBytes(body, "messages"))
+		collectUserMessageText(gjson.GetBytes(body, "messages"), &parts)
 	case "image", "images", "images_generations", "images_edits", "/v1/images/generations", "/v1/images/edits":
 		addResultText(gjson.GetBytes(body, "prompt"))
 		addResultText(gjson.GetBytes(body, "style"))
@@ -738,6 +737,31 @@ func ExtractText(body []byte, endpoint string, maxLen int) string {
 		addResultText(gjson.GetBytes(body, "messages"))
 	}
 	return limitScanText(strings.Join(parts, "\n"), maxLen)
+}
+
+func collectUserMessageText(result gjson.Result, parts *[]string) {
+	if !result.Exists() || result.Type == gjson.Null {
+		return
+	}
+	if !result.IsArray() {
+		if result.IsObject() {
+			role := strings.ToLower(strings.TrimSpace(result.Get("role").String()))
+			if role != "" && role != "user" {
+				return
+			}
+		}
+		collectGJSONText(result, parts)
+		return
+	}
+	for _, item := range result.Array() {
+		if item.IsObject() {
+			role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
+			if role != "" && role != "user" {
+				continue
+			}
+		}
+		collectGJSONText(item, parts)
+	}
 }
 
 func Preview(text string, maxRunes int) string {
