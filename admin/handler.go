@@ -479,6 +479,12 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/prompt-filter/test", h.TestPromptFilter)
 	api.POST("/prompt-filter/rules/test", h.TestPromptFilterRulePattern)
 	api.GET("/prompt-filter/rules", h.GetPromptFilterRules)
+	api.GET("/prompt-filter/newapi-secret", h.GetPromptFilterNewAPISecretStatus)
+	api.POST("/prompt-filter/newapi-secret/generate", h.GeneratePromptFilterNewAPISecret)
+	api.PUT("/prompt-filter/newapi-secret", h.ReplacePromptFilterNewAPISecret)
+	api.POST("/prompt-filter/intelligence/run", h.RunPromptIntelligence)
+	api.GET("/prompt-filter/intelligence/history", h.ListPromptIntelligenceHistory)
+	api.POST("/prompt-filter/intelligence/rules", h.AddPromptIntelligenceCandidate)
 	api.GET("/models", h.ListModels)
 	api.POST("/models/sync", h.SyncModels)
 	api.POST("/codex-cli-version/sync", h.SyncCodexCLIVersion)
@@ -6088,6 +6094,8 @@ type settingsResponse struct {
 	PromptFilterMode                   string  `json:"prompt_filter_mode"`
 	PromptFilterThreshold              int     `json:"prompt_filter_threshold"`
 	PromptFilterStrictThreshold        int     `json:"prompt_filter_strict_threshold"`
+	PromptFilterStrictTerminalEnabled  bool    `json:"prompt_filter_strict_terminal_enabled"`
+	PromptFilterAdvancedConfig         string  `json:"prompt_filter_advanced_config"`
 	PromptFilterLogMatches             bool    `json:"prompt_filter_log_matches"`
 	PromptFilterMaxTextLength          int     `json:"prompt_filter_max_text_length"`
 	PromptFilterSensitiveWords         string  `json:"prompt_filter_sensitive_words"`
@@ -6191,6 +6199,8 @@ type updateSettingsReq struct {
 	PromptFilterMode                   *string  `json:"prompt_filter_mode"`
 	PromptFilterThreshold              *int     `json:"prompt_filter_threshold"`
 	PromptFilterStrictThreshold        *int     `json:"prompt_filter_strict_threshold"`
+	PromptFilterStrictTerminalEnabled  *bool    `json:"prompt_filter_strict_terminal_enabled"`
+	PromptFilterAdvancedConfig         *string  `json:"prompt_filter_advanced_config"`
 	PromptFilterLogMatches             *bool    `json:"prompt_filter_log_matches"`
 	PromptFilterMaxTextLength          *int     `json:"prompt_filter_max_text_length"`
 	PromptFilterSensitiveWords         *string  `json:"prompt_filter_sensitive_words"`
@@ -6811,6 +6821,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		PromptFilterMode:                   promptFilterCfg.Mode,
 		PromptFilterThreshold:              promptFilterCfg.Threshold,
 		PromptFilterStrictThreshold:        promptFilterCfg.StrictThreshold,
+		PromptFilterStrictTerminalEnabled:  promptFilterCfg.StrictTerminalEnabled,
+		PromptFilterAdvancedConfig:         promptfilter.MarshalAdvancedConfig(promptFilterCfg.Advanced),
 		PromptFilterLogMatches:             promptFilterCfg.LogMatches,
 		PromptFilterMaxTextLength:          promptFilterCfg.MaxTextLength,
 		PromptFilterSensitiveWords:         promptFilterCfg.SensitiveWords,
@@ -7493,6 +7505,19 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		promptFilterCfg.StrictThreshold = *req.PromptFilterStrictThreshold
 		promptFilterChanged = true
 	}
+	if req.PromptFilterStrictTerminalEnabled != nil {
+		promptFilterCfg.StrictTerminalEnabled = *req.PromptFilterStrictTerminalEnabled
+		promptFilterChanged = true
+	}
+	if req.PromptFilterAdvancedConfig != nil {
+		advanced, err := promptfilter.ParseAdvancedConfig(*req.PromptFilterAdvancedConfig)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "prompt_filter_advanced_config JSON 无效: " + err.Error()})
+			return
+		}
+		promptFilterCfg.Advanced = advanced
+		promptFilterChanged = true
+	}
 	if req.PromptFilterLogMatches != nil {
 		promptFilterCfg.LogMatches = *req.PromptFilterLogMatches
 		promptFilterChanged = true
@@ -7563,8 +7588,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 			writeError(c, http.StatusBadRequest, "Prompt 检查规则无效: "+err.Error())
 			return
 		}
-		h.store.SetPromptFilterConfig(promptFilterCfg)
-		log.Printf("设置已更新: prompt_filter enabled=%t mode=%s threshold=%d", promptFilterCfg.Enabled, promptFilterCfg.Mode, promptFilterCfg.Threshold)
 	}
 
 	// Resin 粘性代理池配置
@@ -7703,6 +7726,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		PromptFilterMode:                   promptFilterCfg.Mode,
 		PromptFilterThreshold:              promptFilterCfg.Threshold,
 		PromptFilterStrictThreshold:        promptFilterCfg.StrictThreshold,
+		PromptFilterStrictTerminalEnabled:  promptFilterCfg.StrictTerminalEnabled,
+		PromptFilterAdvancedConfig:         promptfilter.MarshalAdvancedConfig(promptFilterCfg.Advanced),
 		PromptFilterLogMatches:             promptFilterCfg.LogMatches,
 		PromptFilterMaxTextLength:          promptFilterCfg.MaxTextLength,
 		PromptFilterSensitiveWords:         promptFilterCfg.SensitiveWords,
@@ -7743,17 +7768,27 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
+		if promptFilterChanged {
+			writeError(c, http.StatusInternalServerError, "保存 Prompt 检查设置失败，设置未生效")
+			return
+		}
 		if autoResetCreditsChanged {
 			runtimeCfg = effectiveRuntimeCfg
 			writeError(c, http.StatusInternalServerError, "保存自动消耗设置失败，设置未生效")
 			return
 		}
-	} else if autoResetCreditsChanged {
-		runtimeCfg = proxy.UpdateRuntimeSettings(func(current proxy.RuntimeSettings) proxy.RuntimeSettings {
-			runtimeCfg.CodexSyncedCLIVersion = current.CodexSyncedCLIVersion
-			return runtimeCfg
-		})
-		h.triggerAutoResetCreditsScan()
+	} else {
+		if promptFilterChanged {
+			h.store.SetPromptFilterConfig(promptFilterCfg)
+			log.Printf("设置已更新: prompt_filter enabled=%t mode=%s threshold=%d", promptFilterCfg.Enabled, promptFilterCfg.Mode, promptFilterCfg.Threshold)
+		}
+		if autoResetCreditsChanged {
+			runtimeCfg = proxy.UpdateRuntimeSettings(func(current proxy.RuntimeSettings) proxy.RuntimeSettings {
+				runtimeCfg.CodexSyncedCLIVersion = current.CodexSyncedCLIVersion
+				return runtimeCfg
+			})
+			h.triggerAutoResetCreditsScan()
+		}
 	}
 
 	if h.store.GetAutoCleanUnauthorized() || h.store.GetAutoCleanRateLimited() || h.store.GetAutoCleanError() {
@@ -7835,6 +7870,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		PromptFilterMode:                   promptFilterCfg.Mode,
 		PromptFilterThreshold:              promptFilterCfg.Threshold,
 		PromptFilterStrictThreshold:        promptFilterCfg.StrictThreshold,
+		PromptFilterStrictTerminalEnabled:  promptFilterCfg.StrictTerminalEnabled,
+		PromptFilterAdvancedConfig:         promptfilter.MarshalAdvancedConfig(promptFilterCfg.Advanced),
 		PromptFilterLogMatches:             promptFilterCfg.LogMatches,
 		PromptFilterMaxTextLength:          promptFilterCfg.MaxTextLength,
 		PromptFilterSensitiveWords:         promptFilterCfg.SensitiveWords,

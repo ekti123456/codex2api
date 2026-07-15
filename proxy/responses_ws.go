@@ -526,6 +526,7 @@ func (h *Handler) streamResponsesWSUpstream(
 	c.Set("x-reasoning-effort", reasoningEffort)
 
 	var firstTokenMs int
+	outputBuffer := newWSPromptOutputBuffer(h.store.GetPromptFilterConfig())
 	var usage *UsageInfo
 	var actualServiceTier string
 	ttftRecorded := false
@@ -546,12 +547,21 @@ func (h *Handler) streamResponsesWSUpstream(
 
 	flushPendingFirstTokenMessages := func() bool {
 		for _, pending := range pendingFirstTokenMessages {
-			if err := writeResponsesWSMessage(conn, pending); err != nil {
-				writeErr = err
-				clientGone = true
+			release, filterErr := outputBuffer.Push(pending)
+			if filterErr != nil {
+				writeErr = filterErr
 				return false
 			}
-			wroteAnyBody = true
+			wrotePending := false
+			for _, filtered := range release {
+				if err := writeResponsesWSMessage(conn, filtered); err != nil {
+					writeErr = err
+					clientGone = true
+					return false
+				}
+				wrotePending = true
+			}
+			wroteAnyBody = wroteAnyBody || wrotePending
 		}
 		pendingFirstTokenMessages = pendingFirstTokenMessages[:0]
 		pendingFirstTokenBytes = 0
@@ -621,16 +631,37 @@ func (h *Handler) streamResponsesWSUpstream(
 				if len(pendingFirstTokenMessages) > 0 && !flushPendingFirstTokenMessages() {
 					return false
 				}
-				if err := writeResponsesWSMessage(conn, data); err != nil {
-					writeErr = err
-					clientGone = true
-				} else {
-					wroteAnyBody = true
+				release, filterErr := outputBuffer.Push(data)
+				if filterErr != nil {
+					writeErr = filterErr
+					return false
+				}
+				for _, filtered := range release {
+					if err := writeResponsesWSMessage(conn, filtered); err != nil {
+						writeErr = err
+						clientGone = true
+					} else {
+						wroteAnyBody = true
+					}
 				}
 			}
 		}
 		return eventType != "response.completed" && eventType != "response.failed"
 	})
+	if writeErr == nil && outputBuffer != nil {
+		remaining, err := outputBuffer.Flush()
+		if err != nil {
+			writeErr = err
+		} else {
+			for _, message := range remaining {
+				if err := writeResponsesWSMessage(conn, message); err != nil {
+					writeErr = err
+					break
+				}
+				wroteAnyBody = true
+			}
+		}
+	}
 
 	totalDuration := int(time.Since(start).Milliseconds())
 	outcome := classifyStreamOutcome(c.Request.Context().Err(), readErr, writeErr, gotTerminal)
@@ -728,6 +759,11 @@ func (h *Handler) streamResponsesWSUpstream(
 	}
 	h.store.Release(account)
 
+	if errors.Is(writeErr, promptfilter.ErrOutputBlocked) {
+		apiErr := api.NewAPIError(api.ErrorCode("response_policy_violation"), "模型输出违反安全策略", api.ErrorTypeInvalidRequest)
+		_ = writeResponsesWSError(conn, apiErr)
+		return newResponsesWSCloseError(websocket.ClosePolicyViolation, apiErr.Message, apiErr)
+	}
 	if writeErr != nil {
 		return errResponsesWSClientGone
 	}
@@ -809,11 +845,19 @@ func (h *Handler) inspectPromptFilterOpenAIForWebSocket(c *gin.Context, conn *we
 	if verdict.Action != promptfilter.ActionBlock {
 		return false
 	}
-	_ = writeResponsesWSError(conn, api.NewAPIError(
-		api.ErrorCode("prompt_blocked"),
-		"Request contains content blocked by prompt filter",
-		api.ErrorTypeInvalidRequest,
-	))
+	errorCode := api.ErrorCode("prompt_blocked")
+	errorMessage := "Request contains content blocked by prompt filter"
+	if identity, verified := h.verifyNewAPIIdentity(c, cfg.Advanced.NewAPI, nil); verified {
+		strike, ban := h.recordNewAPIOffense(c, cfg, identity)
+		h.writeNewAPIPolicyHeaders(c, strike, ban)
+		errorCode = api.ErrorCode("request_policy_violation")
+		errorMessage = "请求违规"
+		apiErr := api.NewAPIError(errorCode, errorMessage, api.ErrorTypeInvalidRequest)
+		apiErr.Details = gin.H{"strike": strike, "ban": ban}
+		_ = writeResponsesWSError(conn, apiErr)
+		return true
+	}
+	_ = writeResponsesWSError(conn, api.NewAPIError(errorCode, errorMessage, api.ErrorTypeInvalidRequest))
 	return true
 }
 
