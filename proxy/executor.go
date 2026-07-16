@@ -334,7 +334,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	// 生图请求跳过——其 instructions/工具由网关自行构造，改写会破坏桥接协议。
 	if !responsesBodyRequestsImageGeneration(requestBody) {
 		RecordObservedInstructions(requestBody, headers)
-		requestBody = ApplyPayloadRulesToBody(requestBody, gjson.GetBytes(requestBody, "model").String(), headers)
+		requestBody = ApplyPayloadRulesToBody(requestBody, gjson.GetBytes(requestBody, "model").String(), headers, PayloadRuleIdentityFromContext(ctx))
 	}
 	wantWebsocket := CurrentRuntimeSettings().CodexForceWebsocket
 	if len(useWebsocket) > 0 {

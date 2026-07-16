@@ -2402,6 +2402,7 @@ type Store struct {
 	smartPacingWindows            string   // protected by mu, "5h,7d" / "5h" / "7d"
 	groupAutoPauseThresholds      sync.Map // int64 -> [2]float64 {5h, 7d}
 	groupBaseConcurrencyOverrides sync.Map // int64 -> int64; missing means inherit global
+	groupNames                    sync.Map // int64 -> string; 组 ID→名，供 payload 规则按组名匹配
 }
 
 // sessionAffinity 记录某个 sessionKey 当前粘附到哪个账号/代理。
@@ -3523,6 +3524,7 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 			if g.BaseConcurrencyOverride.Valid {
 				s.groupBaseConcurrencyOverrides.Store(g.ID, g.BaseConcurrencyOverride.Int64)
 			}
+			s.groupNames.Store(g.ID, strings.TrimSpace(g.Name))
 		}
 	}
 	if memberships, err := s.db.ListAccountGroupMemberships(ctx); err == nil {
@@ -4976,6 +4978,38 @@ func (s *Store) SetGroupAutoPauseThresholds(groupID int64, t5h, t7d float64) {
 
 func (s *Store) DeleteGroupAutoPauseThresholds(groupID int64) {
 	s.groupAutoPauseThresholds.Delete(groupID)
+}
+
+// SetGroupName 记录/更新组 ID→名映射（组创建或改名时调用）。
+func (s *Store) SetGroupName(groupID int64, name string) {
+	if s == nil || groupID <= 0 {
+		return
+	}
+	s.groupNames.Store(groupID, strings.TrimSpace(name))
+}
+
+// DeleteGroupName 移除组 ID→名映射（组删除时调用）。
+func (s *Store) DeleteGroupName(groupID int64) {
+	if s == nil {
+		return
+	}
+	s.groupNames.Delete(groupID)
+}
+
+// ResolveGroupNames 把组 ID 列表解析为组名列表；缺失（未加载/已删除）的项跳过。
+func (s *Store) ResolveGroupNames(groupIDs []int64) []string {
+	if s == nil || len(groupIDs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(groupIDs))
+	for _, id := range groupIDs {
+		if v, ok := s.groupNames.Load(id); ok {
+			if name, _ := v.(string); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 func (s *Store) GetGroupAutoPauseThresholds(groupID int64) (float64, float64) {

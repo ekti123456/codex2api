@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -29,17 +31,24 @@ import (
 //	  "filter":       [ {rule} ]   // 删除字段（params 为路径数组）
 //	}
 //
-// 每条 rule 的匹配门（全部满足才应用）：
+// 每条 rule 的匹配门（全部满足才应用；同一门内多值为 OR，门与门之间为 AND）：
 //
 //	{
-//	  "models":    ["gpt-*"],                        // 模型名通配，空=全部
-//	  "headers":   {"X-Client": "codex*"},           // 入站请求头通配
-//	  "match":     {"reasoning.effort": "medium"},   // JSON 路径等值
-//	  "not_match": {"metadata.mode": "dev"},         // JSON 路径不等值
-//	  "exist":     ["tools.0"],                      // 路径必须存在
-//	  "not_exist": ["metadata.skip"],                // 路径必须不存在
-//	  "params":    {...}                             // 动作参数
+//	  "models":        ["gpt-*"],                    // 模型名通配，空=全部
+//	  "headers":       {"X-Client": "codex*"},       // 入站请求头通配
+//	  "api_key_ids":   ["12", "3*"],                 // 下游 API Key ID（字符串化）通配
+//	  "api_key_names": ["fast*"],                    // 下游 API Key 名称通配
+//	  "group_ids":     ["5"],                        // 该 Key 允许的账号组 ID（字符串化）通配
+//	  "group_names":   ["fast*"],                    // 该 Key 允许的账号组名通配
+//	  "match":         {"reasoning.effort": "medium"}, // JSON 路径等值
+//	  "not_match":     {"metadata.mode": "dev"},     // JSON 路径不等值
+//	  "exist":         ["tools.0"],                  // 路径必须存在
+//	  "not_exist":     ["metadata.skip"],            // 路径必须不存在
+//	  "params":        {...}                         // 动作参数
 //	}
+//
+// api_key_* / group_* 依赖请求身份（PayloadRuleIdentity）：无身份的内部/未鉴权路径下，
+// 凡配置了任一 key/组门的规则一律不匹配（fail-closed）。compact/relay 端点不套用本引擎。
 //
 // 应用顺序：default → default_raw → override → override_raw → append → filter。
 
@@ -57,15 +66,51 @@ var payloadProtectedRoots = map[string]struct{}{
 
 // PayloadRule 单条重写规则：匹配门 + 动作参数。
 type PayloadRule struct {
-	Models   []string          `json:"models,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	Match    map[string]any    `json:"match,omitempty"`
-	NotMatch map[string]any    `json:"not_match,omitempty"`
-	Exist    []string          `json:"exist,omitempty"`
-	NotExist []string          `json:"not_exist,omitempty"`
+	Models  []string          `json:"models,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	// 身份门：均为通配列表，命中任一即通过；空=该维度不限。id 门按字符串化后的值通配。
+	// 依赖 PayloadRuleIdentity；无身份时凡配置了任一身份门的规则一律不匹配（fail-closed）。
+	APIKeyIDs   []string       `json:"api_key_ids,omitempty"`
+	APIKeyNames []string       `json:"api_key_names,omitempty"`
+	GroupIDs    []string       `json:"group_ids,omitempty"`
+	GroupNames  []string       `json:"group_names,omitempty"`
+	Match       map[string]any `json:"match,omitempty"`
+	NotMatch    map[string]any `json:"not_match,omitempty"`
+	Exist       []string       `json:"exist,omitempty"`
+	NotExist    []string       `json:"not_exist,omitempty"`
 	// Params 动作参数：default/override/append 为 路径→值 map，
 	// default_raw/override_raw 值须为合法 JSON 字符串，filter 为路径数组。
 	Params json.RawMessage `json:"params"`
+}
+
+// PayloadRuleIdentity 承载请求的下游身份，供 api_key_* / group_* 匹配门使用。
+// 由 handler 从鉴权 context 构造后经上游 context 传入（见 WithPayloadRuleIdentity）。
+type PayloadRuleIdentity struct {
+	APIKeyID   int64
+	APIKeyName string
+	GroupIDs   []int64  // 该 Key 允许的账号组 ID（Key.AllowedGroupIDs）
+	GroupNames []string // 上述组 ID 解析出的组名
+}
+
+type payloadRuleIdentityKey struct{}
+
+// WithPayloadRuleIdentity 把身份挂到 context 上（id 为 nil 时原样返回）。
+// 必须挂在真正流入 ExecuteRequest 的上游 context 上——client 请求 context 与上游
+// context 解耦（newDrainableUpstreamContext 从 background 派生），挂错则传不进引擎。
+func WithPayloadRuleIdentity(ctx context.Context, id *PayloadRuleIdentity) context.Context {
+	if ctx == nil || id == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, payloadRuleIdentityKey{}, id)
+}
+
+// PayloadRuleIdentityFromContext 取出身份，缺失返回 nil。
+func PayloadRuleIdentityFromContext(ctx context.Context) *PayloadRuleIdentity {
+	if ctx == nil {
+		return nil
+	}
+	id, _ := ctx.Value(payloadRuleIdentityKey{}).(*PayloadRuleIdentity)
+	return id
 }
 
 // PayloadRuleSet 全部规则组。
@@ -274,22 +319,63 @@ func matchPayloadWildcard(pattern, value string) bool {
 	return last == "" || strings.HasSuffix(rest, last)
 }
 
-// payloadRuleMatches 判断规则的全部匹配门是否满足。
-func payloadRuleMatches(rule *PayloadRule, body []byte, model string, headers http.Header) bool {
-	if len(rule.Models) > 0 {
-		matched := false
-		for _, pattern := range rule.Models {
-			if matchPayloadWildcard(pattern, model) {
-				matched = true
-				break
-			}
+// anyWildcard 报告 value 是否命中 patterns 中任一通配（patterns 为空视为不设门，返回 true）。
+func anyWildcard(patterns []string, value string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		if matchPayloadWildcard(pattern, value) {
+			return true
 		}
-		if !matched {
-			return false
+	}
+	return false
+}
+
+// anyWildcardMulti 报告 values 中是否存在某个命中 patterns 中任一通配（patterns 为空返回 true）。
+func anyWildcardMulti(patterns, values []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, value := range values {
+		if anyWildcard(patterns, value) {
+			return true
 		}
+	}
+	return false
+}
+
+// payloadRuleMatches 判断规则的全部匹配门是否满足。identity 为请求身份（可为 nil）。
+func payloadRuleMatches(rule *PayloadRule, body []byte, model string, headers http.Header, identity *PayloadRuleIdentity) bool {
+	if !anyWildcard(rule.Models, model) {
+		return false
 	}
 	for name, pattern := range rule.Headers {
 		if headers == nil || !matchPayloadWildcard(pattern, headers.Get(name)) {
+			return false
+		}
+	}
+	// 身份门：任一门有配置但请求无身份 → fail-closed，不匹配。
+	if len(rule.APIKeyIDs) > 0 || len(rule.APIKeyNames) > 0 || len(rule.GroupIDs) > 0 || len(rule.GroupNames) > 0 {
+		if identity == nil {
+			return false
+		}
+		if len(rule.APIKeyIDs) > 0 && !anyWildcard(rule.APIKeyIDs, strconv.FormatInt(identity.APIKeyID, 10)) {
+			return false
+		}
+		if len(rule.APIKeyNames) > 0 && !anyWildcard(rule.APIKeyNames, identity.APIKeyName) {
+			return false
+		}
+		if len(rule.GroupIDs) > 0 {
+			ids := make([]string, len(identity.GroupIDs))
+			for i, id := range identity.GroupIDs {
+				ids[i] = strconv.FormatInt(id, 10)
+			}
+			if !anyWildcardMulti(rule.GroupIDs, ids) {
+				return false
+			}
+		}
+		if len(rule.GroupNames) > 0 && !anyWildcardMulti(rule.GroupNames, identity.GroupNames) {
 			return false
 		}
 	}
@@ -327,8 +413,9 @@ func payloadValueEquals(result gjson.Result, want any) bool {
 }
 
 // ApplyPayloadRulesToBody 按当前规则集改写请求体。model 为映射后的生效模型，
-// headers 为入站请求头。改写失败的单条动作跳过，不影响其余规则。
-func ApplyPayloadRulesToBody(body []byte, model string, headers http.Header) []byte {
+// headers 为入站请求头，identity 为请求身份（可为 nil）。
+// 改写失败的单条动作跳过，不影响其余规则。
+func ApplyPayloadRulesToBody(body []byte, model string, headers http.Header, identity *PayloadRuleIdentity) []byte {
 	rs := CurrentPayloadRules()
 	if rs.IsEmpty() || len(body) == 0 || !gjson.ValidBytes(body) {
 		return body
@@ -338,7 +425,7 @@ func ApplyPayloadRulesToBody(body []byte, model string, headers http.Header) []b
 	applyMapRules := func(rules []PayloadRule, onlyIfMissing bool) {
 		for i := range rules {
 			rule := &rules[i]
-			if !payloadRuleMatches(rule, out, model, headers) {
+			if !payloadRuleMatches(rule, out, model, headers, identity) {
 				continue
 			}
 			var params map[string]any
@@ -361,7 +448,7 @@ func ApplyPayloadRulesToBody(body []byte, model string, headers http.Header) []b
 	applyRawRules := func(rules []PayloadRule, onlyIfMissing bool) {
 		for i := range rules {
 			rule := &rules[i]
-			if !payloadRuleMatches(rule, out, model, headers) {
+			if !payloadRuleMatches(rule, out, model, headers, identity) {
 				continue
 			}
 			var params map[string]string
@@ -389,7 +476,7 @@ func ApplyPayloadRulesToBody(body []byte, model string, headers http.Header) []b
 
 	for i := range rs.Append {
 		rule := &rs.Append[i]
-		if !payloadRuleMatches(rule, out, model, headers) {
+		if !payloadRuleMatches(rule, out, model, headers, identity) {
 			continue
 		}
 		var params map[string]string
@@ -417,7 +504,7 @@ func ApplyPayloadRulesToBody(body []byte, model string, headers http.Header) []b
 
 	for i := range rs.Filter {
 		rule := &rs.Filter[i]
-		if !payloadRuleMatches(rule, out, model, headers) {
+		if !payloadRuleMatches(rule, out, model, headers, identity) {
 			continue
 		}
 		var paths []string
@@ -434,4 +521,14 @@ func ApplyPayloadRulesToBody(body []byte, model string, headers http.Header) []b
 		}
 	}
 	return out
+}
+
+// EffectiveRequestedServiceTier 返回请求体经当前规则改写后将真正发往上游的 service_tier，
+// 供用量日志按覆写后的值归因 requested/billing tier。输入须与 ExecuteRequest 喂给引擎的一致
+// （生图请求旁路规则，与 executor.go 保持一致）。无规则命中时返回原值。
+func EffectiveRequestedServiceTier(body []byte, model string, headers http.Header, identity *PayloadRuleIdentity) string {
+	if responsesBodyRequestsImageGeneration(body) {
+		return extractServiceTier(body)
+	}
+	return extractServiceTier(ApplyPayloadRulesToBody(body, model, headers, identity))
 }

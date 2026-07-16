@@ -75,6 +75,12 @@ interface RuleEntry {
   notMatch: Record<string, unknown>
   exist: string[]
   notExist: string[]
+  /** 下游 API Key 身份匹配门（字符串数组，支持通配符 *，组内 OR） */
+  apiKeyIds: string[]
+  apiKeyNames: string[]
+  /** 账号分组身份匹配门（字符串数组，支持通配符 *，组内 OR） */
+  groupIds: string[]
+  groupNames: string[]
   /** filter 组为字段路径数组，其余组为 路径→值 */
   params: Record<string, unknown> | string[]
 }
@@ -103,6 +109,10 @@ function parseRuleEntries(raw: string): RuleEntry[] | null {
         notMatch: (r.not_match && typeof r.not_match === 'object' && !Array.isArray(r.not_match) ? r.not_match : {}) as Record<string, unknown>,
         exist: Array.isArray(r.exist) ? r.exist.map(String) : [],
         notExist: Array.isArray(r.not_exist) ? r.not_exist.map(String) : [],
+        apiKeyIds: Array.isArray(r.api_key_ids) ? r.api_key_ids.map(String) : [],
+        apiKeyNames: Array.isArray(r.api_key_names) ? r.api_key_names.map(String) : [],
+        groupIds: Array.isArray(r.group_ids) ? r.group_ids.map(String) : [],
+        groupNames: Array.isArray(r.group_names) ? r.group_names.map(String) : [],
         params: group === 'filter'
           ? (Array.isArray(r.params) ? r.params.map(String) : [])
           : ((r.params && typeof r.params === 'object' && !Array.isArray(r.params) ? r.params : {}) as Record<string, unknown>),
@@ -125,6 +135,10 @@ function serializeRuleEntries(entries: RuleEntry[]): string {
         if (Object.keys(entry.notMatch).length > 0) rule.not_match = entry.notMatch
         if (entry.exist.length > 0) rule.exist = entry.exist
         if (entry.notExist.length > 0) rule.not_exist = entry.notExist
+        if (entry.apiKeyIds.length > 0) rule.api_key_ids = entry.apiKeyIds
+        if (entry.apiKeyNames.length > 0) rule.api_key_names = entry.apiKeyNames
+        if (entry.groupIds.length > 0) rule.group_ids = entry.groupIds
+        if (entry.groupNames.length > 0) rule.group_names = entry.groupNames
         rule.params = entry.params
         return rule
       })
@@ -188,13 +202,14 @@ const GROUP_OPTIONS = PAYLOAD_RULE_GROUPS.map((group) => ({ value: group, labelK
 
 // ==================== 添加/编辑规则表单 ====================
 
-type TemplateKey = 'appendPrompt' | 'overridePrompt' | 'serviceTier' | 'effortMap' | 'custom'
+type TemplateKey = 'appendPrompt' | 'overridePrompt' | 'serviceTier' | 'effortMap' | 'fastGroup' | 'custom'
 
 const TEMPLATES: Array<{ key: TemplateKey; icon: typeof Wand2; titleKey: string; descKey: string }> = [
   { key: 'appendPrompt', icon: ListPlus, titleKey: 'payloadRules.tplAppendTitle', descKey: 'payloadRules.tplAppendDesc' },
   { key: 'overridePrompt', icon: Wand2, titleKey: 'payloadRules.tplOverrideTitle', descKey: 'payloadRules.tplOverrideDesc' },
   { key: 'serviceTier', icon: Zap, titleKey: 'payloadRules.tplTierTitle', descKey: 'payloadRules.tplTierDesc' },
   { key: 'effortMap', icon: Gauge, titleKey: 'payloadRules.tplEffortTitle', descKey: 'payloadRules.tplEffortDesc' },
+  { key: 'fastGroup', icon: Zap, titleKey: 'payloadRules.tplFastGroupTitle', descKey: 'payloadRules.tplFastGroupDesc' },
   { key: 'custom', icon: Braces, titleKey: 'payloadRules.tplCustomTitle', descKey: 'payloadRules.tplCustomDesc' },
 ]
 
@@ -216,6 +231,10 @@ interface RuleFormState {
   paramRows: KVRow[]
   matchRows: KVRow[]
   filterPaths: string
+  apiKeyIds: string[]
+  apiKeyNames: string[]
+  groupIds: string[]
+  groupNames: string[]
 }
 
 function emptyFormState(template: TemplateKey): RuleFormState {
@@ -230,6 +249,11 @@ function emptyFormState(template: TemplateKey): RuleFormState {
     paramRows: [{ path: '', value: '' }],
     matchRows: [],
     filterPaths: '',
+    apiKeyIds: [],
+    apiKeyNames: [],
+    groupIds: [],
+    // fastGroup 模板默认对名为 fast 的分组生效
+    groupNames: template === 'fastGroup' ? ['fast'] : [],
   }
 }
 
@@ -247,6 +271,10 @@ function formStateFromEntry(entry: RuleEntry): RuleFormState {
       : Object.entries(entry.params).map(([path, value]) => ({ path, value: formatParamValue(value) })),
     matchRows: Object.entries(entry.match).map(([path, value]) => ({ path, value: formatParamValue(value) })),
     filterPaths: Array.isArray(entry.params) ? entry.params.join(', ') : '',
+    apiKeyIds: entry.apiKeyIds,
+    apiKeyNames: entry.apiKeyNames,
+    groupIds: entry.groupIds,
+    groupNames: entry.groupNames,
   }
 }
 
@@ -259,7 +287,24 @@ function splitList(text: string): string[] {
 
 function formStateToEntry(form: RuleFormState): RuleEntry | null {
   const models = form.models.map((model) => model.trim()).filter(Boolean)
-  const base: RuleEntry = { group: form.group, models, headers: {}, match: {}, notMatch: {}, exist: [], notExist: [], params: {} }
+  const apiKeyIds = form.apiKeyIds.map((v) => v.trim()).filter(Boolean)
+  const apiKeyNames = form.apiKeyNames.map((v) => v.trim()).filter(Boolean)
+  const groupIds = form.groupIds.map((v) => v.trim()).filter(Boolean)
+  const groupNames = form.groupNames.map((v) => v.trim()).filter(Boolean)
+  const base: RuleEntry = {
+    group: form.group,
+    models,
+    headers: {},
+    match: {},
+    notMatch: {},
+    exist: [],
+    notExist: [],
+    apiKeyIds,
+    apiKeyNames,
+    groupIds,
+    groupNames,
+    params: {},
+  }
   switch (form.template) {
     case 'appendPrompt': {
       if (!form.promptText.trim()) return null
@@ -279,6 +324,14 @@ function formStateToEntry(form: RuleFormState): RuleEntry | null {
         group: 'override',
         match: { 'reasoning.effort': form.effortFrom },
         params: { 'reasoning.effort': form.effortTo },
+      }
+    }
+    case 'fastGroup': {
+      return {
+        ...base,
+        group: 'override',
+        groupNames: groupNames.length > 0 ? groupNames : ['fast'],
+        params: { service_tier: form.tierValue.trim() || 'priority' },
       }
     }
     case 'custom': {
@@ -332,6 +385,18 @@ function GateChips({ entry }: { entry: RuleEntry }) {
   }
   for (const path of entry.exist) chips.push({ key: `e-${path}`, label: `${t('payloadRules.chipExist')} ${path}`, mono: true })
   for (const path of entry.notExist) chips.push({ key: `ne-${path}`, label: `${t('payloadRules.chipNotExist')} ${path}`, mono: true })
+  if (entry.apiKeyNames.length > 0) {
+    chips.push({ key: 'akn', label: `${t('payloadRules.chipApiKeyName')}: ${entry.apiKeyNames.join(', ')}`, mono: true })
+  }
+  if (entry.apiKeyIds.length > 0) {
+    chips.push({ key: 'aki', label: `${t('payloadRules.chipApiKeyId')}: ${entry.apiKeyIds.join(', ')}`, mono: true })
+  }
+  if (entry.groupNames.length > 0) {
+    chips.push({ key: 'gn', label: `${t('payloadRules.chipGroupName')}: ${entry.groupNames.join(', ')}`, mono: true })
+  }
+  if (entry.groupIds.length > 0) {
+    chips.push({ key: 'gi', label: `${t('payloadRules.chipGroupId')}: ${entry.groupIds.join(', ')}`, mono: true })
+  }
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {chips.map((chip) => (
@@ -462,6 +527,10 @@ export default function PayloadRules() {
   const [expandedSample, setExpandedSample] = useState<number | null>(null)
   const [copiedSample, setCopiedSample] = useState<number | null>(null)
   const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [apiKeyNameOptions, setApiKeyNameOptions] = useState<string[]>([])
+  const [apiKeyIdOptions, setApiKeyIdOptions] = useState<string[]>([])
+  const [groupNameOptions, setGroupNameOptions] = useState<string[]>([])
+  const [groupIdOptions, setGroupIdOptions] = useState<string[]>([])
 
   const visualJSON = useMemo(() => serializeRuleEntries(entries), [entries])
   const currentJSON = viewMode === 'json' ? jsonDraft : visualJSON
@@ -538,6 +607,28 @@ export default function PayloadRules() {
         setModelOptions(resp.models || [])
       } catch {
         setModelOptions([])
+      }
+    })()
+    void (async () => {
+      try {
+        const resp = await api.getAPIKeys()
+        const keys = resp.keys || []
+        setApiKeyNameOptions(keys.map((k) => k.name).filter(Boolean))
+        setApiKeyIdOptions(keys.map((k) => String(k.id)))
+      } catch {
+        setApiKeyNameOptions([])
+        setApiKeyIdOptions([])
+      }
+    })()
+    void (async () => {
+      try {
+        const resp = await api.listAccountGroups()
+        const groups = resp.groups || []
+        setGroupNameOptions(groups.map((g) => g.name).filter(Boolean))
+        setGroupIdOptions(groups.map((g) => String(g.id)))
+      } catch {
+        setGroupNameOptions([])
+        setGroupIdOptions([])
       }
     })()
   }, [])
@@ -926,6 +1017,30 @@ export default function PayloadRules() {
                 </div>
               ) : null}
 
+              {form.template === 'fastGroup' ? (
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-foreground">{t('payloadRules.groupNamesLabel')}</label>
+                    <ChipInput
+                      value={form.groupNames}
+                      onChange={(groupNames) => setForm({ ...form, groupNames })}
+                      options={groupNameOptions}
+                      placeholder={t('payloadRules.groupNamesPlaceholder')}
+                    />
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">{t('payloadRules.tplFastGroupHint')}</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-foreground">{t('payloadRules.formTier')}</label>
+                    <Input
+                      value={form.tierValue}
+                      placeholder="priority"
+                      className="h-9 font-mono text-xs"
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, tierValue: e.target.value })}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
               {form.template === 'custom' ? (
                 <>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -979,6 +1094,50 @@ export default function PayloadRules() {
                       valuePlaceholder="medium"
                       addLabel={t('payloadRules.formAddRow')}
                     />
+                  </div>
+                  <div className="space-y-3 rounded-xl border border-border/70 bg-muted/20 p-3.5">
+                    <div className="space-y-0.5">
+                      <label className="text-xs font-semibold text-foreground">{t('payloadRules.identityGatesLabel')}</label>
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">{t('payloadRules.identityGatesHint')}</p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-foreground">{t('payloadRules.apiKeyNamesLabel')}</label>
+                        <ChipInput
+                          value={form.apiKeyNames}
+                          onChange={(apiKeyNames) => setForm({ ...form, apiKeyNames })}
+                          options={apiKeyNameOptions}
+                          placeholder={t('payloadRules.apiKeyNamesPlaceholder')}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-foreground">{t('payloadRules.apiKeyIdsLabel')}</label>
+                        <ChipInput
+                          value={form.apiKeyIds}
+                          onChange={(apiKeyIds) => setForm({ ...form, apiKeyIds })}
+                          options={apiKeyIdOptions}
+                          placeholder={t('payloadRules.apiKeyIdsPlaceholder')}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-foreground">{t('payloadRules.groupNamesLabel')}</label>
+                        <ChipInput
+                          value={form.groupNames}
+                          onChange={(groupNames) => setForm({ ...form, groupNames })}
+                          options={groupNameOptions}
+                          placeholder={t('payloadRules.groupNamesPlaceholder')}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-foreground">{t('payloadRules.groupIdsLabel')}</label>
+                        <ChipInput
+                          value={form.groupIds}
+                          onChange={(groupIds) => setForm({ ...form, groupIds })}
+                          options={groupIdOptions}
+                          placeholder={t('payloadRules.groupIdsPlaceholder')}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </>
               ) : null}
@@ -1150,6 +1309,22 @@ function PayloadRulesDocsView() {
       ],
     },
     {
+      id: 'identity',
+      group: 'core',
+      kind: 'default',
+      icon: <Zap className="size-4" />,
+      title: t('payloadRules.docs.identity.title'),
+      paragraphs: [t('payloadRules.docs.identity.p1'), t('payloadRules.docs.identity.p2')],
+      bullets: [
+        t('payloadRules.docs.identity.b1'),
+        t('payloadRules.docs.identity.b2'),
+        t('payloadRules.docs.identity.b3'),
+        t('payloadRules.docs.identity.b4'),
+        t('payloadRules.docs.identity.b5'),
+      ],
+      callout: t('payloadRules.docs.identity.callout'),
+    },
+    {
       id: 'templates',
       group: 'setup',
       kind: 'features',
@@ -1161,6 +1336,7 @@ function PayloadRulesDocsView() {
         t('payloadRules.docs.templates.b2'),
         t('payloadRules.docs.templates.b3'),
         t('payloadRules.docs.templates.b4'),
+        t('payloadRules.docs.templates.b6'),
         t('payloadRules.docs.templates.b5'),
       ],
       callout: t('payloadRules.docs.templates.callout'),
