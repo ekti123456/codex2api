@@ -340,6 +340,10 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	if !responsesBodyRequestsImageGeneration(requestBody) {
 		RecordObservedInstructions(requestBody, headers)
 		requestBody = ApplyPayloadRulesToBody(requestBody, gjson.GetBytes(requestBody, "model").String(), headers, PayloadRuleIdentityFromContext(ctx))
+		// 规则改写发生在各 handler 的 service_tier 净化之后，规则注入的 flex/auto 等
+		// 上游不接受的层级会原样发出并触发 400，这里补一次净化兜底。用量日志的
+		// requested tier 归因走 EffectiveRequestedServiceTier（净化前取值），不受影响。
+		requestBody = sanitizeServiceTierForUpstream(requestBody)
 	}
 	wantWebsocket := CurrentRuntimeSettings().CodexForceWebsocket
 	if len(useWebsocket) > 0 {

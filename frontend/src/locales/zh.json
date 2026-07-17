@@ -3118,6 +3118,7 @@
     "formText": "提示词文本",
     "formTextPlaceholder": "输入要追加或覆盖的系统提示词……",
     "formTier": "service_tier 值",
+    "formTierHint": "上游当前只接受 priority(fast 会映射为 priority);其余值(auto/default/flex/scale)会在发往上游前被自动剔除,不会报错但也不会生效。",
     "formEffortFrom": "当思考强度为",
     "formEffortTo": "改写为",
     "formGroup": "规则组",

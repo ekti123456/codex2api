@@ -3118,6 +3118,7 @@
     "formText": "Prompt text",
     "formTextPlaceholder": "Enter the system prompt text to append or override…",
     "formTier": "service_tier value",
+    "formTierHint": "The upstream currently only accepts priority (fast is mapped to priority). Other values (auto/default/flex/scale) are silently stripped before reaching the upstream — no error, but no effect either.",
     "formEffortFrom": "When effort is",
     "formEffortTo": "Rewrite to",
     "formGroup": "Rule group",
