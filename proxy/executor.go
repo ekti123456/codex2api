@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -338,6 +339,46 @@ func prepareCodexResponsesLiteTransport(requestBody []byte, headers http.Header,
 	return requestBody, forwardHeaders
 }
 
+// normalizeCodexResponsesLiteBody 按上游对 Responses Lite 请求的强制约束净化请求体：
+// reasoning.context 必须为 all_turns、parallel_tool_calls 必须为 false，否则上游
+// 400 unsupported_value（WS/HTTP 均校验）。HTTP 上游还要求 tools 仅含 function/
+// custom/客户端执行的 tool search——网关自动注入的 hosted image_generation 工具
+// （及其桥接 instructions）会让整个请求被拒，须在发出前剥除；WS 上游接受该工具、
+// 生图桥接可用，不剥除以免功能回退。
+func normalizeCodexResponsesLiteBody(requestBody []byte, stripHostedTools bool) []byte {
+	requestBody, _ = sjson.SetBytes(requestBody, "parallel_tool_calls", false)
+	requestBody, _ = sjson.SetBytes(requestBody, "reasoning.context", "all_turns")
+	if !stripHostedTools {
+		return requestBody
+	}
+
+	if tools := gjson.GetBytes(requestBody, "tools"); tools.IsArray() {
+		kept := make([]json.RawMessage, 0, len(tools.Array()))
+		removed := false
+		for _, tool := range tools.Array() {
+			if strings.EqualFold(strings.TrimSpace(tool.Get("type").String()), "image_generation") {
+				removed = true
+				continue
+			}
+			kept = append(kept, json.RawMessage(tool.Raw))
+		}
+		if removed {
+			if len(kept) == 0 {
+				requestBody, _ = sjson.DeleteBytes(requestBody, "tools")
+			} else if raw, err := json.Marshal(kept); err == nil {
+				requestBody, _ = sjson.SetRawBytes(requestBody, "tools", raw)
+			}
+			if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(requestBody, "tool_choice.type").String()), "image_generation") {
+				requestBody, _ = sjson.DeleteBytes(requestBody, "tool_choice")
+			}
+		}
+	}
+	if instructions := gjson.GetBytes(requestBody, "instructions").String(); strings.Contains(instructions, codexImageGenerationBridgeMarker) {
+		requestBody, _ = sjson.SetBytes(requestBody, "instructions", removeCodexImageGenerationBridgeText(instructions))
+	}
+	return requestBody
+}
+
 // WebsocketExecuteFunc WebSocket 执行函数（由 wsrelay 包在 main.go 中注册，避免循环依赖）
 // poolRouteKey：本地连接池路由键（仅本地、永不发上游）。非空时 wsrelay 用它作 8 槽池的
 // baseKey，从而把"上游会话身份(每请求唯一)"与"连接复用(按 API Key 稳定)"解耦；空时沿用
@@ -428,6 +469,9 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	}
 	if wantWebsocket && WebsocketExecuteFunc != nil {
 		requestBody, headers = prepareCodexResponsesLiteTransport(requestBody, headers, true, responsesLite)
+		if responsesLite {
+			requestBody = normalizeCodexResponsesLiteBody(requestBody, false)
+		}
 		return WebsocketExecuteFunc(ctx, account, requestBody, sessionID, proxyOverride, apiKey, deviceCfg, headers, poolRouteKey)
 	}
 	if wantWebsocket && WebsocketExecuteFunc == nil {
@@ -436,6 +480,9 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		log.Printf("[WS] 警告: 期望走 WebSocket 上游，但 WebsocketExecuteFunc 未注册，已回退到 HTTP (account %d)", account.ID())
 	}
 	requestBody, headers = prepareCodexResponsesLiteTransport(requestBody, headers, false, responsesLite)
+	if responsesLite {
+		requestBody = normalizeCodexResponsesLiteBody(requestBody, true)
+	}
 
 	account.Mu().RLock()
 	accessToken := account.AccessToken
