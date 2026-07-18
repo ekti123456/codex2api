@@ -575,6 +575,27 @@ func TestResponsesWebSocketRetriesFirstTokenTimeoutBeforeRelay(t *testing.T) {
 	}
 }
 
+func TestEmitResponsesPhaseTimingsSetsHeaderAndSegments(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	base := time.Now().Add(-100 * time.Millisecond)
+	emitResponsesPhaseTimings(ctx, "gpt-5.6-sol", 300*1024,
+		base, base.Add(10*time.Millisecond), base.Add(30*time.Millisecond), base.Add(70*time.Millisecond))
+
+	header := recorder.Header().Get(responsesPhaseTimingHeader)
+	if header == "" {
+		t.Fatalf("%s header not set", responsesPhaseTimingHeader)
+	}
+	for _, segment := range []string{"read=10", "validate=20", "prepare=40", "schedule=", "body_kb=300"} {
+		if !strings.Contains(header, segment) {
+			t.Fatalf("timing header = %q, missing segment %q", header, segment)
+		}
+	}
+}
+
 func TestResponsesWebSocketFallsBackToHTTPWhenUpstreamMessageTooBig(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

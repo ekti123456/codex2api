@@ -865,6 +865,33 @@ func extractReasoningEffort(body []byte) string {
 	return ""
 }
 
+// responsesPhaseTimingHeader /v1/responses 请求准备阶段分段耗时的响应头。
+// 首个 attempt 开始前写入(SSE 首字节尚未发出),下游网关可据此把
+// "网关侧首字慢 vs codex2api first_token_ms 快"的差值归因到具体阶段(issue #405)。
+const responsesPhaseTimingHeader = "X-Codex2API-Phase-Timing"
+
+// emitResponsesPhaseTimings 输出 /v1/responses 首个 attempt 之前的分段耗时。
+// 各分段含义:mw=进入 handler 前的中间件链(含 body 缓存/解压/鉴权),
+// read=handler 内读取请求体,validate=模型映射与请求校验,
+// prepare=上游请求体重建(Unmarshal→map→Marshal),schedule=Key 限流检查与账号调度。
+// attempt 开始后的耗时由既有 first_token_ms 覆盖,两者相加即 handler 全程。
+func emitResponsesPhaseTimings(c *gin.Context, logModel string, bodySize int, handlerStart, bodyReadDone, validateDone, prepareDone time.Time) {
+	now := time.Now()
+	middlewareMs := int64(0)
+	if reqCtx := api.GetRequestContext(c); reqCtx != nil && !reqCtx.StartTime.IsZero() {
+		middlewareMs = handlerStart.Sub(reqCtx.StartTime).Milliseconds()
+	}
+	summary := fmt.Sprintf("mw=%d;read=%d;validate=%d;prepare=%d;schedule=%d;body_kb=%d",
+		middlewareMs,
+		bodyReadDone.Sub(handlerStart).Milliseconds(),
+		validateDone.Sub(bodyReadDone).Milliseconds(),
+		prepareDone.Sub(validateDone).Milliseconds(),
+		now.Sub(prepareDone).Milliseconds(),
+		bodySize/1024)
+	c.Header(responsesPhaseTimingHeader, summary)
+	log.Printf("[TIMING] /v1/responses model=%s %s", logModel, summary)
+}
+
 // extractServiceTier 从请求体提取服务等级
 func extractServiceTier(body []byte) string {
 	if tier := gjson.GetBytes(body, "service_tier").String(); tier != "" {
@@ -1677,11 +1704,13 @@ func firstGJSONInt(body []byte, paths ...string) int64 {
 // Responses 处理 /v1/responses 请求（原生透传，增强输入验证）
 func (h *Handler) Responses(c *gin.Context) {
 	// 1. 读取请求体
+	handlerStart := time.Now()
 	rawBody, err := readRawRequestBody(c)
 	if err != nil {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Failed to read request body", api.ErrorTypeInvalidRequest))
 		return
 	}
+	bodyReadDone := time.Now()
 
 	// body-signal compact：较新的 Codex 客户端把会话压缩触发器作为 input item
 	// （type=compaction_trigger）嵌进普通 /responses 请求体，而不调用
@@ -1768,6 +1797,8 @@ func (h *Handler) Responses(c *gin.Context) {
 		c.Set("x-service-tier", resolveServiceTier("", serviceTier))
 	}
 
+	validateDone := time.Now()
+
 	// 2. 准备 Codex 上游请求体（Unmarshal→map→Marshal，一次序列化）。
 	// OpenAI Responses relay body 仅在实际命中 relay 账号时惰性生成，避免 Codex 路径重复转换。
 	// previous_response_id 缓存按下游 API Key 隔离，防止跨用户注入他人对话历史。
@@ -1787,6 +1818,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidParameter, err.Error(), api.ErrorTypeInvalidRequest))
 		return
 	}
+	prepareDone := time.Now()
 	effectiveModel := effectiveRequestModel(codexBody, model)
 	logEffectiveModel := usageEffectiveModelForMapping(logModel, effectiveModel, mappingApplied)
 	if h.enforceAPIKeyLimitsAndReply(c, effectiveModel) {
@@ -1845,6 +1877,9 @@ func (h *Handler) Responses(c *gin.Context) {
 			return
 		}
 
+		if attempt == 0 {
+			emitResponsesPhaseTimings(c, logModel, len(rawBody), handlerStart, bodyReadDone, validateDone, prepareDone)
+		}
 		start := time.Now()
 		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
 		if !retainedHTTPFallback {
