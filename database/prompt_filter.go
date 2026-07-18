@@ -12,11 +12,18 @@ type PromptFilterLog struct {
 	CreatedAt       time.Time `json:"created_at"`
 	Source          string    `json:"source"`
 	Endpoint        string    `json:"endpoint"`
+	Protocol        string    `json:"protocol"`
+	Provider        string    `json:"provider"`
 	Model           string    `json:"model"`
 	Action          string    `json:"action"`
 	Mode            string    `json:"mode"`
 	Score           int       `json:"score"`
+	AuditScore      int       `json:"audit_score"`
 	Threshold       int       `json:"threshold"`
+	PolicyProfile   string    `json:"policy_profile"`
+	ReasonCode      string    `json:"reason_code"`
+	PrimaryOrigin   string    `json:"primary_origin"`
+	StrikeEligible  bool      `json:"strike_eligible"`
 	MatchedPatterns string    `json:"matched_patterns"`
 	TextPreview     string    `json:"text_preview"`
 	FullText        string    `json:"full_text"`
@@ -33,11 +40,18 @@ type PromptFilterLog struct {
 type PromptFilterLogInput struct {
 	Source          string
 	Endpoint        string
+	Protocol        string
+	Provider        string
 	Model           string
 	Action          string
 	Mode            string
 	Score           int
+	AuditScore      int
 	Threshold       int
+	PolicyProfile   string
+	ReasonCode      string
+	PrimaryOrigin   string
+	StrikeEligible  bool
 	MatchedPatterns string
 	TextPreview     string
 	FullText        string
@@ -69,13 +83,13 @@ func (db *DB) InsertPromptFilterLog(ctx context.Context, input *PromptFilterLogI
 	}
 	_, err := db.conn.ExecContext(ctx, `
 		INSERT INTO prompt_filter_logs (
-			source, endpoint, model, action, mode, score, threshold_value, matched_patterns, text_preview,
+			source, endpoint, request_protocol, request_provider, model, action, mode, score, audit_score, threshold_value, policy_profile, reason_code, primary_origin, strike_eligible, matched_patterns, text_preview,
 			api_key_id, api_key_name, api_key_masked, client_ip, error_code, review_model, review_flagged, review_error, full_text
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-	`, input.Source, input.Endpoint, input.Model, input.Action, input.Mode, input.Score, input.Threshold,
-		input.MatchedPatterns, input.TextPreview, input.APIKeyID, input.APIKeyName, input.APIKeyMasked, input.ClientIP, input.ErrorCode,
-		input.ReviewModel, input.ReviewFlagged, input.ReviewError, input.FullText)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+	`, input.Source, input.Endpoint, input.Protocol, input.Provider, input.Model, input.Action, input.Mode, input.Score, input.AuditScore, input.Threshold,
+		input.PolicyProfile, input.ReasonCode, input.PrimaryOrigin, input.StrikeEligible, input.MatchedPatterns, input.TextPreview,
+		input.APIKeyID, input.APIKeyName, input.APIKeyMasked, input.ClientIP, input.ErrorCode, input.ReviewModel, input.ReviewFlagged, input.ReviewError, input.FullText)
 	return err
 }
 
@@ -109,8 +123,9 @@ func (db *DB) ListPromptFilterLogsPage(ctx context.Context, query PromptFilterLo
 
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, created_at, COALESCE(source, ''), COALESCE(endpoint, ''), COALESCE(model, ''),
-		       COALESCE(action, ''), COALESCE(mode, ''), COALESCE(score, 0), COALESCE(threshold_value, 0),
+		SELECT id, created_at, COALESCE(source, ''), COALESCE(endpoint, ''), COALESCE(request_protocol, ''), COALESCE(request_provider, ''), COALESCE(model, ''),
+		       COALESCE(action, ''), COALESCE(mode, ''), COALESCE(score, 0), COALESCE(audit_score, 0), COALESCE(threshold_value, 0),
+		       COALESCE(policy_profile, ''), COALESCE(reason_code, ''), COALESCE(primary_origin, ''), COALESCE(strike_eligible, false),
 		       COALESCE(matched_patterns, '[]'), COALESCE(text_preview, ''), COALESCE(api_key_id, 0),
 		       COALESCE(api_key_name, ''), COALESCE(api_key_masked, ''), COALESCE(client_ip, ''), COALESCE(error_code, ''),
 		       COALESCE(review_model, ''), COALESCE(review_flagged, false), COALESCE(review_error, ''), COALESCE(full_text, '')
@@ -128,8 +143,9 @@ func (db *DB) ListPromptFilterLogsPage(ctx context.Context, query PromptFilterLo
 	for rows.Next() {
 		item := &PromptFilterLog{}
 		var createdAtRaw interface{}
-		if err := rows.Scan(&item.ID, &createdAtRaw, &item.Source, &item.Endpoint, &item.Model, &item.Action, &item.Mode,
-			&item.Score, &item.Threshold, &item.MatchedPatterns, &item.TextPreview, &item.APIKeyID, &item.APIKeyName,
+		if err := rows.Scan(&item.ID, &createdAtRaw, &item.Source, &item.Endpoint, &item.Protocol, &item.Provider, &item.Model, &item.Action, &item.Mode,
+			&item.Score, &item.AuditScore, &item.Threshold, &item.PolicyProfile, &item.ReasonCode, &item.PrimaryOrigin, &item.StrikeEligible,
+			&item.MatchedPatterns, &item.TextPreview, &item.APIKeyID, &item.APIKeyName,
 			&item.APIKeyMasked, &item.ClientIP, &item.ErrorCode, &item.ReviewModel, &item.ReviewFlagged, &item.ReviewError, &item.FullText); err != nil {
 			return nil, 0, err
 		}
@@ -204,8 +220,9 @@ func (db *DB) FindNearestPromptFilterLog(ctx context.Context, at time.Time, sour
 	}
 
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, created_at, COALESCE(source, ''), COALESCE(endpoint, ''), COALESCE(model, ''),
-		       COALESCE(action, ''), COALESCE(mode, ''), COALESCE(score, 0), COALESCE(threshold_value, 0),
+		SELECT id, created_at, COALESCE(source, ''), COALESCE(endpoint, ''), COALESCE(request_protocol, ''), COALESCE(request_provider, ''), COALESCE(model, ''),
+		       COALESCE(action, ''), COALESCE(mode, ''), COALESCE(score, 0), COALESCE(audit_score, 0), COALESCE(threshold_value, 0),
+		       COALESCE(policy_profile, ''), COALESCE(reason_code, ''), COALESCE(primary_origin, ''), COALESCE(strike_eligible, false),
 		       COALESCE(matched_patterns, '[]'), COALESCE(text_preview, ''), COALESCE(api_key_id, 0),
 		       COALESCE(api_key_name, ''), COALESCE(api_key_masked, ''), COALESCE(client_ip, ''), COALESCE(error_code, ''),
 		       COALESCE(review_model, ''), COALESCE(review_flagged, false), COALESCE(review_error, ''), COALESCE(full_text, '')
@@ -224,8 +241,9 @@ func (db *DB) FindNearestPromptFilterLog(ctx context.Context, at time.Time, sour
 	for rows.Next() {
 		item := &PromptFilterLog{}
 		var createdAtRaw interface{}
-		if err := rows.Scan(&item.ID, &createdAtRaw, &item.Source, &item.Endpoint, &item.Model, &item.Action, &item.Mode,
-			&item.Score, &item.Threshold, &item.MatchedPatterns, &item.TextPreview, &item.APIKeyID, &item.APIKeyName,
+		if err := rows.Scan(&item.ID, &createdAtRaw, &item.Source, &item.Endpoint, &item.Protocol, &item.Provider, &item.Model, &item.Action, &item.Mode,
+			&item.Score, &item.AuditScore, &item.Threshold, &item.PolicyProfile, &item.ReasonCode, &item.PrimaryOrigin, &item.StrikeEligible,
+			&item.MatchedPatterns, &item.TextPreview, &item.APIKeyID, &item.APIKeyName,
 			&item.APIKeyMasked, &item.ClientIP, &item.ErrorCode, &item.ReviewModel, &item.ReviewFlagged, &item.ReviewError, &item.FullText); err != nil {
 			return nil, err
 		}

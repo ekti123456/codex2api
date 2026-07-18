@@ -23,13 +23,14 @@ const (
 	ModeWarn    = "warn"
 	ModeBlock   = "block"
 
-	DefaultThreshold       = 50
-	DefaultStrictThreshold = 90
-	DefaultMaxTextLength   = 80 * 1024
-	defaultHeadScanLength  = 64 * 1024
-	defaultTailScanLength  = 16 * 1024
-	HitStartMarker         = "⟦PF_HIT⟧"
-	HitEndMarker           = "⟦/PF_HIT⟧"
+	DefaultThreshold              = 50
+	DefaultStrictThreshold        = 90
+	DefaultMaxTextLength          = 80 * 1024
+	configuredSensitiveWordWeight = 25
+	defaultHeadScanLength         = 64 * 1024
+	defaultTailScanLength         = 16 * 1024
+	HitStartMarker                = "⟦PF_HIT⟧"
+	HitEndMarker                  = "⟦/PF_HIT⟧"
 )
 
 type Config struct {
@@ -62,6 +63,7 @@ type PatternConfig struct {
 	Weight          int      `json:"weight"`
 	Category        string   `json:"category,omitempty"`
 	Strict          bool     `json:"strict,omitempty"`
+	SignalOnly      bool     `json:"signal_only,omitempty"`
 	Enabled         *bool    `json:"enabled,omitempty"`
 	AllPatterns     []string `json:"all_patterns,omitempty"`
 	AnyPatterns     []string `json:"any_patterns,omitempty"`
@@ -70,10 +72,11 @@ type PatternConfig struct {
 }
 
 type Match struct {
-	Name     string `json:"name"`
-	Weight   int    `json:"weight"`
-	Category string `json:"category,omitempty"`
-	Strict   bool   `json:"strict,omitempty"`
+	Name       string `json:"name"`
+	Weight     int    `json:"weight"`
+	Category   string `json:"category,omitempty"`
+	Strict     bool   `json:"strict,omitempty"`
+	SignalOnly bool   `json:"signal_only,omitempty"`
 }
 
 type Verdict struct {
@@ -82,7 +85,9 @@ type Verdict struct {
 	Action              string  `json:"action"`
 	Score               int     `json:"score"`
 	RawScore            int     `json:"raw_score"`
+	RiskScore           int     `json:"risk_score,omitempty"`
 	Threshold           int     `json:"threshold"`
+	SensitiveIntent     bool    `json:"sensitive_intent"`
 	StrictHit           bool    `json:"strict_hit"`
 	TerminalStrictHit   bool    `json:"terminal_strict_hit"`
 	TerminalCategoryHit bool    `json:"terminal_category_hit"`
@@ -132,6 +137,18 @@ func DefaultConfig() Config {
 		Review:          DefaultReviewConfig(),
 		Advanced:        DefaultAdvancedConfig(),
 	}
+}
+
+// RecommendedConfig returns the safe production preset used for fresh
+// installations and UI fallbacks. The master switch remains off so users keep
+// explicit control over rollout; once enabled, requests are blocked only by
+// high-confidence current-user rules with normalization enabled.
+func RecommendedConfig() Config {
+	cfg := DefaultConfig()
+	cfg.Mode = ModeBlock
+	cfg.StrictTerminalEnabled = true
+	cfg.Advanced = RecommendedAdvancedConfig()
+	return cfg
 }
 
 func DefaultReviewConfig() ReviewConfig {
@@ -563,6 +580,8 @@ func (e *Engine) InspectText(text string) Verdict {
 	}
 	matchesByName := map[string]Match{}
 	rawScore := 0
+	signalScore := 0
+	decisionScore := 0
 	strictScore := 0
 	strictMatched := false
 	terminalCategoryMatched := false
@@ -571,7 +590,7 @@ func (e *Engine) InspectText(text string) Verdict {
 		terminalCategories[strings.ToLower(category)] = true
 	}
 	for _, scanText := range scanTexts {
-		if utf8.RuneCountInString(scanText) < 3 {
+		if utf8.RuneCountInString(scanText) < 2 {
 			continue
 		}
 		literalHits := e.literalIndex.match(scanText)
@@ -579,9 +598,19 @@ func (e *Engine) InspectText(text string) Verdict {
 			if word == "" {
 				continue
 			}
-			if literalMatched(scanText, literalHits, word) {
-				match := Match{Name: "sensitive_word", Weight: 100, Category: "sensitive_word", Strict: true}
-				_, context := matchContextFromLiteral(scanText, word)
+			if loc := sensitiveWordMatchIndex(scanText, literalHits, word); loc != nil {
+				// Administrator-configured words are evidence, not a complete policy
+				// decision. A standalone product, tool, or security topic such as C2,
+				// IDA, CVE, or PowerShell must remain usable in ordinary development
+				// and defensive discussion. Explicit operational intent is still
+				// enforced by the built-in intent and terminal rules.
+				match := Match{
+					Name:       "sensitive_word",
+					Weight:     configuredSensitiveWordWeight,
+					Category:   "sensitive_word",
+					SignalOnly: true,
+				}
+				_, context := regexMatchContext(scanText, loc)
 				recordContext(context)
 				matchesByName[match.Name+":"+word] = match
 			}
@@ -590,8 +619,11 @@ func (e *Engine) InspectText(text string) Verdict {
 			if !patternShouldRun(scanText, pattern, literalHits) {
 				continue
 			}
+			if patternSuppressedForQuotedPolicyReview(limitedText, pattern) || patternSuppressedForDefensiveRuleArtifact(limitedText, pattern) {
+				continue
+			}
 			if loc := compiledPatternMatchIndex(scanText, pattern); loc != nil {
-				match := Match{Name: pattern.cfg.Name, Weight: pattern.cfg.Weight, Category: pattern.cfg.Category, Strict: pattern.cfg.Strict}
+				match := Match{Name: pattern.cfg.Name, Weight: pattern.cfg.Weight, Category: pattern.cfg.Category, Strict: pattern.cfg.Strict, SignalOnly: pattern.cfg.SignalOnly}
 				_, context := regexMatchContext(scanText, loc)
 				recordContext(context)
 				matchesByName[match.Name] = match
@@ -603,6 +635,11 @@ func (e *Engine) InspectText(text string) Verdict {
 	for _, match := range matchesByName {
 		matches = append(matches, match)
 		rawScore += match.Weight
+		if match.SignalOnly && !match.Strict {
+			signalScore += match.Weight
+		} else {
+			decisionScore += match.Weight
+		}
 		if match.Strict {
 			strictScore += match.Weight
 			strictMatched = true
@@ -618,22 +655,41 @@ func (e *Engine) InspectText(text string) Verdict {
 		return matches[i].Weight > matches[j].Weight
 	})
 
-	score := rawScore
+	// Signal-only matches remain visible in RawScore and audit logs, but they
+	// never raise the score used for enforcement. High-confidence combinations
+	// must be expressed as intent-bearing or terminal rules instead of relying
+	// on a pile-up of product names and security topics.
+	score := decisionScore
 	contextDiscount := 0
-	terminalCategoryHit := terminalCategoryMatched
-	terminalStrictHit := (cfg.StrictTerminalEnabled && strictMatched) || terminalCategoryHit
-	if rawScore > 0 && !terminalStrictHit {
-		contextDiscount = defensiveContextDiscount(limitedText)
+	terminalCandidate := (cfg.StrictTerminalEnabled && strictMatched) || terminalCategoryMatched
+	if decisionScore == 0 && strictScore == 0 && signalScore > 0 {
+		score = signalScore
+		signalOnlyCap := cfg.Threshold / 2
+		if score > signalOnlyCap {
+			score = signalOnlyCap
+		}
+		if score < 0 {
+			score = 0
+		}
+	}
+	if score > 0 {
+		contextDiscount = defensiveContextDiscount(limitedText, scanTexts, cfg.Advanced.ContextDiscount, strictMatched || terminalCategoryMatched)
 		score -= contextDiscount
 		if score < 0 {
 			score = 0
 		}
 	}
-	strictHit := terminalStrictHit || strictScore >= cfg.StrictThreshold
+	sensitiveIntent := decisionScore > 0 && score >= cfg.Threshold
+	terminalCategoryHit := terminalCategoryMatched && sensitiveIntent
+	terminalStrictHit := terminalCandidate && sensitiveIntent
+	// With terminal enforcement disabled, a strict rule remains a high-confidence
+	// marker but cannot override an effective score that defensive context already
+	// reduced below the normal blocking threshold.
+	strictHit := terminalStrictHit || (strictScore >= cfg.StrictThreshold && sensitiveIntent)
 	action := ActionAllow
 	if terminalStrictHit {
 		action = ActionBlock
-	} else if score >= cfg.Threshold || strictHit {
+	} else if sensitiveIntent || strictHit {
 		switch cfg.Mode {
 		case ModeBlock:
 			action = ActionBlock
@@ -647,6 +703,7 @@ func (e *Engine) InspectText(text string) Verdict {
 	verdict.Action = action
 	verdict.Score = score
 	verdict.RawScore = rawScore
+	verdict.SensitiveIntent = sensitiveIntent
 	verdict.StrictHit = strictHit
 	verdict.TerminalStrictHit = terminalStrictHit
 	verdict.TerminalCategoryHit = terminalCategoryHit
@@ -658,6 +715,99 @@ func (e *Engine) InspectText(text string) Verdict {
 		verdict.TextPreview = strings.Join(matchContexts, "\n---\n")
 	}
 	return verdict
+}
+
+var (
+	quotedPolicyReviewContextPattern = regexp.MustCompile(`(?i)\b(?:classify|categorize|label|analy[sz]e|detect|scan|test)\b.{0,120}\b(?:quoted|phrase|prompt[-\s]?injection|policy|unsafe)\b|(?:分类|归类|标注|分析|识别|检测|扫描|测试).{0,80}(?:引用|引号|恶意句子|恶意提示词|提示词注入|安全策略|违规)|(?:需要|用于).{0,20}(?:检测|识别|分类).{0,24}(?:恶意句子|恶意提示词|破限提示词)`)
+	quotedPolicyNonExecutionPattern  = regexp.MustCompile(`(?i)\b(?:do\s+not|never)\s+(?:follow|obey|execute|apply)\b|(?:不要|不得|禁止|避免|不).{0,12}(?:遵循|服从|执行|应用)`)
+	quotedPolicyReactivationPattern  = regexp.MustCompile(`(?i)\b(?:then|now|but|instead)\b.{0,24}\b(?:follow|obey|execute|apply)\b|(?:然后|现在|但是|改为).{0,16}(?:遵循|服从|执行|应用)`)
+	defensiveRuleArtifactPattern     = regexp.MustCompile(`(?i)\b(?:write|create|generate|build|design)\b.{0,56}\b(?:yara|sigma)\b.{0,72}\b(?:rule|signature|concept|detect(?:ion|or)?|alert)\b`)
+	defensiveRuleContinuationPattern = regexp.MustCompile(`(?i)(?:[,;.!?]\s*|\b(?:then|next|but|also|after\s+that)\s+)\b(?:write|create|build|generate|execute|run|deploy|provide|give|show|craft|make|spawn)\b.{0,80}\b(?:reverse[-\s]?shell|ransomware|infostealer|keylogger|credential\s+stealer)\b|\b(?:then|next|but|also|after\s+that)\b.{0,16}\b(?:actually\s+)?(?:write|create|build|generate|execute|run|deploy|provide|give|show|craft|make|spawn)\b.{0,24}\b(?:it|one|that|the\s+(?:payload|sample|tool|code|script))\b|(?:然后|接着|但是|再).{0,12}(?:实际|直接|立即)?(?:编写|生成|创建|构造|制作|执行|运行|部署).{0,20}(?:它|这个|该载荷|该样本|代码|脚本)`)
+	explicitStrictNegationPattern    = regexp.MustCompile(`(?i)\b(?:do\s+not|don't|never|avoid|must\s+not|should\s+not|refuse\s+to)\s+(?:write|create|build|generate|execute|run|deploy|provide|give|show|craft|make|spawn)\b|(?:不要|不得|禁止|避免|不应|不)(?:再)?(?:编写|生成|创建|构造|制作|执行|运行|部署)`)
+)
+
+// patternSuppressedForQuotedPolicyReview handles a narrow false-positive
+// boundary: a policy phrase is quoted as detector/classifier input and the
+// user explicitly says not to follow it. Every occurrence must remain quoted,
+// so adding an unquoted override or a later instruction to execute the quote
+// restores the normal strict match.
+func patternSuppressedForQuotedPolicyReview(original string, pattern compiledPattern) bool {
+	switch pattern.cfg.Name {
+	case "prompt_policy_override", "safety_bypass_request":
+	default:
+		return false
+	}
+	if pattern.re == nil || !quotedPolicyReviewContextPattern.MatchString(original) || !quotedPolicyNonExecutionPattern.MatchString(original) || quotedPolicyReactivationPattern.MatchString(original) {
+		return false
+	}
+	matches := pattern.re.FindAllStringIndex(original, -1)
+	if len(matches) == 0 {
+		return false
+	}
+	for _, loc := range matches {
+		if len(loc) != 2 || !operationalRequestIsQuoted(original, loc[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+func patternSuppressedForDefensiveRuleArtifact(original string, pattern compiledPattern) bool {
+	switch pattern.cfg.Name {
+	case "operational_remote_access_request", "reverse_shell_execution", "malware_creation_request":
+	default:
+		return false
+	}
+	if pattern.re == nil || defensiveRuleContinuationPattern.MatchString(original) {
+		return false
+	}
+	matches := pattern.re.FindAllStringIndex(original, -1)
+	if len(matches) == 0 {
+		return false
+	}
+	for _, loc := range matches {
+		if len(loc) != 2 {
+			return false
+		}
+		sentence := matchSentence(original, loc[0], loc[1])
+		if !defensiveArtifactText(sentence) && !explicitStrictNegationPattern.MatchString(sentence) {
+			return false
+		}
+	}
+	return true
+}
+
+func defensiveArtifactText(text string) bool {
+	if defensiveRuleArtifactPattern.MatchString(text) {
+		return true
+	}
+	for _, pattern := range benignOperationalArtifactPatterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchSentence(text string, start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if end > len(text) {
+		end = len(text)
+	}
+	left := 0
+	if boundary := strings.LastIndexAny(text[:start], ".!?;。！？；\n"); boundary >= 0 {
+		left = boundary + 1
+	}
+	right := len(text)
+	if boundary := strings.IndexAny(text[end:], ".!?;。！？；\n"); boundary >= 0 {
+		right = end + boundary
+	}
+	return text[left:right]
 }
 
 func compiledPatternMatchIndex(text string, pattern compiledPattern) []int {
@@ -717,16 +867,18 @@ func ExtractText(body []byte, endpoint string, maxLen int) string {
 
 	switch endpoint {
 	case "chat", "chat_completions", "/v1/chat/completions":
-		collectUserMessageText(gjson.GetBytes(body, "messages"), &parts)
+		collectCurrentUserMessageText(gjson.GetBytes(body, "messages"), &parts)
 	case "messages", "anthropic", "/v1/messages":
-		collectUserMessageText(gjson.GetBytes(body, "messages"), &parts)
+		collectCurrentUserMessageText(gjson.GetBytes(body, "messages"), &parts)
 	case "response", "responses", "responses_compact", "/v1/responses", "/v1/responses/compact":
 		// Top-level instructions and non-user roles are application-owned
 		// context. Scanning them attributes platform safety and tool instructions
-		// to the end user, so only actual user prompt fields participate.
-		collectUserMessageText(gjson.GetBytes(body, "input"), &parts)
+		// to the end user, so only the current user prompt participates.
+		collectCurrentUserMessageText(gjson.GetBytes(body, "input"), &parts)
 		addResultText(gjson.GetBytes(body, "prompt"))
-		collectUserMessageText(gjson.GetBytes(body, "messages"), &parts)
+		if len(parts) == 0 {
+			collectCurrentUserMessageText(gjson.GetBytes(body, "messages"), &parts)
+		}
 	case "image", "images", "images_generations", "images_edits", "/v1/images/generations", "/v1/images/edits":
 		addResultText(gjson.GetBytes(body, "prompt"))
 		addResultText(gjson.GetBytes(body, "style"))
@@ -739,7 +891,9 @@ func ExtractText(body []byte, endpoint string, maxLen int) string {
 	return limitScanText(strings.Join(parts, "\n"), maxLen)
 }
 
-func collectUserMessageText(result gjson.Result, parts *[]string) {
+var continuationOnlyPattern = regexp.MustCompile(`(?i)^(?:继续(?:吧|做|处理|执行|完成|生成|写)?(?:它|这个|上面(?:的)?内容|之前(?:的)?内容)?|接着(?:做|处理|执行)?|照做|按(?:上面|之前|刚才)(?:的)?(?:要求|内容|方案)?(?:继续)?(?:做|执行|处理)?|就这样做|continue(?:\s+(?:please|with\s+(?:that|it)))?|go\s+ahead|do\s+it|proceed(?:\s+with\s+it)?|carry\s+on|same\s+as\s+above)[。.!！\s]*$`)
+
+func collectCurrentUserMessageText(result gjson.Result, parts *[]string) {
 	if !result.Exists() || result.Type == gjson.Null {
 		return
 	}
@@ -753,15 +907,45 @@ func collectUserMessageText(result gjson.Result, parts *[]string) {
 		collectGJSONText(result, parts)
 		return
 	}
-	for _, item := range result.Array() {
+	items := result.Array()
+	userIndexes := make([]int, 0, len(items))
+	hasExplicitRoles := false
+	for i, item := range items {
 		if item.IsObject() {
-			role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
-			if role != "" && role != "user" {
-				continue
+			roleResult := item.Get("role")
+			if roleResult.Exists() {
+				hasExplicitRoles = true
+				if strings.EqualFold(strings.TrimSpace(roleResult.String()), "user") {
+					userIndexes = append(userIndexes, i)
+				}
 			}
 		}
-		collectGJSONText(item, parts)
 	}
+	if !hasExplicitRoles {
+		for _, item := range items {
+			collectGJSONText(item, parts)
+		}
+		return
+	}
+	if len(userIndexes) == 0 {
+		return
+	}
+
+	currentParts := make([]string, 0, 2)
+	currentIndex := userIndexes[len(userIndexes)-1]
+	collectGJSONText(items[currentIndex], &currentParts)
+	if isContinuationOnly(strings.Join(currentParts, "\n")) && len(userIndexes) > 1 {
+		collectGJSONText(items[userIndexes[len(userIndexes)-2]], parts)
+	}
+	*parts = append(*parts, currentParts...)
+}
+
+func isContinuationOnly(text string) bool {
+	text = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+	if text == "" || utf8.RuneCountInString(text) > 80 {
+		return false
+	}
+	return continuationOnlyPattern.MatchString(text)
 }
 
 func Preview(text string, maxRunes int) string {
@@ -791,12 +975,58 @@ func RedactSensitive(text string) string {
 	return redacted
 }
 
-func matchContextFromLiteral(text string, literal string) (string, string) {
-	start := strings.Index(text, literal)
-	if start < 0 {
-		return "", ""
+func sensitiveWordMatchIndex(text string, literalHits map[string]bool, word string) []int {
+	if word == "" {
+		return nil
 	}
-	return matchContext(text, start, start+len(literal))
+	if literalHits != nil && !literalHits[word] {
+		return nil
+	}
+
+	requireBoundary := isASCIIBoundedTerm(word)
+	for offset := 0; offset <= len(text)-len(word); {
+		relative := strings.Index(text[offset:], word)
+		if relative < 0 {
+			return nil
+		}
+		start := offset + relative
+		end := start + len(word)
+		if !requireBoundary || hasASCIIWordBoundaries(text, start, end) {
+			return []int{start, end}
+		}
+		offset = start + 1
+	}
+	return nil
+}
+
+func isASCIIBoundedTerm(text string) bool {
+	if text == "" || !isASCIIAlphaNumeric(text[0]) || !isASCIIAlphaNumeric(text[len(text)-1]) {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func hasASCIIWordBoundaries(text string, start int, end int) bool {
+	if start > 0 && isASCIIIdentifierByte(text[start-1]) {
+		return false
+	}
+	if end < len(text) && isASCIIIdentifierByte(text[end]) {
+		return false
+	}
+	return true
+}
+
+func isASCIIIdentifierByte(value byte) bool {
+	return isASCIIAlphaNumeric(value) || value == '_'
+}
+
+func isASCIIAlphaNumeric(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
 func regexMatchContext(text string, loc []int) (string, string) {
@@ -1030,17 +1260,94 @@ func safeUTF8Suffix(text string, maxBytes int) string {
 	return text[start:]
 }
 
-func defensiveContextDiscount(text string) int {
+func defensiveContextDiscount(text string, scanTexts []string, cfg ContextDiscountConfig, highConfidenceMatch bool) int {
+	if !cfg.Enabled {
+		return 0
+	}
 	discount := 0
 	for _, pattern := range defensiveContextPatterns {
 		if pattern.MatchString(text) {
 			discount += 30
 		}
 	}
-	if discount > 90 {
-		return 90
+	if discount > cfg.MaxDiscount {
+		discount = cfg.MaxDiscount
+	}
+	if cfg.IntentAware && highConfidenceMatch && hasExplicitOperationalIntent(scanTexts) && discount > cfg.OperationalMaxDiscount {
+		discount = cfg.OperationalMaxDiscount
 	}
 	return discount
+}
+
+func hasExplicitOperationalIntent(scanTexts []string) bool {
+	for _, text := range scanTexts {
+		for _, pattern := range operationalRequestPatterns {
+			for _, loc := range pattern.FindAllStringIndex(text, -1) {
+				start, end := loc[0], loc[1]
+				if operationalRequestIsNegated(text, start, end) || operationalRequestIsQuoted(text, start) || operationalRequestIsDefensiveArtifact(text, start, end) {
+					continue
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func operationalRequestIsNegated(text string, start, end int) bool {
+	probeEnd := end
+	if probeEnd > len(text) {
+		probeEnd = len(text)
+	}
+	probe := text[start:probeEnd]
+	for _, pattern := range operationalNegationPatterns {
+		if pattern.MatchString(probe) {
+			return true
+		}
+	}
+	return false
+}
+
+func operationalRequestIsDefensiveArtifact(text string, start, end int) bool {
+	windowStart := start - 16
+	if windowStart < 0 {
+		windowStart = 0
+	}
+	windowEnd := end + 112
+	if windowEnd > len(text) {
+		windowEnd = len(text)
+	}
+	window := text[windowStart:windowEnd]
+	for _, pattern := range benignOperationalArtifactPatterns {
+		if pattern.MatchString(window) {
+			return true
+		}
+	}
+	return false
+}
+
+func operationalRequestIsQuoted(text string, start int) bool {
+	if start <= 0 || start > len(text) {
+		return false
+	}
+	prefix := text[:start]
+	for _, pair := range [][2]string{{"“", "”"}, {"「", "」"}, {"『", "』"}} {
+		if strings.LastIndex(prefix, pair[0]) > strings.LastIndex(prefix, pair[1]) {
+			return true
+		}
+	}
+	for _, quote := range []byte{'"', '`'} {
+		count := 0
+		for i := 0; i < len(prefix); i++ {
+			if prefix[i] == quote && (i == 0 || prefix[i-1] != '\\') {
+				count++
+			}
+		}
+		if count%2 == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func reasonForVerdict(action string, score int, threshold int, matches []Match) string {

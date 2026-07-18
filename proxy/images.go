@@ -1022,6 +1022,10 @@ func (h *Handler) ImagesEdits(c *gin.Context) {
 }
 
 func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
+	if err := h.captureSignedMultipartIngress(c); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "Invalid request: " + err.Error(), "type": "invalid_request_error"}})
+		return
+	}
 	form, err := c.MultipartForm()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "Invalid request: " + err.Error(), "type": "invalid_request_error"}})
@@ -1110,6 +1114,27 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 	tool := buildImagesEditToolFromForm(c, imageModel, maskDataURL)
 	responsesBody := buildImagesResponsesRequest(promptForRequest, images, tool)
 	h.forwardImagesRequest(c, "/v1/images/edits", imageModel, requestModel, logEffectiveModel, responsesBody, responseFormat, "image_edit", stream)
+}
+
+// captureSignedMultipartIngress preserves the exact wire body for NewAPI HMAC
+// verification, then restores it for net/http multipart parsing. It is only
+// enabled when signed NewAPI audit forwarding is configured, avoiding an
+// extra full-body copy for ordinary image uploads.
+func (h *Handler) captureSignedMultipartIngress(c *gin.Context) error {
+	if h == nil || h.store == nil || c == nil || c.Request == nil {
+		return nil
+	}
+	cfg := h.store.GetPromptFilterConfig()
+	if !cfg.Advanced.NewAPI.Enabled || strings.TrimSpace(c.GetHeader("X-NewAPI-Signature")) == "" {
+		return nil
+	}
+	body, err := readRawRequestBody(c)
+	if err != nil {
+		return err
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Request.ContentLength = int64(len(body))
+	return nil
 }
 
 func buildImagesEditToolFromForm(c *gin.Context, imageModel, maskDataURL string) []byte {

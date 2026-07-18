@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,29 @@ func TestNewSQLiteInitializesFreshDatabase(t *testing.T) {
 
 	if got := db.Driver(); got != "sqlite" {
 		t.Fatalf("Driver() = %q, want %q", got, "sqlite")
+	}
+}
+
+func TestSQLitePromptFilterColumnDefaultsRemainUpgradeCompatible(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) returned error: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.conn.ExecContext(context.Background(), `INSERT INTO system_settings (id) VALUES (1)`); err != nil {
+		t.Fatalf("insert default settings row: %v", err)
+	}
+	settings, err := db.GetSystemSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetSystemSettings returned error: %v", err)
+	}
+	if settings.PromptFilterEnabled || settings.PromptFilterMode != "monitor" || settings.PromptFilterStrictTerminalEnabled {
+		t.Fatalf("compatibility defaults = enabled:%t mode:%q strict_terminal:%t", settings.PromptFilterEnabled, settings.PromptFilterMode, settings.PromptFilterStrictTerminalEnabled)
+	}
+	if strings.TrimSpace(settings.PromptFilterAdvancedConfig) != "{}" {
+		t.Fatalf("compatibility advanced config = %q, want {}", settings.PromptFilterAdvancedConfig)
 	}
 }
 
@@ -2852,12 +2876,19 @@ func TestPromptFilterLogsPersistReviewMetadata(t *testing.T) {
 	ctx := context.Background()
 	if err := db.InsertPromptFilterLog(ctx, &PromptFilterLogInput{
 		Source:          "local_filter",
-		Endpoint:        "/v1/responses",
+		Endpoint:        "/v1/messages",
+		Protocol:        "claude",
+		Provider:        "anthropic",
 		Model:           "gpt-5.4",
 		Action:          "allow",
 		Mode:            "block",
-		Score:           100,
+		Score:           70,
+		AuditScore:      100,
 		Threshold:       50,
+		PolicyProfile:   "strict",
+		ReasonCode:      "terminal_policy_match",
+		PrimaryOrigin:   "current_user",
+		StrikeEligible:  true,
 		MatchedPatterns: `[{"name":"credential_theft","weight":100}]`,
 		TextPreview:     "preview",
 		ReviewModel:     "omni-moderation-latest",
@@ -2877,6 +2908,12 @@ func TestPromptFilterLogsPersistReviewMetadata(t *testing.T) {
 	got := logs[0]
 	if got.ReviewModel != "omni-moderation-latest" || got.ReviewFlagged || got.ReviewError != "temporary failure" {
 		t.Fatalf("review metadata = %+v", got)
+	}
+	if got.Score != 70 || got.AuditScore != 100 || got.PolicyProfile != "strict" || got.ReasonCode != "terminal_policy_match" || got.PrimaryOrigin != "current_user" || !got.StrikeEligible {
+		t.Fatalf("guard metadata = %+v", got)
+	}
+	if got.Endpoint != "/v1/messages" || got.Protocol != "claude" || got.Provider != "anthropic" {
+		t.Fatalf("original request metadata = %+v", got)
 	}
 }
 

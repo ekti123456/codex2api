@@ -1421,11 +1421,19 @@
     "testEmpty": "请输入测试内容",
     "testDone": "测试完成",
     "testFailed": "测试失败",
+    "testResultMode": "处理模式",
+    "testResultScore": "风险分数",
+    "testResultMatches": "命中规则",
+    "testResultReview": "二次审查",
+    "testReviewFlagged": "审查判定违规",
+    "testReviewCleared": "审查判定通过",
+    "testReviewSkipped": "未进行审查",
     "logsCleared": "日志已清空",
     "clearFailed": "清空失败",
     "modeMonitor": "监控",
     "modeWarn": "警告",
     "modeBlock": "拦截",
+    "actionAllow": "放行",
     "status": "状态",
     "currentMode": "当前模式",
     "blockedLogs": "拦截记录",
@@ -1439,34 +1447,258 @@
     "threshold": "拦截阈值",
     "strictThreshold": "强规则阈值",
     "strictTerminal": "严格规则终局拦截",
-    "strictTerminalHint": "开启后，任意 strict:true 规则命中都会直接拦截，不受模式、上下文降权或二次审查影响。",
+    "strictTerminalHint": "开启后，当前用户 Prompt 只有在命中 strict:true 高可信规则，且经意图、阈值与上下文判定后仍达到拦截阈值时，才会进入终局拦截流程；敏感词和双用途技术名词不会单独触发。均衡档案仍可进行二次审查，严格档案才跳过降级。",
     "advancedConfig": "高级防护配置 JSON",
     "advancedConfigPlaceholder": "配置规范化、累计风险、本地 Sidecar 和输出扫描；所有功能默认关闭。",
     "advancedConfigHint": "高级能力按各自 enabled 开关启用。保存前服务端会校验 JSON。",
     "advancedVisualTitle": "高级防护",
+    "guard": {
+      "title": "统一 GuardPipeline",
+      "description": "为 Responses、Chat Completions、Messages 与 WebSocket 提供同一套来源感知审核入口。所有设置均可独立选择，并保存在高级防护配置中。",
+      "globalMode": "全局执行模式",
+      "globalModeHint": "控制新 GuardPipeline 的总体行为。选择继承旧配置时，不改变现有 Prompt 过滤、阈值和终局规则的处理方式。",
+      "defaultProfile": "默认审核档案",
+      "defaultProfileHint": "模型族没有单独配置或将来接入未知提供方时使用的默认审核力度。",
+      "trustedOverrides": "允许可信请求覆盖",
+      "trustedOverridesHint": "仅接受通过 NewAPI HMAC 验签的档案或模式覆盖。关闭时忽略所有请求头中的审核档案和模式，防止客户端自行降低审核力度。",
+      "compatibilityTitle": "兼容现有配置",
+      "compatibilityHint": "默认使用“继承旧配置”。关闭或调整新管线不会自动删除现有规则、敏感词、二次审查或累计风险设置。",
+      "active": "当前",
+      "providerTitle": "模型族审核档案",
+      "providerDescription": "默认继承上方审核档案；仅在需要差异化审核时，才为 GPT、Claude Code、Grok 或其他模型族设置独立档案。",
+      "inheritDefaultProfile": "继承默认审核档案",
+      "profileTitle": "审核档案说明",
+      "profileDescription": "档案调整检测深度，不会把单个安全技术名词直接变成终局违规。",
+      "layersTitle": "请求来源层",
+      "layersDescription": "每种来源可选择独立模式。建议当前用户 Prompt 执行审核，应用上下文先使用继承或影子模式观察误报。",
+      "modes": {
+        "inherit": {
+          "label": "继承旧配置",
+          "description": "沿用当前 Prompt 过滤开关、模式、阈值与规则，不引入新的执行变化。"
+        },
+        "off": {
+          "label": "关闭",
+          "description": "关闭该 GuardPipeline 范围；现有旧过滤配置仍按原逻辑运行。"
+        },
+        "shadow": {
+          "label": "影子记录",
+          "description": "检测并记录决策差异，但不拦截、不警告、不累计处罚。"
+        },
+        "warn": {
+          "label": "警告",
+          "description": "记录并返回警告，不增加 strike，不触发账号或 IP 处罚。"
+        },
+        "enforce": {
+          "label": "执行",
+          "description": "正式执行允许、复核和拦截决策；仅确认违规才能产生处罚事件。"
+        }
+      },
+      "profiles": {
+        "balanced": {
+          "label": "均衡",
+          "description": "默认生产档案，优先低误杀；明确危险意图拦截，模糊内容保留审查空间。"
+        },
+        "strict": {
+          "label": "严格",
+          "description": "启用更深的关联检测和更高审计密度，但终局拦截仍要求高置信证据。"
+        },
+        "research": {
+          "label": "研究",
+          "description": "允许防御分析和双用途研究讨论；明确恶意执行、窃取或规避请求仍会拦截。"
+        }
+      },
+      "providers": {
+        "openai": {
+          "label": "OpenAI / Codex",
+          "description": "适用于 GPT、Codex CLI 与 OpenAI Responses/Chat 兼容模型。"
+        },
+        "anthropic": {
+          "label": "Anthropic / Claude Code",
+          "description": "适用于 Claude 模型、Claude Code 与 Anthropic Messages 协议。"
+        },
+        "xai": {
+          "label": "xAI / Grok",
+          "description": "适用于 Grok 及通过 OpenAI 兼容协议接入的 xAI 模型。"
+        },
+        "unknown": {
+          "label": "未知 / 其他模型族",
+          "description": "无法识别提供方或未来新增模型族时使用，避免新接入没有明确审核档案。"
+        }
+      },
+      "layers": {
+        "current_user": {
+          "label": "当前用户 Prompt",
+          "description": "当前请求中用户明确提交的内容，是主要审核和处罚证据来源。"
+        },
+        "history": {
+          "label": "关联历史",
+          "description": "只在继续执行、别名引用或分段组合等明确关联时检查历史用户内容。"
+        },
+        "system": {
+          "label": "System 上下文",
+          "description": "系统角色内容通常由应用注入；启用执行前建议先用影子模式观察误报。"
+        },
+        "developer": {
+          "label": "Developer 上下文",
+          "description": "开发者角色内容通常属于应用策略，不应默认归因给最终用户。"
+        },
+        "instructions": {
+          "label": "Responses Instructions",
+          "description": "检查 /v1/responses 顶层 instructions；适合识别客户端可修改指令与基线差异。"
+        },
+        "tool_output": {
+          "label": "工具输出",
+          "description": "把工具返回内容视为不可信数据进行检测，但避免直接作为用户处罚证据。"
+        },
+        "tool_arguments": {
+          "label": "工具参数",
+          "description": "在执行文件、网络、终端等工具前检查结构化参数和目标。"
+        },
+        "attachment_refs": {
+          "label": "附件引用",
+          "description": "检查附件、file_id、URL 和引用元数据；后续可连接独立附件解析服务。"
+        },
+        "session_context": {
+          "label": "会话关联上下文",
+          "description": "只检查经可信身份关联、且由当前请求明确要求继续的历史片段；默认影子记录，不直接处罚。"
+        },
+        "attachment_content": {
+          "label": "附件解析内容",
+          "description": "检查独立解析服务提取的附件文本；默认影子记录，避免把文档中的引用内容直接归因给用户。"
+        }
+      }
+    },
     "normalizationTitle": "输入规范化与编码还原",
     "decodeRuns": "最大解码轮数",
+    "maxDecodedBytes": "最大还原字节数",
+    "maxEncodedBlocks": "最大编码片段数",
+    "decoders": {
+      "url": "URL 编码",
+      "html": "HTML 实体",
+      "base64": "Base64 编码",
+      "hex": "十六进制编码",
+      "rot13": "ROT13 编码",
+      "escapes": "转义序列",
+      "compression": "压缩数据"
+    },
+    "contextDiscount": {
+      "title": "合法上下文降分",
+      "description": "识别审计、修复、教学等防御语境，降低双用途词误报；明确执行、窃取、规避等操作意图不会被普通免责声明抵消。",
+      "enabled": "启用上下文降分",
+      "enabledHint": "关闭后所有规则都使用原始执行分，安全研究与日志分析更容易被误判。",
+      "intentAware": "按意图区分",
+      "intentAwareHint": "先判断请求是否包含可执行的攻击动作，再决定允许多少降分；建议保持开启。",
+      "maxDiscount": "普通语境最大降分",
+      "maxDiscountHint": "防御、修复或解释场景最多可扣除的分数。数值越高，普通安全讨论越不容易误拦截。",
+      "operationalMaxDiscount": "操作意图最大降分",
+      "operationalMaxDiscountHint": "请求已包含执行、投递、窃取或绕过动作时仍允许的最大降分。推荐为 0，防止用“仅供研究”抵消明确恶意意图。"
+    },
+    "extensions": {
+      "title": "深度防护扩展",
+      "runtimeLimits": "运行限制、缓存与熔断",
+      "serviceURL": "服务地址",
+      "timeout": "超时（秒）",
+      "cacheTTL": "缓存时间（秒）",
+      "maxConcurrent": "最大并发",
+      "breakerFailures": "熔断失败次数",
+      "breakerSeconds": "熔断时间（秒）",
+      "sidecar": {
+        "title": "语义审查 Sidecar",
+        "description": "可接入本地或内网语义模型补充规则检测。默认关闭且使用影子模式，先观察命中质量再决定是否警告或拦截。",
+        "enabled": "启用语义审查",
+        "enabledHint": "只有配置可用的 Sidecar 服务地址后才应开启；关闭时不产生外部调用。",
+        "scanClean": "抽样检查本地放行请求",
+        "scanCleanHint": "允许按抽样比例复核本地规则判定为正常的请求，用于发现语义漏检；默认关闭以控制延迟和费用。",
+        "mode": "执行模式",
+        "modeHint": "影子仅记录，警告向用户提示，执行模式才允许 Sidecar 结论参与拦截。建议先长期使用影子模式校准。",
+        "modes": {
+          "shadow": "影子记录",
+          "warn": "警告",
+          "enforce": "执行拦截"
+        },
+        "baseURLHint": "固定的本地或内网语义审查服务根地址。不要填写用户可控地址。",
+        "timeoutHint": "单次语义审查最多等待时间；超时后按失败策略处理。",
+        "minScore": "最低送审分数",
+        "minScoreHint": "本地执行分达到此值后才调用 Sidecar；开启正常请求抽样后，抽中的低分请求不受此限制。",
+        "samplePercent": "正常请求抽样比例（%）",
+        "samplePercentHint": "只对本地已放行请求生效。建议从 1%—10% 开始，避免让所有正常流量进入模型。",
+        "failClosed": "服务失败时拦截",
+        "failClosedHint": "开启后 Sidecar 超时或异常会按失败处理并可能拦截。生产环境默认关闭，避免外部服务故障影响可用性。",
+        "maxTextLength": "最大送审文本长度",
+        "maxTextLengthHint": "送给 Sidecar 的文本上限；超长内容会保留首尾并截断，防止单请求耗尽资源。",
+        "cacheTTLHint": "相同内容的语义结论缓存时间。设为 0 表示不缓存。",
+        "maxConcurrentHint": "同时进行的 Sidecar 请求上限，防止语义服务过载。",
+        "breakerFailuresHint": "连续失败达到此次数后临时停止调用 Sidecar。",
+        "breakerSecondsHint": "触发熔断后暂停调用的时间，之后自动尝试恢复。"
+      },
+      "session": {
+        "title": "会话分段关联",
+        "description": "把同一可信会话内明确要求“继续”的短请求与最近片段联合检查，减少把高风险指令拆成多轮逃避检测的缺口。",
+        "enabled": "启用会话关联",
+        "enabledHint": "只增加关联检查，不会仅凭历史累计分直接封禁；推荐开启。",
+        "requireSignedIdentity": "仅接受签名身份",
+        "requireSignedIdentityHint": "只使用通过 NewAPI HMAC 验证的用户和会话标识，避免客户端伪造会话串联他人内容。",
+        "combineShortFragments": "自动合并普通短句",
+        "combineShortFragmentsHint": "开启后即使没有“继续”等明确语义，也会合并短片段。默认关闭可显著降低普通对话误关联。",
+        "window": "关联窗口（秒）",
+        "windowHint": "仅关联此时间范围内的同一会话片段；窗口越长，跨任务误关联风险越高。",
+        "maxFragments": "最大片段数",
+        "maxFragmentsHint": "每次联合检查最多包含多少个最近片段，用于限制计算量和上下文漂移。",
+        "maxTextLength": "关联文本上限",
+        "maxTextLengthHint": "联合后的历史与当前文本最大长度，超出部分会被有界截断。",
+        "shortFragmentMaxChars": "短片段字符上限",
+        "shortFragmentMaxCharsHint": "仅在开启自动合并普通短句时使用；超过该长度的消息不会作为普通短片段自动串联。",
+        "recommendedHint": "推荐默认：开启会话关联、要求签名身份、关闭普通短句自动合并。这样只关联明确的继续请求，不影响独立的新任务。"
+      },
+      "attachment": {
+        "title": "附件内容解析",
+        "description": "通过独立服务提取受支持附件中的文本后再检查。Codex2API 不直接下载任意用户 URL，默认关闭并以影子层记录。",
+        "enabled": "启用附件解析",
+        "enabledHint": "只有部署受控的附件解析服务后才开启；关闭时仍可检查附件引用元数据。",
+        "allowRemoteURLs": "允许解析远程 URL",
+        "allowRemoteURLsHint": "允许解析服务获取远程地址会增加 SSRF、超大文件和内容变更风险。默认关闭，仅处理可信文件引用。",
+        "baseURLHint": "固定的本地或内网附件解析服务根地址；不要由请求参数动态覆盖。",
+        "timeoutHint": "单次附件提取最多等待时间。解析失败会记录审计错误，不应默认阻断正常请求。",
+        "maxFiles": "单次最大文件数",
+        "maxFilesHint": "每个请求最多送往解析服务的附件数量，超出部分不会继续解析。",
+        "maxBytes": "单文件最大字节数",
+        "maxBytesHint": "解析服务接受的单个附件大小上限，用于限制压缩炸弹和大文件资源消耗。",
+        "maxExtractedChars": "最大提取字符数",
+        "maxExtractedCharsHint": "每次返回给 Prompt 检查的附件文本上限，超过后截断。",
+        "cacheTTLHint": "按文件摘要缓存解析结果的时间。设为 0 表示不缓存。",
+        "maxConcurrentHint": "同时进行的附件解析请求上限，避免解析器拖慢主代理。",
+        "breakerFailuresHint": "连续解析失败达到此次数后临时停止调用附件服务。",
+        "breakerSecondsHint": "附件服务熔断后暂停调用的时间，之后自动探测恢复。"
+      }
+    },
     "terminalCategories": "终局拦截分类",
-    "terminalCategoriesHint": "用逗号分隔。命中这些分类会立即拦截，例如 reverse_engineering。",
-    "riskTitle": "用户 / IP / 会话累计风险",
+    "terminalCategoriesHint": "用逗号分隔。仅当该分类的规则同时形成高可信违规意图并达到阈值时，才进入终局流程；不要加入逆向、漏洞等双用途分类。",
+    "riskTitle": "用户 / IP / 会话风险审计",
     "riskWindow": "累计窗口（秒）",
-    "blockThreshold": "累计拦截阈值",
-    "reviewThreshold": "累计复核阈值",
+    "blockThreshold": "高风险参考阈值",
+    "reviewThreshold": "复核参考阈值",
     "outputScanTitle": "SSE / WebSocket 输出扫描",
     "strictOnly": "仅终局规则",
     "bufferBytes": "缓冲字节数",
     "overlapBytes": "重叠检查字节数",
     "help": {
+      "normalizationPanel": "对常见编码和压缩片段进行有界还原；字节、片段和轮数上限会阻止解码炸弹拖垮服务。",
       "normalizationEnabled": "启用后先统一全角、Unicode 同形字符和不可见字符，再进行规则匹配。",
       "decodeRuns": "对嵌套编码最多还原多少轮。建议 1—2，过高会增加请求延迟。",
+      "maxDecodedBytes": "单次请求所有还原结果允许占用的最大字节数；达到上限后停止继续解码。",
+      "maxEncodedBlocks": "单次请求最多尝试还原的独立编码片段数，限制恶意批量小片段消耗。",
       "decodeUrl": "识别 %xx、查询参数转义等 URL 编码绕过。",
       "decodeHtml": "识别 HTML 实体和数字实体编码绕过。",
       "decodeBase64": "尝试还原提示词中看起来像 Base64 的片段再检查。",
-      "terminalCategories": "命中所列分类时忽略普通评分阈值并立即拒绝请求。",
-      "riskEnabled": "按用户、IP 和会话累计近期风险，防止把危险指令拆成多次请求。",
+      "decodeHex": "识别连续十六进制或 0x 风格编码片段，并在大小限制内还原。",
+      "decodeRot13": "识别满足结构条件的 ROT13 文本；只把有意义的还原结果加入检查。",
+      "decodeEscapes": "还原 Unicode、十六进制和常见反斜杠转义序列。",
+      "decodeCompression": "在大小和轮数限制内识别 Base64 包裹的 gzip 或 zlib 压缩文本。",
+      "terminalCategories": "所列分类仅在规则同时形成高可信违规意图并达到拦截阈值时进入终局流程；建议保持为空，除非分类整体误报极低。",
+      "riskEnabled": "按用户、IP 和会话记录近期已确认风险。累计值只用于审计和复核参考，不能单独拦截后续请求。",
       "riskWindow": "累计历史保留时间；窗口结束后旧风险会逐渐衰减。",
-      "blockThreshold": "累计风险达到该值时直接拦截。",
-      "reviewThreshold": "累计风险达到该值但未到拦截值时，可交给复核服务进一步判断。",
+      "blockThreshold": "标记高累计风险的参考线；不会仅因历史累计值直接拦截当前请求。",
+      "reviewThreshold": "供 Sidecar 或后续语义复核服务判断是否提高审查优先级。当前请求仍必须有独立违规证据。",
       "outputEnabled": "在把 SSE 或 WebSocket 内容发给客户端前进行缓冲扫描。",
       "strictOnly": "开启时只有终局严格规则才能中断输出，可减少普通文本误拦截。",
       "bufferBytes": "每次送入输出扫描器的最大缓冲区大小。",
@@ -1483,10 +1715,11 @@
     "logMatches": "记录命中",
     "maxTextLength": "最大检查长度",
     "sensitiveWords": "敏感词",
-    "sensitiveWordsPlaceholder": "每行一个词；命中后按自定义敏感词规则计分",
+    "sensitiveWordsPlaceholder": "每行一个词；命中只作为审计信号计分，仍需明确高危意图或组合规则才会拦截",
+    "sensitiveWordsHint": "敏感词只进入审计分，不会抬高执行分；如需拦截特定组合，请配置带意图条件的自定义规则或 strict 终局规则。",
     "customPatterns": "自定义规则 JSON",
     "reviewTitle": "二次审查",
-    "reviewDesc": "本地规则命中后再调用 OpenAI Moderations 兼容接口确认；未命中本地规则的请求不会调用审查接口。",
+    "reviewDesc": "仅当本地规则形成警告或拦截候选时调用 OpenAI Moderations 兼容接口；仅命中审计型敏感词不会调用二次审查。",
     "reviewEnabled": "启用二次审查",
     "reviewFailClosed": "审查失败策略",
     "reviewFailClosedBlock": "失败时拦截",
@@ -1514,6 +1747,7 @@
     "colAction": "动作",
     "colEndpoint": "端点 / 模型",
     "colScore": "分数",
+    "auditScore": "审计分",
     "colMatch": "命中",
     "colApiKey": "API Key",
     "colPreview": "预览",
@@ -1575,15 +1809,15 @@
     "noRulesInCategory": "该分类下暂无规则",
     "newapi": {
       "title": "NewAPI 审计身份透传",
-      "description": "开启后，Codex2API 会验证 NewAPI 透传的用户 ID、用户 IP、请求 ID 与 HMAC 签名，并在提示词违规时返回可审计的 503 响应和封禁指令。双方使用共享 HMAC 密钥，密钥本身不会随请求传输。",
+      "description": "开启后，Codex2API 会验证 NewAPI 透传的身份与审核档案，并以签名的 400 策略事件返回决策证据。Codex2API 不再本地累计或封禁；是否警告、封号或临时限制 IP 统一由 NewAPI 的独立开关决定。",
       "enabled": "开启审计身份透传校验",
-      "enabledHint": "Codex2API 端总开关。关闭后仍执行提示词过滤，但不会信任 NewAPI 身份头或返回联动封禁指令。",
+      "enabledHint": "Codex2API 端身份联动开关。关闭后仍执行提示词过滤，但不会信任 NewAPI 身份、档案覆盖或返回可处罚的签名决策。",
       "clockSkew": "时钟容差（秒）",
       "clockSkewHint": "超过该时间范围的签名会被视为无效。",
       "offenseWindow": "违规累计窗口（秒）",
-      "offenseWindowHint": "同一用户和 IP 在该时间窗口内的违规次数会累计。",
+      "offenseWindowHint": "处罚窗口已由 NewAPI 统一管理；Codex2API 不再使用此旧配置计次。",
       "banAfter": "第几次触发封禁",
-      "banAfterHint": "达到该次数时向 NewAPI 返回封禁指令；建议保持为 2。",
+      "banAfterHint": "封禁次数已由 NewAPI 统一管理；Codex2API 只返回签名决策证据。",
       "protocolTitle": "查看配置方式与 NewAPI 二开协议",
       "codexEnv": "Codex2API 环境变量",
       "codexSecretExample": "PROMPT_FILTER_NEWAPI_SECRET=请替换为至少32字节随机密钥",
@@ -1597,9 +1831,9 @@
       "database": "数据库",
       "newapiEnv": "NewAPI 环境变量",
       "newapiEnvExample": "CODEX2API_POLICY_ENABLED=true\nCODEX2API_POLICY_TARGETS=http://127.0.0.1:18095\nCODEX2API_POLICY_SECRET=与Codex2API完全相同的密钥\nCODEX2API_POLICY_BAN_AFTER=2\nCODEX2API_POLICY_WINDOW_SECONDS=86400",
-      "headersTitle": "NewAPI 需要发送的请求头",
-      "headersExample": "X-NewAPI-User-ID: <用户ID>\nX-NewAPI-Client-IP: <真实用户IP>\nX-NewAPI-Request-ID: <唯一请求ID>\nX-NewAPI-Timestamp: <Unix秒>\nX-NewAPI-Method: <HTTP方法>\nX-NewAPI-Path: <请求路径>\nX-NewAPI-Body-SHA256: <请求体SHA-256十六进制>\nX-NewAPI-Signature: <HMAC-SHA256十六进制>",
-      "signatureHint": "V1 签名依次绑定时间戳、请求 ID、用户 ID、用户 IP、HTTP 方法、请求路径和请求体 SHA-256；请求 ID 只能使用一次。",
+      "headersTitle": "NewAPI 请求头与审核档案",
+      "headersExample": "X-NewAPI-User-ID: <用户ID>\nX-NewAPI-Client-IP: <真实用户IP>\nX-NewAPI-Request-ID: <唯一请求ID>\nX-NewAPI-Timestamp: <Unix秒>\nX-NewAPI-Method: <HTTP方法>\nX-NewAPI-Path: <实际转发路径>\nX-NewAPI-Body-SHA256: <请求体SHA-256十六进制>\nX-NewAPI-Signature-Version: 2\nX-NewAPI-Original-Endpoint: <客户端原始端点>\nX-NewAPI-Original-Protocol: <客户端原始协议>\nX-NewAPI-Provider: <上游提供商>\nX-NewAPI-Signature: <身份与审计元数据HMAC-SHA256>\nX-NewAPI-Policy-Meta: <Base64URL审核档案JSON>\nX-NewAPI-Policy-Meta-Signature: <档案HMAC-SHA256>",
+      "signatureHint": "缺省或版本 1 继续使用旧身份签名，便于蓝绿滚动升级；版本 2 会额外绑定客户端原始端点、协议和提供商。Codex2API 只有在 V2 验签成功后才采信这些审计字段。档案元数据和返回决策仍使用同一共享密钥单独签名。",
       "revealTitle": "请立即保存 NewAPI 审计密钥",
       "revealDescription": "密钥已写入 Codex2API 数据库。为了安全，明文只在本弹窗中展示一次。",
       "copied": "已复制",
@@ -1667,9 +1901,9 @@
         "title": "模块是做什么的",
         "p1": "Prompt 检查在请求进入上游模型前，对用户提示词做本地风险匹配与可选二次审查。目标是拦截越狱、注入、恶意代码、凭证窃取、逆向破解等高风险内容，同时尽量控制误报。",
         "p2": "它是网关侧策略能力：先本地确定性规则打分，再按模式决定监控、警告或拦截；高级层可叠加解码还原、累计风险、输出扫描与身份透传。",
-        "b1": "本地规则：内置规则 + 敏感词 + 自定义正则，按权重累计分数。",
+        "b1": "本地规则：带意图的内置/自定义规则形成执行分；敏感词和 signal-only 规则只保留为审计证据。",
         "b2": "处理模式：监控只记日志，警告可透传，拦截会阻断请求。",
-        "b3": "终局规则：strict 或指定分类命中后，不可被上下文降权或二次审查放行。",
+        "b3": "终局规则：strict 或指定分类仍需通过意图、有效分和上下文判断；均衡档案可继续二次审查，严格档案才禁止降级。",
         "b4": "可观测：触发日志记录动作、分数、命中规则与内容预览，便于复核误报。"
       },
       "pipeline": {
@@ -1677,7 +1911,7 @@
         "p1": "一次请求在网关内大致按以下顺序处理（高级能力需单独开启）：",
         "s1": "接收请求并提取待检查文本（受最大检查长度限制）。",
         "s2": "可选：输入规范化与 URL / HTML / Base64 解码还原。",
-        "s3": "本地规则匹配：敏感词、内置规则、自定义规则计分。",
+        "s3": "本地规则匹配：敏感词和 signal-only 主题进入审计分，带意图的内置/自定义规则进入执行分。",
         "s4": "判断阈值 / 强规则阈值 / 终局 strict 与终局分类。",
         "s5": "可选：累计用户 / IP / 会话风险，或触发二次审查（Moderations 兼容接口）。",
         "s6": "按模式输出 allow / warn / block；若启用 NewAPI 身份校验，违规可返回 503 与封禁指令。",
@@ -1696,14 +1930,14 @@
       },
       "quickstart": {
         "title": "快速开始（推荐路径）",
-        "p1": "首次接入建议先监控再拦截，避免直接全量 block 造成业务误伤。",
-        "s1": "在概览打开「启用检查」，模式先选「监控」，打开「记录命中」。",
+        "p1": "新安装已准备好低误报的通用拦截预设；先用真实正常 Prompt 与违规样本做规则测试，确认后再打开总开关。高流量旧站点仍可先用监控模式灰度。",
+        "s1": "保留预设的拦截模式、50 / 90 阈值、严格终局和两轮输入规范化，并打开「记录命中」。",
         "s2": "设置合理的拦截阈值与强规则阈值（例如 50 / 90），先观察日志分布。",
-        "s3": "在规则集确认高危内置规则已启用；敏感词按业务补充，每行一个。",
+        "s3": "在规则集确认高危意图与终局规则已启用；敏感词作为审计信号按业务补充，每行一个。",
         "s4": "用右侧「规则测试」粘贴真实业务 Prompt，确认误报可接受。",
-        "s5": "观察 1–3 天触发日志后，再把模式切到「警告」或「拦截」。",
-        "s6": "生产环境再按需打开严格终局拦截、二次审查与高级防护。",
-        "callout": "生产推荐组合：启用检查 + 拦截模式 + 严格终局拦截 + 二次审查失败时拦截。strict 规则只给极低误报的模式。"
+        "s5": "验证通过后打开总开关；若是已有高流量站点，可先切到监控或警告观察 1–3 天。",
+        "s6": "累计风险、二次审查、输出扫描、Sidecar 与联网情报按部署条件单独开启。",
+        "callout": "新安装已预置通用生产参数：开启检查后使用拦截模式、50 / 90 阈值、严格终局与两轮输入规范化。二次审查、输出扫描和外部服务仍由管理员按需开启。"
       },
       "modes": {
         "title": "处理模式",
@@ -1713,23 +1947,23 @@
         "monitor": "只记录，不改变请求放行。适合上线初期与规则调参。",
         "warn": "记录并标记警告，请求通常仍会继续上游（具体以网关策略为准）。适合灰度。",
         "block": "达到阈值或终局命中时拒绝请求。适合生产硬防护。",
-        "callout": "开启「严格规则终局拦截」后，任意 strict:true 命中都会直接拦截，即使模式是监控/警告，也不会被二次审查降级。"
+        "callout": "在拦截/执行模式下，strict:true 规则仍需经过意图、有效分和上下文判定。均衡档案可以继续二次审查；严格档案中的终局高可信命中才会跳过降级。"
       },
       "scoring": {
         "title": "打分、阈值与终局",
         "p1": "每条命中规则贡献 weight 分，同一次请求累计。普通拦截看「拦截阈值」；强规则另有「强规则阈值」。",
-        "p2": "终局路径优先级高于普通阈值：strict 终局、终局分类命中后，不会因上下文折扣或二次审查被放行。",
+        "p2": "终局路径仍要求高可信违规意图：先计算规则分与上下文降权，达到拦截阈值后，strict 终局或终局分类才会进入直接拦截路径。",
         "b1": "拦截阈值：累计分数达到后触发对应动作（在 block 模式下为拦截）。",
         "b2": "强规则阈值：strict 规则累计达到后也可触发处理。",
-        "b3": "严格规则终局拦截：任意单条 strict 命中即拦截。",
-        "b4": "终局拦截分类：如 reverse_engineering，该分类命中即立即拦截。"
+        "b3": "严格规则终局拦截：strict 规则命中且意图与有效分达到阈值后进入终局流程；是否允许二次审查降级由审核档案决定。",
+        "b4": "终局拦截分类：仅在该分类同时形成高可信违规判定时进入终局，不建议配置双用途技术分类。"
       },
       "advanced": {
         "title": "高级防护怎么开",
-        "p1": "高级防护默认全部关闭。每个子模块有独立开关，可按风险逐步叠加。",
+        "p1": "新安装默认开启输入规范化；累计风险、Sidecar、输出扫描、联网情报与 NewAPI 联动仍保持独立开关，可按部署条件逐步叠加。",
         "b1": "输入规范化与编码还原：对抗全角、同形字、URL/HTML/Base64 编码绕过。",
-        "b2": "终局拦截分类：对指定 category 一票否决。",
-        "b3": "用户/IP/会话累计风险：防止把危险指令拆成多次请求绕过单次阈值。",
+        "b2": "终局拦截分类：指定 category 形成高可信违规判定后进入终局路径。",
+        "b3": "用户/IP/会话累计风险：记录已确认的高风险事件并辅助复核，不会仅凭累计分独立封禁。",
         "b4": "SSE/WebSocket 输出扫描：检查模型流式输出；可限制为仅终局规则中断。",
         "b5": "NewAPI 审计身份透传：校验上游 HMAC 身份头，违规可联动封禁。",
         "b6": "规则情报定时任务：按间隔搜索公开情报并可选生成候选规则。",
@@ -1741,7 +1975,7 @@
         "p2": "可配置 Base URL、模型、超时、多个 API Key（限流自动切换）以及失败策略。",
         "b1": "失败时拦截：审查超时/出错时保守拦截，适合生产。",
         "b2": "失败时放行：审查不可用时不阻断业务，适合灰度。",
-        "b3": "终局 strict 命中不会被二次审查降级为放行。"
+        "b3": "均衡档案允许对终局候选继续二次审查；严格档案中的当前用户终局违规会跳过二次审查降级。"
       },
       "rules": {
         "title": "规则集使用建议",
@@ -1780,7 +2014,7 @@
         "title": "上线检查清单",
         "p1": "上线前按下列顺序自检，可显著降低误拦与漏拦。",
         "s1": "总开关开启；模式从监控灰度到拦截。",
-        "s2": "阈值、strict 终局、敏感词与核心内置规则已复核。",
+        "s2": "执行阈值、strict 终局规则、审计型敏感词与核心内置规则已复核。",
         "s3": "规则测试覆盖正常业务样本与攻击样本。",
         "s4": "二次审查 Key/超时/失败策略已配置并做故障演练。",
         "s5": "需要时再开解码、累计风险、输出扫描；多副本配好缓存。",

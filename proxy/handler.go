@@ -778,14 +778,39 @@ func rawRequestBodyFromContext(c *gin.Context) ([]byte, bool) {
 
 func readRawRequestBody(c *gin.Context) ([]byte, error) {
 	if body, ok := rawRequestBodyFromContext(c); ok {
+		setIngressRequestBodyIfAbsent(c, body)
 		return body, nil
 	}
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return nil, err
 	}
+	setIngressRequestBodyIfAbsent(c, body)
 	setRawRequestBody(c, body)
 	return body, nil
+}
+
+const ingressRequestBodyContextKey = "ingress_raw_body"
+
+func setIngressRequestBodyIfAbsent(c *gin.Context, body []byte) {
+	if c == nil {
+		return
+	}
+	if _, exists := c.Get(ingressRequestBodyContextKey); exists {
+		return
+	}
+	c.Set(ingressRequestBodyContextKey, append([]byte(nil), body...))
+}
+
+func ingressRequestBody(c *gin.Context, fallback []byte) []byte {
+	if c != nil {
+		if value, exists := c.Get(ingressRequestBodyContextKey); exists {
+			if body, ok := value.([]byte); ok {
+				return body
+			}
+		}
+	}
+	return fallback
 }
 
 func setRawRequestBody(c *gin.Context, body []byte) {
@@ -1338,6 +1363,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	v1.POST("/chat/completions", h.ChatCompletions)
 	v1.POST("/responses", h.Responses)
 	v1.GET("/responses", h.ResponsesWebSocket)
+	v1.GET("/realtime", h.RealtimeWebSocket)
 	v1.POST("/responses/compact", h.ResponsesCompact)
 	v1.POST("/images/generations", h.ImagesGenerations)
 	v1.POST("/images/edits", h.ImagesEdits)
@@ -1355,6 +1381,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/chat/completions", auth, h.ChatCompletions)
 	r.POST("/responses", auth, h.Responses)
 	r.GET("/responses", auth, h.ResponsesWebSocket)
+	r.GET("/realtime", auth, h.RealtimeWebSocket)
 	r.POST("/responses/compact", auth, h.ResponsesCompact)
 	r.POST("/images/generations", auth, h.ImagesGenerations)
 	r.POST("/images/edits", auth, h.ImagesEdits)
@@ -1413,6 +1440,16 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 		}
 
 		authHeader := c.GetHeader("Authorization")
+		// OpenAI-compatible WebSocket clients may carry the API key in the
+		// standard subprotocol list instead of an Authorization header:
+		//   Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.<key>
+		// Only honor it on an actual WebSocket upgrade so an ordinary HTTP
+		// request cannot smuggle authentication through an unrelated header.
+		if authHeader == "" && isResponsesWebSocketUpgradeRequest(c.Request) {
+			if key := apiKeyFromWebSocketSubprotocol(c.GetHeader("Sec-WebSocket-Protocol")); key != "" {
+				authHeader = "Bearer " + key
+			}
+		}
 		// 兼容 Anthropic 客户端的多种认证方式:
 		// - x-api-key: Anthropic SDK 默认方式
 		// - ANTHROPIC_AUTH_TOKEN: Claude Code 通过此环境变量设置，
@@ -1475,6 +1512,17 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 		c.Set("apiKey", key)
 		c.Next()
 	}
+}
+
+func apiKeyFromWebSocketSubprotocol(header string) string {
+	for _, item := range strings.Split(header, ",") {
+		item = strings.TrimSpace(item)
+		const prefix = "openai-insecure-api-key."
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(item, prefix))
+		}
+	}
+	return ""
 }
 
 // ==================== /v1/responses ====================

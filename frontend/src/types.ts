@@ -750,11 +750,18 @@ export interface PromptFilterLog {
   created_at: ISODateString
   source: string
   endpoint: string
+  protocol?: string
+  provider?: string
   model: string
   action: string
   mode: string
   score: number
+  audit_score?: number
   threshold: number
+  policy_profile?: string
+  reason_code?: string
+  primary_origin?: string
+  strike_eligible?: boolean
   matched_patterns: string
   text_preview: string
   full_text: string
@@ -782,6 +789,32 @@ export interface PromptFilterTestResponse {
 export interface PromptFilterRulePatternTestResponse {
   matched: boolean
   error?: string
+}
+
+export type PromptGuardMode = 'inherit' | 'off' | 'shadow' | 'warn' | 'enforce'
+
+export type PromptGuardProfile = 'balanced' | 'strict' | 'research'
+
+export type PromptGuardProvider = 'openai' | 'anthropic' | 'xai' | 'unknown'
+
+export type PromptGuardLayer =
+  | 'current_user'
+  | 'history'
+  | 'system'
+  | 'developer'
+  | 'instructions'
+  | 'tool_output'
+  | 'tool_arguments'
+  | 'attachment_refs'
+  | 'session_context'
+  | 'attachment_content'
+
+export interface PromptGuardConfig {
+  mode: PromptGuardMode
+  default_profile: PromptGuardProfile
+  allow_trusted_overrides: boolean
+  provider_profiles: Partial<Record<PromptGuardProvider, PromptGuardProfile>>
+  layers: Record<PromptGuardLayer, { mode: PromptGuardMode }>
 }
 
 export interface PromptFilterRule {

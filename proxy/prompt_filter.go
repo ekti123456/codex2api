@@ -23,21 +23,18 @@ func (h *Handler) inspectPromptFilterOpenAI(c *gin.Context, rawBody []byte, endp
 	if h == nil || h.store == nil {
 		return false
 	}
-	cfg := h.store.GetPromptFilterConfig()
-	verdict := promptfilter.Inspect(rawBody, endpoint, cfg)
-	if shouldReviewPromptFilterVerdict(verdict, cfg) {
-		text := promptfilter.ExtractText(rawBody, endpoint, cfg.MaxTextLength)
-		verdict = h.reviewPromptFilterVerdict(c.Request.Context(), text, verdict, cfg)
-	}
-	verdict = h.applyAdvancedPromptProtection(c, promptfilter.ExtractText(rawBody, endpoint, cfg.MaxTextLength), verdict, cfg)
-	h.logPromptFilterVerdict(c, endpoint, model, "local_filter", "", verdict)
+	signedBody := ingressRequestBody(c, rawBody)
+	evaluation := h.evaluatePromptGuard(c, rawBody, signedBody, endpoint, model, promptfilter.TransportHTTP)
+	cfg := evaluation.Config
+	verdict := evaluation.Verdict
+	h.logPromptGuardEvaluation(c, endpoint, model, "local_filter", "", evaluation)
 	if verdict.Action == promptfilter.ActionWarn {
 		c.Header("X-Prompt-Filter-Warning", verdict.Reason)
 	}
 	if verdict.Action != promptfilter.ActionBlock {
 		return false
 	}
-	if h.sendNewAPIPolicyBlock(c, cfg, verdict.Reason, rawBody) {
+	if h.sendNewAPIPolicyDecision(c, cfg, evaluation.Decision, verdict, rawBody, endpoint, model, signedBody) {
 		return true
 	}
 	api.SendErrorWithStatus(c, api.NewAPIError(
@@ -52,20 +49,17 @@ func (h *Handler) inspectPromptFilterTextOpenAI(c *gin.Context, text string, end
 	if h == nil || h.store == nil {
 		return false
 	}
-	cfg := h.store.GetPromptFilterConfig()
-	verdict := promptfilter.InspectText(text, cfg)
-	if shouldReviewPromptFilterVerdict(verdict, cfg) {
-		verdict = h.reviewPromptFilterVerdict(c.Request.Context(), text, verdict, cfg)
-	}
-	verdict = h.applyAdvancedPromptProtection(c, text, verdict, cfg)
-	h.logPromptFilterVerdict(c, endpoint, model, "local_filter", "", verdict)
+	evaluation := h.evaluatePromptGuardText(c, text, endpoint, model)
+	cfg := evaluation.Config
+	verdict := evaluation.Verdict
+	h.logPromptGuardEvaluation(c, endpoint, model, "local_filter", "", evaluation)
 	if verdict.Action == promptfilter.ActionWarn {
 		c.Header("X-Prompt-Filter-Warning", verdict.Reason)
 	}
 	if verdict.Action != promptfilter.ActionBlock {
 		return false
 	}
-	if h.sendNewAPIPolicyBlock(c, cfg, verdict.Reason, []byte(text)) {
+	if h.sendNewAPIPolicyDecision(c, cfg, evaluation.Decision, verdict, []byte(text), endpoint, model, ingressRequestBody(c, nil)) {
 		return true
 	}
 	api.SendErrorWithStatus(c, api.NewAPIError(
@@ -80,19 +74,16 @@ func (h *Handler) inspectPromptFilterAnthropic(c *gin.Context, rawBody []byte, e
 	if h == nil || h.store == nil {
 		return false
 	}
-	cfg := h.store.GetPromptFilterConfig()
-	verdict := promptfilter.Inspect(rawBody, endpoint, cfg)
-	if shouldReviewPromptFilterVerdict(verdict, cfg) {
-		text := promptfilter.ExtractText(rawBody, endpoint, cfg.MaxTextLength)
-		verdict = h.reviewPromptFilterVerdict(c.Request.Context(), text, verdict, cfg)
-	}
-	verdict = h.applyAdvancedPromptProtection(c, promptfilter.ExtractText(rawBody, endpoint, cfg.MaxTextLength), verdict, cfg)
-	h.logPromptFilterVerdict(c, endpoint, model, "local_filter", "", verdict)
+	signedBody := ingressRequestBody(c, rawBody)
+	evaluation := h.evaluatePromptGuard(c, rawBody, signedBody, endpoint, model, promptfilter.TransportHTTP)
+	cfg := evaluation.Config
+	verdict := evaluation.Verdict
+	h.logPromptGuardEvaluation(c, endpoint, model, "local_filter", "", evaluation)
 	if verdict.Action == promptfilter.ActionWarn {
 		c.Header("X-Prompt-Filter-Warning", verdict.Reason)
 	}
 	if verdict.Action == promptfilter.ActionBlock {
-		if h.sendNewAPIPolicyBlock(c, cfg, verdict.Reason, rawBody) {
+		if h.sendNewAPIPolicyDecision(c, cfg, evaluation.Decision, verdict, rawBody, endpoint, model, signedBody) {
 			return true
 		}
 		sendAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "Request contains content blocked by prompt filter")
@@ -102,10 +93,18 @@ func (h *Handler) inspectPromptFilterAnthropic(c *gin.Context, rawBody []byte, e
 }
 
 func (h *Handler) logPromptFilterVerdict(c *gin.Context, endpoint string, model string, source string, errorCode string, verdict promptfilter.Verdict) {
+	h.logPromptFilterVerdictWithDecision(c, endpoint, model, source, errorCode, verdict, nil)
+}
+
+func (h *Handler) logPromptGuardEvaluation(c *gin.Context, endpoint string, model string, source string, errorCode string, evaluation promptGuardEvaluation) {
+	h.logPromptFilterVerdictWithDecision(c, endpoint, model, source, errorCode, evaluation.Verdict, &evaluation.Decision)
+}
+
+func (h *Handler) logPromptFilterVerdictWithDecision(c *gin.Context, endpoint string, model string, source string, errorCode string, verdict promptfilter.Verdict, decision *promptfilter.Decision) {
 	if h == nil || h.db == nil || !verdict.Enabled {
 		return
 	}
-	if source == "local_filter" && len(verdict.Matched) == 0 {
+	if source == "local_filter" && len(verdict.Matched) == 0 && verdict.Action == promptfilter.ActionAllow && verdict.ReviewError == "" && verdict.ReviewModel == "" {
 		return
 	}
 	if h.store != nil {
@@ -130,6 +129,14 @@ func (h *Handler) logPromptFilterVerdict(c *gin.Context, endpoint string, model 
 		ReviewFlagged:   verdict.ReviewFlagged,
 		ReviewError:     verdict.ReviewError,
 	}
+	h.populateVerifiedNewAPIAuditMeta(c, input)
+	if decision != nil {
+		input.AuditScore = decision.AuditScore
+		input.PolicyProfile = decision.Profile
+		input.ReasonCode = decision.ReasonCode
+		input.PrimaryOrigin = string(decision.PrimaryOrigin)
+		input.StrikeEligible = decision.StrikeEligible
+	}
 	// 被拦截（block）的请求仅记录脱敏后的检查文本预览，便于排查触发原因，
 	// 同时避免把 Authorization/API Key/token 等敏感值持久化到日志。
 	if verdict.Action == promptfilter.ActionBlock {
@@ -139,6 +146,22 @@ func (h *Handler) logPromptFilterVerdict(c *gin.Context, endpoint string, model 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_ = h.db.InsertPromptFilterLog(ctx, input)
+}
+
+func (h *Handler) populateVerifiedNewAPIAuditMeta(c *gin.Context, input *database.PromptFilterLogInput) {
+	if h == nil || h.store == nil || c == nil || input == nil {
+		return
+	}
+	cfg := h.store.GetPromptFilterConfig()
+	policyContext, verified := h.verifyNewAPIPolicyContext(c, cfg.Advanced.NewAPI, ingressRequestBody(c, nil))
+	if !verified || !policyContext.AuditMetaVerified {
+		return
+	}
+	if policyContext.Audit.Endpoint != "" {
+		input.Endpoint = policyContext.Audit.Endpoint
+	}
+	input.Protocol = policyContext.Audit.Protocol
+	input.Provider = policyContext.Audit.Provider
 }
 
 func (h *Handler) logUpstreamCyberPolicy(c *gin.Context, endpoint string, model string, body []byte) {
@@ -205,9 +228,6 @@ func populatePromptFilterAPIKeyMeta(c *gin.Context, input *database.PromptFilter
 }
 
 func shouldReviewPromptFilterVerdict(verdict promptfilter.Verdict, cfg promptfilter.Config) bool {
-	if verdict.TerminalStrictHit {
-		return false
-	}
 	if verdict.Action != promptfilter.ActionWarn && verdict.Action != promptfilter.ActionBlock {
 		return false
 	}

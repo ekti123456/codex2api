@@ -1421,11 +1421,19 @@
     "testEmpty": "Enter test content",
     "testDone": "Test complete",
     "testFailed": "Test failed",
+    "testResultMode": "Mode",
+    "testResultScore": "Score",
+    "testResultMatches": "Matches",
+    "testResultReview": "Review",
+    "testReviewFlagged": "Flagged",
+    "testReviewCleared": "Cleared",
+    "testReviewSkipped": "Not reviewed",
     "logsCleared": "Logs cleared",
     "clearFailed": "Failed to clear",
     "modeMonitor": "Monitor",
     "modeWarn": "Warn",
     "modeBlock": "Block",
+    "actionAllow": "Allow",
     "status": "Status",
     "currentMode": "Mode",
     "blockedLogs": "Blocked",
@@ -1439,34 +1447,258 @@
     "threshold": "Threshold",
     "strictThreshold": "Strict Threshold",
     "strictTerminal": "Terminal Strict Blocking",
-    "strictTerminalHint": "When enabled, any strict:true match is blocked regardless of mode, context discount, or secondary review.",
+    "strictTerminalHint": "When enabled, a current-user Prompt enters terminal handling only when a strict:true rule remains above the block threshold after intent and context checks. Audit-only terms and dual-use tool names do not become terminal by themselves. Balanced profiles may still use secondary review; strict profiles skip downgrade.",
     "advancedConfig": "Advanced Protection JSON",
     "advancedConfigPlaceholder": "Configure normalization, cumulative risk, local sidecar, and output scanning. All are disabled by default.",
     "advancedConfigHint": "Each advanced layer has its own enabled switch. The server validates JSON before saving.",
     "advancedVisualTitle": "Advanced Protection",
+    "guard": {
+      "title": "Unified GuardPipeline",
+      "description": "Use one source-aware review entry point for Responses, Chat Completions, Messages, and WebSocket traffic. Every setting is independently selectable and remains stored in advanced protection configuration.",
+      "globalMode": "Global Execution Mode",
+      "globalModeHint": "Controls the new GuardPipeline as a whole. Inherit keeps the existing prompt-filter switches, thresholds, and terminal-rule behavior unchanged.",
+      "defaultProfile": "Default Review Profile",
+      "defaultProfileHint": "Fallback review strength for providers without an explicit profile and for future or unknown model families.",
+      "trustedOverrides": "Allow Trusted Request Overrides",
+      "trustedOverridesHint": "Accept profile or mode overrides only after NewAPI HMAC verification. When off, all review-profile and mode request headers are ignored so clients cannot lower enforcement.",
+      "compatibilityTitle": "Existing configuration stays intact",
+      "compatibilityHint": "The default is Inherit. Disabling or tuning the new pipeline does not remove existing rules, sensitive words, secondary review, or cumulative-risk settings.",
+      "active": "Active",
+      "providerTitle": "Model-family Profiles",
+      "providerDescription": "Providers inherit the default profile unless you explicitly assign a different profile to GPT, Claude Code, Grok, or another model family.",
+      "inheritDefaultProfile": "Inherit Default Profile",
+      "profileTitle": "Profile Guidance",
+      "profileDescription": "Profiles change inspection depth; a single security-related noun never becomes a terminal violation by itself.",
+      "layersTitle": "Request Source Layers",
+      "layersDescription": "Select a mode for every source. Enforce the current user prompt, while application-owned context should normally begin in Inherit or Shadow to measure false positives.",
+      "modes": {
+        "inherit": {
+          "label": "Inherit Existing",
+          "description": "Keep the current prompt-filter switch, mode, thresholds, and rules without introducing new enforcement behavior."
+        },
+        "off": {
+          "label": "Off",
+          "description": "Disable this GuardPipeline scope while the existing legacy filter continues to follow its current configuration."
+        },
+        "shadow": {
+          "label": "Shadow",
+          "description": "Inspect and record decision differences without blocking, warning, or accumulating penalties."
+        },
+        "warn": {
+          "label": "Warn",
+          "description": "Record and return a warning without adding strikes or applying account/IP penalties."
+        },
+        "enforce": {
+          "label": "Enforce",
+          "description": "Apply allow, review, and block decisions; only confirmed violations may emit penalty events."
+        }
+      },
+      "profiles": {
+        "balanced": {
+          "label": "Balanced",
+          "description": "Default production profile focused on low false positives: block clear harmful intent and review ambiguity."
+        },
+        "strict": {
+          "label": "Strict",
+          "description": "Uses deeper correlation and denser auditing, while terminal blocks still require high-confidence evidence."
+        },
+        "research": {
+          "label": "Research",
+          "description": "Allows defensive and dual-use analysis; explicit malicious execution, theft, or evasion remains blocked."
+        }
+      },
+      "providers": {
+        "openai": {
+          "label": "OpenAI / Codex",
+          "description": "For GPT models, Codex CLI, and OpenAI-compatible Responses or Chat traffic."
+        },
+        "anthropic": {
+          "label": "Anthropic / Claude Code",
+          "description": "For Claude models, Claude Code, and the Anthropic Messages protocol."
+        },
+        "xai": {
+          "label": "xAI / Grok",
+          "description": "For Grok and xAI models connected through OpenAI-compatible protocols."
+        },
+        "unknown": {
+          "label": "Unknown / Other",
+          "description": "Used when a provider cannot be identified or a future model family is added, avoiding an unassigned policy."
+        }
+      },
+      "layers": {
+        "current_user": {
+          "label": "Current User Prompt",
+          "description": "Content explicitly submitted by the user in the current request; the primary source for review and penalty evidence."
+        },
+        "history": {
+          "label": "Linked History",
+          "description": "Inspect prior user content only when continuation, alias references, or split instructions clearly connect it."
+        },
+        "system": {
+          "label": "System Context",
+          "description": "System-role text is normally application-owned; use Shadow before Enforce to measure false positives."
+        },
+        "developer": {
+          "label": "Developer Context",
+          "description": "Developer-role content normally belongs to application policy and should not be attributed to the end user by default."
+        },
+        "instructions": {
+          "label": "Responses Instructions",
+          "description": "Inspect top-level /v1/responses instructions to detect client-controlled changes and baseline differences."
+        },
+        "tool_output": {
+          "label": "Tool Output",
+          "description": "Treat tool-returned content as untrusted data, without automatically using it as user penalty evidence."
+        },
+        "tool_arguments": {
+          "label": "Tool Arguments",
+          "description": "Inspect structured parameters and targets before file, network, shell, or other tools execute."
+        },
+        "attachment_refs": {
+          "label": "Attachment References",
+          "description": "Inspect attachment, file_id, URL, and reference metadata; a separate extraction service can be connected later."
+        },
+        "session_context": {
+          "label": "Correlated Session Context",
+          "description": "Inspect earlier fragments only when trusted identity links the session and the current request explicitly asks to continue; Shadow is the safe default."
+        },
+        "attachment_content": {
+          "label": "Extracted Attachment Content",
+          "description": "Inspect text returned by the attachment extractor in Shadow mode by default, so quoted document content is not automatically attributed to the user."
+        }
+      }
+    },
     "normalizationTitle": "Input Normalization and Decoding",
     "decodeRuns": "Maximum Decode Runs",
+    "maxDecodedBytes": "Maximum Decoded Bytes",
+    "maxEncodedBlocks": "Maximum Encoded Blocks",
+    "decoders": {
+      "url": "URL Encoding",
+      "html": "HTML Entities",
+      "base64": "Base64 Encoding",
+      "hex": "Hex Encoding",
+      "rot13": "ROT13 Encoding",
+      "escapes": "Escape Sequences",
+      "compression": "Compressed Data"
+    },
+    "contextDiscount": {
+      "title": "Legitimate-context Discount",
+      "description": "Reduce dual-use false positives for auditing, remediation, and teaching, while preventing generic disclaimers from erasing explicit operational intent.",
+      "enabled": "Enable Context Discount",
+      "enabledHint": "When disabled, every rule keeps its raw enforcement score, increasing false positives for security research and log analysis.",
+      "intentAware": "Intent-aware Discount",
+      "intentAwareHint": "Classify operational attack actions before deciding how much discount is allowed. Keep this enabled for the recommended behavior.",
+      "maxDiscount": "General Maximum Discount",
+      "maxDiscountHint": "Maximum score reduction for defensive, remediation, or explanatory contexts. Higher values reduce false positives in legitimate security discussion.",
+      "operationalMaxDiscount": "Operational Maximum Discount",
+      "operationalMaxDiscountHint": "Maximum reduction after execution, delivery, theft, or evasion intent is present. Zero is recommended so a research disclaimer cannot cancel explicit harmful action."
+    },
+    "extensions": {
+      "title": "Deep Protection Extensions",
+      "runtimeLimits": "Runtime Limits, Cache, and Circuit Breaker",
+      "serviceURL": "Service URL",
+      "timeout": "Timeout (seconds)",
+      "cacheTTL": "Cache TTL (seconds)",
+      "maxConcurrent": "Maximum Concurrency",
+      "breakerFailures": "Failures Before Breaker",
+      "breakerSeconds": "Breaker Duration (seconds)",
+      "sidecar": {
+        "title": "Semantic Review Sidecar",
+        "description": "Connect a local or private semantic model to supplement rule matching. It is disabled and set to Shadow by default so quality can be measured before warnings or blocks are enabled.",
+        "enabled": "Enable Semantic Review",
+        "enabledHint": "Enable only after a controlled Sidecar URL is configured. No external call is made while disabled.",
+        "scanClean": "Sample Locally Allowed Requests",
+        "scanCleanHint": "Review a deterministic sample of requests that local rules allowed to find semantic misses. Disabled by default to control latency and cost.",
+        "mode": "Execution Mode",
+        "modeHint": "Shadow records only, Warn returns a notice, and Enforce allows Sidecar decisions to block. Calibrate in Shadow first.",
+        "modes": {
+          "shadow": "Shadow",
+          "warn": "Warn",
+          "enforce": "Enforce"
+        },
+        "baseURLHint": "Fixed root URL of a local or private semantic-review service. Never source it from user input.",
+        "timeoutHint": "Maximum wait for one semantic review before applying the failure policy.",
+        "minScore": "Minimum Local Score",
+        "minScoreHint": "Call the Sidecar when the local enforcement score reaches this value. Sampled clean requests bypass this threshold.",
+        "samplePercent": "Clean-request Sample (%)",
+        "samplePercentHint": "Applies only to locally allowed requests. Start at 1%–10% instead of sending all normal traffic to the model.",
+        "failClosed": "Block When Service Fails",
+        "failClosedHint": "Treat a timeout or Sidecar error as a failure that may block. Keep off by default so an extension outage does not take down normal traffic.",
+        "maxTextLength": "Maximum Review Text Length",
+        "maxTextLengthHint": "Upper limit sent to the Sidecar. Oversized content keeps bounded head and tail sections to protect resources.",
+        "cacheTTLHint": "How long to reuse a semantic decision for identical content. Set to zero to disable caching.",
+        "maxConcurrentHint": "Maximum simultaneous Sidecar calls, preventing the semantic service from being overloaded.",
+        "breakerFailuresHint": "Temporarily stop Sidecar calls after this many consecutive failures.",
+        "breakerSecondsHint": "How long the circuit remains open before automatic recovery is attempted."
+      },
+      "session": {
+        "title": "Session Fragment Correlation",
+        "description": "Join explicit continuation requests with recent fragments from the same trusted session to detect instructions deliberately split across turns.",
+        "enabled": "Enable Session Correlation",
+        "enabledHint": "Adds correlation evidence but never bans solely from historical accumulated score. Recommended on.",
+        "requireSignedIdentity": "Require Signed Identity",
+        "requireSignedIdentityHint": "Use only user and session identifiers verified by NewAPI HMAC, preventing clients from forging another session.",
+        "combineShortFragments": "Auto-join Ordinary Short Messages",
+        "combineShortFragmentsHint": "Join short fragments even without an explicit continuation phrase. Keep off to avoid linking unrelated normal messages.",
+        "window": "Correlation Window (seconds)",
+        "windowHint": "Only fragments from the same session inside this window are eligible. Longer windows increase cross-task correlation risk.",
+        "maxFragments": "Maximum Fragments",
+        "maxFragmentsHint": "Maximum number of recent fragments included in one combined inspection, bounding work and context drift.",
+        "maxTextLength": "Combined Text Limit",
+        "maxTextLengthHint": "Maximum total length of current and historical text; excess content is bounded and truncated.",
+        "shortFragmentMaxChars": "Short-fragment Character Limit",
+        "shortFragmentMaxCharsHint": "Used only when automatic short-message joining is enabled. Longer messages are not auto-joined as ordinary fragments.",
+        "recommendedHint": "Recommended default: correlation on, signed identity required, ordinary short-message joining off. Only explicit continuation requests are linked, leaving independent new tasks unaffected."
+      },
+      "attachment": {
+        "title": "Attachment Content Extraction",
+        "description": "Send supported attachment references to a separate extractor, then inspect the returned text. Codex2API does not fetch arbitrary user URLs directly; this layer is disabled and Shadowed by default.",
+        "enabled": "Enable Attachment Extraction",
+        "enabledHint": "Enable only after deploying a controlled extraction service. Attachment reference metadata can still be inspected while this is off.",
+        "allowRemoteURLs": "Allow Remote URL Extraction",
+        "allowRemoteURLsHint": "Remote fetching adds SSRF, oversized-file, and mutable-content risk. Keep off and accept only trusted file references by default.",
+        "baseURLHint": "Fixed root URL for the local or private attachment extractor. Requests must not override it dynamically.",
+        "timeoutHint": "Maximum wait for extraction. Failures are audited and should not block normal traffic by default.",
+        "maxFiles": "Maximum Files per Request",
+        "maxFilesHint": "Maximum number of attachments submitted to the extractor for one request.",
+        "maxBytes": "Maximum Bytes per File",
+        "maxBytesHint": "Per-file size limit used to contain oversized files and decompression bombs.",
+        "maxExtractedChars": "Maximum Extracted Characters",
+        "maxExtractedCharsHint": "Maximum extracted attachment text returned to prompt inspection; excess text is truncated.",
+        "cacheTTLHint": "How long extracted content is cached by file digest. Set to zero to disable caching.",
+        "maxConcurrentHint": "Maximum simultaneous extraction calls so the parser cannot stall the main proxy.",
+        "breakerFailuresHint": "Temporarily stop extractor calls after this many consecutive failures.",
+        "breakerSecondsHint": "How long extraction remains paused before an automatic recovery probe."
+      }
+    },
     "terminalCategories": "Terminal Categories",
-    "terminalCategoriesHint": "Comma-separated. Matches in these categories are blocked immediately, for example reverse_engineering.",
-    "riskTitle": "User / IP / Session Risk",
+    "terminalCategoriesHint": "Comma-separated. A category enters terminal handling only when its rule also forms a high-confidence violation above threshold. Do not add dual-use categories such as reverse engineering or vulnerabilities.",
+    "riskTitle": "User / IP / Session Risk Audit",
     "riskWindow": "Risk Window (seconds)",
-    "blockThreshold": "Cumulative Block Threshold",
-    "reviewThreshold": "Cumulative Review Threshold",
+    "blockThreshold": "High-Risk Reference Threshold",
+    "reviewThreshold": "Review Reference Threshold",
     "outputScanTitle": "SSE / WebSocket Output Scan",
     "strictOnly": "Terminal Rules Only",
     "bufferBytes": "Buffer Bytes",
     "overlapBytes": "Overlap Bytes",
     "help": {
+      "normalizationPanel": "Bounded decoding restores common encoded and compressed fragments while byte, block, and pass limits prevent decoding bombs from exhausting the service.",
       "normalizationEnabled": "Normalize full-width characters, Unicode confusables, and invisible characters before matching rules.",
       "decodeRuns": "Maximum nested decoding passes. One or two is recommended to limit latency.",
+      "maxDecodedBytes": "Maximum bytes produced by all decoding attempts for one request; further decoding stops at this budget.",
+      "maxEncodedBlocks": "Maximum independent encoded fragments decoded in one request, limiting many-small-block resource abuse.",
       "decodeUrl": "Detect URL-encoded bypasses such as percent escapes and query encoding.",
       "decodeHtml": "Detect HTML entity and numeric entity encoding bypasses.",
       "decodeBase64": "Decode Base64-like prompt fragments before inspection.",
-      "terminalCategories": "Matches in these categories bypass ordinary scores and immediately reject the request.",
-      "riskEnabled": "Accumulate recent user, IP, and session risk to catch instructions split across requests.",
+      "decodeHex": "Restore continuous hexadecimal and 0x-style fragments within the configured byte budget.",
+      "decodeRot13": "Consider structurally plausible ROT13 text and inspect only meaningful decoded results.",
+      "decodeEscapes": "Restore Unicode, hexadecimal, and common backslash escape sequences.",
+      "decodeCompression": "Inspect Base64-wrapped gzip or zlib text within the configured size and pass limits.",
+      "terminalCategories": "A listed category enters terminal handling only with independent high-confidence harmful intent above the block threshold. Keep this empty unless the whole category has very low false-positive risk.",
+      "riskEnabled": "Track recent confirmed user, IP, and session risk for audit and review prioritization. Historical risk alone never blocks a later request.",
       "riskWindow": "How long risk history is retained before older scores decay.",
-      "blockThreshold": "Block immediately when cumulative risk reaches this value.",
-      "reviewThreshold": "Send cumulative risk at or above this value for secondary review when below the block threshold.",
+      "blockThreshold": "Reference line for high accumulated risk; it never blocks the current request without independent evidence.",
+      "reviewThreshold": "Reference line for a Sidecar or future semantic reviewer to prioritize review. The current request still needs its own violation evidence.",
       "outputEnabled": "Buffer and inspect SSE or WebSocket content before sending it to the client.",
       "strictOnly": "Only terminal strict rules interrupt output, reducing ordinary-text false positives.",
       "bufferBytes": "Maximum amount buffered for each output inspection pass.",
@@ -1483,10 +1715,11 @@
     "logMatches": "Log Matches",
     "maxTextLength": "Max Text Length",
     "sensitiveWords": "Sensitive Words",
-    "sensitiveWordsPlaceholder": "One word per line",
+    "sensitiveWordsPlaceholder": "One term per line. A match is an audit signal; blocking still requires explicit harmful intent or a matching compound rule.",
+    "sensitiveWordsHint": "Sensitive words are audit signals only and never raise the enforcement score. Use a custom intent or strict rule when a specific combination must be blocked.",
     "customPatterns": "Custom Rules JSON",
     "reviewTitle": "Secondary Review",
-    "reviewDesc": "Call an OpenAI Moderations-compatible endpoint only after a local rule match. Requests without local matches do not call the review endpoint.",
+    "reviewDesc": "Call an OpenAI Moderations-compatible endpoint only after local rules produce a warning or block candidate. Audit-only sensitive-word matches do not call the review endpoint.",
     "reviewEnabled": "Enable Review",
     "reviewFailClosed": "Review Failure Policy",
     "reviewFailClosedBlock": "Block on failure",
@@ -1514,6 +1747,7 @@
     "colAction": "Action",
     "colEndpoint": "Endpoint / Model",
     "colScore": "Score",
+    "auditScore": "Audit",
     "colMatch": "Matches",
     "colApiKey": "API Key",
     "colPreview": "Preview",
@@ -1575,15 +1809,15 @@
     "noRulesInCategory": "No rules in this category",
     "newapi": {
       "title": "NewAPI Audit Identity Forwarding",
-      "description": "When enabled, Codex2API verifies the user ID, client IP, request ID, and HMAC signature supplied by NewAPI, then returns auditable 503 responses and ban instructions for policy violations. The shared HMAC secret is never transmitted with requests.",
+      "description": "When enabled, Codex2API verifies NewAPI identity and policy metadata, then returns signed 400 policy events with decision evidence. Codex2API no longer counts or bans locally; NewAPI independently controls warnings, account bans, and optional IP restrictions.",
       "enabled": "Verify Forwarded Audit Identity",
-      "enabledHint": "Master switch on Codex2API. Prompt filtering remains active when disabled, but forwarded NewAPI identity headers and linked ban instructions are not trusted.",
+      "enabledHint": "Identity-link switch on Codex2API. Prompt filtering remains active when disabled, but NewAPI identity, profile overrides, and enforceable signed decisions are not trusted.",
       "clockSkew": "Clock Skew (seconds)",
       "clockSkewHint": "Signatures outside this time range are rejected.",
       "offenseWindow": "Offense Window (seconds)",
-      "offenseWindowHint": "Violations by the same user and IP accumulate within this window.",
+      "offenseWindowHint": "The enforcement window is now managed by NewAPI; Codex2API no longer uses this legacy value for counting.",
       "banAfter": "Ban on Offense Number",
-      "banAfterHint": "Codex2API instructs NewAPI to ban when this count is reached; 2 is recommended.",
+      "banAfterHint": "Ban thresholds are now managed by NewAPI; Codex2API only returns signed decision evidence.",
       "protocolTitle": "Configuration and NewAPI Integration Protocol",
       "codexEnv": "Codex2API Environment Variable",
       "codexSecretExample": "PROMPT_FILTER_NEWAPI_SECRET=replace-with-at-least-32-random-bytes",
@@ -1597,9 +1831,9 @@
       "database": "database",
       "newapiEnv": "NewAPI Environment Variables",
       "newapiEnvExample": "CODEX2API_POLICY_ENABLED=true\nCODEX2API_POLICY_TARGETS=http://127.0.0.1:18095\nCODEX2API_POLICY_SECRET=the-exact-same-secret-as-Codex2API\nCODEX2API_POLICY_BAN_AFTER=2\nCODEX2API_POLICY_WINDOW_SECONDS=86400",
-      "headersTitle": "Headers NewAPI Must Send",
-      "headersExample": "X-NewAPI-User-ID: <user ID>\nX-NewAPI-Client-IP: <real client IP>\nX-NewAPI-Request-ID: <unique request ID>\nX-NewAPI-Timestamp: <Unix seconds>\nX-NewAPI-Method: <HTTP method>\nX-NewAPI-Path: <request path>\nX-NewAPI-Body-SHA256: <hex body SHA-256>\nX-NewAPI-Signature: <hex HMAC-SHA256>",
-      "signatureHint": "The V1 signature binds timestamp, request ID, user ID, client IP, HTTP method, request path, and body SHA-256 in order. Each request ID may be used only once.",
+      "headersTitle": "NewAPI Identity and Policy Headers",
+      "headersExample": "X-NewAPI-User-ID: <user ID>\nX-NewAPI-Client-IP: <real client IP>\nX-NewAPI-Request-ID: <unique request ID>\nX-NewAPI-Timestamp: <Unix seconds>\nX-NewAPI-Method: <HTTP method>\nX-NewAPI-Path: <actual forwarded path>\nX-NewAPI-Body-SHA256: <hex body SHA-256>\nX-NewAPI-Signature-Version: 2\nX-NewAPI-Original-Endpoint: <original client endpoint>\nX-NewAPI-Original-Protocol: <original client protocol>\nX-NewAPI-Provider: <upstream provider>\nX-NewAPI-Signature: <identity and audit HMAC-SHA256>\nX-NewAPI-Policy-Meta: <Base64URL policy JSON>\nX-NewAPI-Policy-Meta-Signature: <policy HMAC-SHA256>",
+      "signatureHint": "A missing version or version 1 keeps the legacy identity signature for blue-green rollout compatibility. Version 2 additionally binds the original client endpoint, protocol, and provider; Codex2API trusts those audit fields only after a valid V2 signature. Policy metadata and response decisions remain separately signed with the same shared secret.",
       "revealTitle": "Save the NewAPI Audit Secret Now",
       "revealDescription": "The secret has been written to the Codex2API database. Its plaintext is displayed only once in this dialog.",
       "copied": "Copied",
@@ -1667,9 +1901,9 @@
         "title": "What this module does",
         "p1": "Prompt Filter inspects user prompts before they reach upstream models. It aims to catch jailbreaks, injection, malware help, credential theft, reverse engineering, and similar high-risk content while limiting false positives.",
         "p2": "It is a gateway policy layer: deterministic local rules score the request first, then the selected mode decides monitor / warn / block. Optional layers add decoding, cumulative risk, output scanning, and identity-linked bans.",
-        "b1": "Local rules: built-in patterns + sensitive words + custom regex, scored by weight.",
+        "b1": "Local rules: intent-bearing built-in/custom patterns produce the enforcement score; sensitive words and signal-only patterns remain audit evidence.",
         "b2": "Modes: monitor logs only, warn can pass through, block rejects the request.",
-        "b3": "Terminal rules: strict hits or terminal categories cannot be discounted or downgraded by review.",
+        "b3": "Terminal rules: strict hits and terminal categories still pass intent, effective-score, and context checks. Balanced profiles may review them; strict profiles prevent downgrade.",
         "b4": "Observability: hit logs store action, score, matched rules, and content preview for triage."
       },
       "pipeline": {
@@ -1677,7 +1911,7 @@
         "p1": "A request is processed roughly in this order (advanced layers are off by default):",
         "s1": "Accept the request and extract text up to the configured max length.",
         "s2": "Optional: normalize input and decode URL / HTML / Base64 encodings.",
-        "s3": "Match local rules: sensitive words, built-in rules, and custom rules.",
+        "s3": "Match local rules: sensitive words and signal-only topics enter audit scoring, while intent-bearing built-in/custom rules enter enforcement scoring.",
         "s4": "Evaluate score thresholds, strict threshold, terminal strict, and terminal categories.",
         "s5": "Optional: accumulate user / IP / session risk, or call secondary Moderations-compatible review.",
         "s6": "Emit allow / warn / block; with NewAPI identity verification, violations may return 503 plus ban instructions.",
@@ -1696,14 +1930,14 @@
       },
       "quickstart": {
         "title": "Quick start (recommended)",
-        "p1": "Roll out monitor-first, then block. Avoid full block mode before you understand false positives.",
-        "s1": "On Overview, enable the filter, set mode to Monitor, and turn on match logging.",
+        "p1": "Fresh installs include a low-false-positive blocking preset. Test it with real normal and violating prompts before enabling the master switch; high-volume existing sites can still canary in Monitor mode.",
+        "s1": "Keep the preset Block mode, 50 / 90 thresholds, terminal strict handling, two-pass normalization, and match logging.",
         "s2": "Choose sensible thresholds (for example 50 / 90) and watch score distribution in logs.",
-        "s3": "On Rules, keep critical built-in rules enabled; add business-specific sensitive words (one per line).",
+        "s3": "On Rules, keep critical intent and terminal rules enabled; add business-specific sensitive words as audit signals (one per line).",
         "s4": "Use the rule tester with real production prompts and confirm false positives are acceptable.",
-        "s5": "After 1–3 days of logs, switch mode to Warn or Block.",
-        "s6": "Only then enable terminal strict blocking, secondary review, and advanced layers as needed.",
-        "callout": "Production baseline: enabled + block mode + terminal strict + fail-closed secondary review. Mark strict only on very low false-positive patterns."
+        "s5": "Enable the master switch after validation. Existing high-volume sites may use Monitor or Warn for a 1–3 day canary.",
+        "s6": "Enable cumulative risk, secondary review, output scanning, Sidecar, and intelligence independently when their dependencies are ready.",
+        "callout": "Fresh installs include a general production preset: block mode, 50 / 90 thresholds, terminal strict handling, and two-pass input normalization once the master switch is enabled. Secondary review, output scanning, and external services remain opt-in."
       },
       "modes": {
         "title": "Processing modes",
@@ -1713,23 +1947,23 @@
         "monitor": "Log only; do not change request allow path. Best for initial tuning.",
         "warn": "Log and mark a warning; request usually continues upstream. Good for canary.",
         "block": "Reject when thresholds or terminal hits fire. Use for production hard enforcement.",
-        "callout": "With terminal strict blocking on, any strict:true hit blocks immediately—even in monitor/warn—and cannot be downgraded by secondary review."
+        "callout": "In block/enforce mode, strict:true rules still pass intent, effective-score, and context checks. Balanced profiles may continue to secondary review; terminal high-confidence hits in strict profiles skip downgrade."
       },
       "scoring": {
         "title": "Scoring, thresholds, and terminal hits",
         "p1": "Each matched rule adds its weight. Ordinary decisions use the block threshold; strict rules also use the strict threshold.",
-        "p2": "Terminal paths outrank normal thresholds: terminal strict and terminal categories are not discounted by context and cannot be allowed by review.",
+        "p2": "Terminal paths still require high-confidence harmful intent. Rule scores and context discounts are applied first; strict rules or terminal categories become terminal only after the effective score reaches the block threshold.",
         "b1": "Block threshold: cumulative score that triggers the mode action (block in block mode).",
         "b2": "Strict threshold: cumulative strict-rule score that can also trigger handling.",
-        "b3": "Terminal strict blocking: a single strict hit blocks immediately.",
-        "b4": "Terminal categories: e.g. reverse_engineering blocks on category match immediately."
+        "b3": "Terminal strict blocking: a strict match enters terminal handling after intent and effective-score checks pass; the profile decides whether secondary review can downgrade it.",
+        "b4": "Terminal categories: become terminal only with a high-confidence violation; avoid assigning dual-use technology categories."
       },
       "advanced": {
         "title": "Advanced protection",
-        "p1": "All advanced layers default to off. Each sub-module has its own switch—enable gradually.",
+        "p1": "Fresh installs enable input normalization by default. Cumulative risk, Sidecar, output scanning, online intelligence, and NewAPI integration remain independent opt-in layers.",
         "b1": "Normalization & decoding: full-width/confusable cleanup and URL/HTML/Base64 unwrapping.",
-        "b2": "Terminal categories: veto specific categories immediately.",
-        "b3": "User / IP / session risk: catch split-across-requests attacks.",
+        "b2": "Terminal categories: take the terminal path only after the category forms a high-confidence violation.",
+        "b3": "User / IP / session risk: records confirmed high-risk events for audit and review; cumulative score alone never bans.",
         "b4": "SSE / WebSocket output scan: inspect streamed model output; can limit to terminal rules only.",
         "b5": "NewAPI audit identity: verify HMAC identity headers and emit ban instructions on policy hits.",
         "b6": "Scheduled intelligence: periodic public search and optional candidate rule generation.",
@@ -1741,7 +1975,7 @@
         "p2": "Configure base URL, model, timeout, multiple API keys (auto-failover on rate limits), and failure policy.",
         "b1": "Block on failure: conservative production default when review times out or errors.",
         "b2": "Allow on failure: keep traffic flowing if review is unavailable (canary).",
-        "b3": "Terminal strict hits are never downgraded to allow by review."
+        "b3": "Balanced profiles may continue reviewing terminal candidates; strict-profile current-user terminal violations skip secondary-review downgrade."
       },
       "rules": {
         "title": "Working with the rule set",
@@ -1780,7 +2014,7 @@
         "title": "Go-live checklist",
         "p1": "Run through this list before production cutover to reduce false blocks and misses.",
         "s1": "Master switch on; mode graduated from monitor to block.",
-        "s2": "Thresholds, terminal strict, sensitive words, and core built-in rules reviewed.",
+        "s2": "Enforcement thresholds, terminal strict rules, audit-only sensitive words, and core built-in rules reviewed.",
         "s3": "Tester coverage includes normal business samples and attack samples.",
         "s4": "Secondary review keys/timeout/fail policy configured and failure-path exercised.",
         "s5": "Enable decoding, cumulative risk, and output scan only as needed; multi-replica cache ready.",
