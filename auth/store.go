@@ -1866,6 +1866,14 @@ func (a *Account) GetPlanType() string {
 	return a.PlanType
 }
 
+// GroupIDSnapshot 返回账号当前所属组 ID 的副本。GroupIDs 写入受 a.mu 保护
+// （ApplyAccountGroups / ApplyAccountGroupMemberships），跨 goroutine 读取须走此快照。
+func (a *Account) GroupIDSnapshot() []int64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return cloneInt64Slice(a.GroupIDs)
+}
+
 // applyRefreshedPlanTypeLocked applies a plan parsed from refreshed tokens.
 // Caller must hold a.mu.
 func (a *Account) applyRefreshedPlanTypeLocked(planType string, now time.Time) (string, bool) {
