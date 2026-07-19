@@ -31,8 +31,10 @@ func (h *Handler) evaluatePromptGuard(c *gin.Context, rawBody []byte, signedBody
 		extensionErrors = append(extensionErrors, "attachment_parser: "+err.Error())
 	}
 	evaluation := h.evaluatePromptGuardEnvelope(c, cfg, envelope, trustedProfile, profileOverride, modeOverride)
-	if err := h.commitPromptGuardSession(c, cfg, sessionPending, evaluation.Decision); err != nil {
-		extensionErrors = append(extensionErrors, "session_commit: "+err.Error())
+	if evaluation.Decision.ApplicationPromptKind == "" {
+		if err := h.commitPromptGuardSession(c, cfg, sessionPending, evaluation.Decision); err != nil {
+			extensionErrors = append(extensionErrors, "session_commit: "+err.Error())
+		}
 	}
 	evaluation.Decision.Errors = append(evaluation.Decision.Errors, extensionErrors...)
 	return evaluation
@@ -63,8 +65,10 @@ func (h *Handler) evaluatePromptGuardText(c *gin.Context, text string, endpoint 
 		extensionErrors = append(extensionErrors, "session_correlation: "+err.Error())
 	}
 	evaluation := h.evaluatePromptGuardEnvelope(c, cfg, envelope, trustedProfile, profileOverride, modeOverride)
-	if err := h.commitPromptGuardSession(c, cfg, sessionPending, evaluation.Decision); err != nil {
-		extensionErrors = append(extensionErrors, "session_commit: "+err.Error())
+	if evaluation.Decision.ApplicationPromptKind == "" {
+		if err := h.commitPromptGuardSession(c, cfg, sessionPending, evaluation.Decision); err != nil {
+			extensionErrors = append(extensionErrors, "session_commit: "+err.Error())
+		}
 	}
 	evaluation.Decision.Errors = append(evaluation.Decision.Errors, extensionErrors...)
 	return evaluation
@@ -135,7 +139,7 @@ func (h *Handler) evaluatePromptGuardEnvelope(c *gin.Context, cfg promptfilter.C
 	// an administrator-enabled auxiliary-layer block. Clean-prompt sampling is
 	// still allowed when the pipeline itself made no enforcement decision.
 	inspectCurrentPrompt := promptGuardHasCurrentUserEnforcement(decision) ||
-		(decision.Action == promptfilter.ActionAllow && cfg.Advanced.Sidecar.ScanCleanEnabled)
+		(decision.Action == promptfilter.ActionAllow && cfg.Advanced.Sidecar.ScanCleanEnabled && decision.ApplicationPromptKind == "")
 	if inspectCurrentPrompt {
 		advancedCfg := cfg
 		verdict = h.applyPromptSemanticProtection(c, text, verdict, advancedCfg)
@@ -147,6 +151,9 @@ func (h *Handler) evaluatePromptGuardEnvelope(c *gin.Context, cfg promptfilter.C
 		}
 	}
 	decision = finalizePromptGuardDecision(decision, verdict)
+	if decision.ApplicationPromptKind != "" && (decision.PrimaryOrigin == "" || decision.PrimaryOrigin == promptfilter.OriginSessionContext) {
+		decision.ReasonCode = "application_prompt_" + decision.ApplicationPromptKind
+	}
 	verdict.Action = decision.Action
 	verdict.Score = decision.Score
 	verdict.RawScore = decision.RawScore
