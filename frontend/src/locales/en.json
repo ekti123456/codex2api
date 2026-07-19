@@ -2523,6 +2523,15 @@
       "planAllowHint": "When selected, this key only dispatches to accounts on the chosen plans (multi-select); leave empty for no plan restriction.",
       "disableImageGeneration": "Disable image generation",
       "disableImageGenerationHint": "When on, this key cannot use image models (gpt-image-*) or the image generation chain (image_generation tool, /v1/images endpoints); such requests return 403. Off by default.",
+      "imageGenerationPolicy": "Image generation policy",
+      "imageGenerationPolicyAllow": "Allow",
+      "imageGenerationPolicyStrip": "Strip & forward as text",
+      "imageGenerationPolicyBlock": "Block (403)",
+      "imageGenerationPolicyHint": {
+        "allow": "Default behavior: image tools and image models pass through unchanged.",
+        "strip": "Removes the image_generation / image_gen tool declarations (top-level, Responses Lite, and matching tool_choice) and forwards the request as a plain text request. Other tools (shell, function, apply_patch, MCP, web search) are kept. Use this when the upstream group/plan does not support image generation but should still serve text and code.",
+        "block": "Requests that touch image generation (gpt-image-* models, /v1/images endpoints, or an image_generation tool/intent) return 403."
+      },
       "rpm": "Requests per minute",
       "rpmSuffix": "/min",
       "rpd": "Requests per day",

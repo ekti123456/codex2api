@@ -5997,8 +5997,31 @@ func sanitizeAPIKeyLimits(in database.APIKeyLimits) database.APIKeyLimits {
 		TokenLimit7d:           maxInt64(in.TokenLimit7d, 0),
 		TokenLimit30d:          maxInt64(in.TokenLimit30d, 0),
 		DisableImageGeneration: in.DisableImageGeneration,
+		ImageGenerationPolicy:  sanitizeImageGenerationPolicy(in),
+	}
+	// 归一后旧 bool 与新 policy 保持一致，避免两处配置漂移。
+	out.DisableImageGeneration = out.ImageGenerationPolicy == database.ImageGenerationPolicyBlock
+	if out.ImageGenerationPolicy == database.ImageGenerationPolicyAllow {
+		out.ImageGenerationPolicy = ""
 	}
 	return out
+}
+
+// sanitizeImageGenerationPolicy 归一图片工具策略取值（allow/strip/block），并兼容旧的
+// DisableImageGeneration bool：显式 policy 优先，未设时 bool=true 视为 block。
+func sanitizeImageGenerationPolicy(in database.APIKeyLimits) string {
+	switch strings.ToLower(strings.TrimSpace(in.ImageGenerationPolicy)) {
+	case database.ImageGenerationPolicyStrip:
+		return database.ImageGenerationPolicyStrip
+	case database.ImageGenerationPolicyBlock:
+		return database.ImageGenerationPolicyBlock
+	case database.ImageGenerationPolicyAllow:
+		return database.ImageGenerationPolicyAllow
+	}
+	if in.DisableImageGeneration {
+		return database.ImageGenerationPolicyBlock
+	}
+	return database.ImageGenerationPolicyAllow
 }
 
 // knownAPIKeyPlanFilters 是账号套餐白名单允许的取值集合。与前端 PlanMultiSelect 的

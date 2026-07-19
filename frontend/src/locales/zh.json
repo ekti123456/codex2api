@@ -2523,6 +2523,15 @@
       "planAllowHint": "选中后,该密钥仅调度命中所选套餐的账号(可多选);不选表示不限套餐。",
       "disableImageGeneration": "禁止生图",
       "disableImageGenerationHint": "开启后,该密钥禁止访问生图模型(gpt-image-*)与生图工具链路(image_generation 工具、/v1/images 端点),命中一律返回 403。默认关闭。",
+      "imageGenerationPolicy": "图片工具策略",
+      "imageGenerationPolicyAllow": "允许",
+      "imageGenerationPolicyStrip": "剥离后作为文本请求继续",
+      "imageGenerationPolicyBlock": "禁止(返回 403)",
+      "imageGenerationPolicyHint": {
+        "allow": "默认行为:图片工具与生图模型原样放行。",
+        "strip": "移除请求中的 image_generation / image_gen 工具声明(顶层、Responses Lite 内嵌以及指向图片工具的 tool_choice),把请求作为普通文本请求继续转发;shell、function、apply_patch、MCP、web search 等其他工具保留。适用于上游账号组/套餐不支持生图、但仍需承载文本和代码任务的场景。",
+        "block": "触及生图能力的请求(gpt-image-* 模型、/v1/images 端点,或带 image_generation 工具/意图)一律返回 403。"
+      },
       "rpm": "每分钟请求",
       "rpmSuffix": "/min",
       "rpd": "每天请求",

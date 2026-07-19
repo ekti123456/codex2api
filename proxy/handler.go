@@ -1812,13 +1812,15 @@ func (h *Handler) Responses(c *gin.Context) {
 	// previous_response_id 缓存按下游 API Key 隔离，防止跨用户注入他人对话历史。
 	respCacheOwner := responseCacheOwner(apiKeyID)
 	codexBody, expandedInputRaw := PrepareResponsesBodyForOwner(rawBody, respCacheOwner)
+	// strip 策略：剥离网关注入及客户端携带的图片工具能力声明，作为普通文本请求继续（issue #411）。
+	codexBody = applyImageGenerationStripPolicy(c, codexBody)
 	var openAIResponsesBody []byte
 	resetOpenAIResponsesBody := func() {
 		openAIResponsesBody = nil
 	}
 	getOpenAIResponsesBody := func() []byte {
 		if openAIResponsesBody == nil {
-			openAIResponsesBody = PrepareOpenAIResponsesBody(rawBody)
+			openAIResponsesBody = applyImageGenerationStripPolicy(c, PrepareOpenAIResponsesBody(rawBody))
 		}
 		return openAIResponsesBody
 	}
@@ -2937,6 +2939,8 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 
 	// 准备上游请求体（previous_response_id 缓存按下游 API Key 隔离）
 	codexBody, _ := PrepareCompactResponsesBodyForOwner(rawBody, responseCacheOwner(apiKeyID))
+	// strip 策略：剥离图片工具能力声明后作为普通文本请求继续（issue #411）。
+	codexBody = applyImageGenerationStripPolicy(c, codexBody)
 	if err := validateResponsesImageGenerationSizes(codexBody); err != nil {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidParameter, err.Error(), api.ErrorTypeInvalidRequest))
 		return
