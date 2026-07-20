@@ -1151,6 +1151,7 @@ export default function Settings() {
     codex_ws_busy_overflow_enabled: false,
     codex_ws_busy_patience_sec: 2,
     codex_continue_thinking_enabled: false,
+    overflow_auto_compact_enabled: false,
     codex_continue_max_rounds: 8,
     scheduler_mode: 'round_robin',
     affinity_mode: 'bounded',
@@ -2411,6 +2412,17 @@ export default function Settings() {
                   />
                 </SettingField>
               </div>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard title={t('settings.overflowAutoCompact')} description={t('settings.overflowAutoCompactDesc')} icon={<Layers className="size-4" />}>
+            <div className={SETTINGS_SWITCH_GRID}>
+              <SettingField label={t('settings.overflowAutoCompactEnabled')} description={t('settings.overflowAutoCompactEnabledDesc')} layout="switch">
+                <Switch
+                  checked={settingsForm.overflow_auto_compact_enabled}
+                  onCheckedChange={(checked) => autoSaveBooleanField('overflow_auto_compact_enabled', checked)}
+                />
+              </SettingField>
             </div>
           </SettingsCard>
 

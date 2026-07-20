@@ -1413,7 +1413,6 @@
     "imageTooltipNoDetails": "暂无详细图像信息",
     "unknownApiKey": "未记录",
     "costDetails": "成本明细",
-    "wsAcquireSuffix": " 取连",
     "wsAcquireTooltip": "本次请求获取上游 WebSocket 连接的耗时（busy 排队 + 探活 + 握手），已包含在首字耗时内。持续偏高说明同会话并发排队或账号连接容量吃紧。",
     "inputCost": "输入成本",
     "outputCost": "输出成本",
@@ -1462,7 +1461,8 @@
     "noEndpointStats": "暂无端点统计",
     "apiKeyStatsTitle": "密钥排行",
     "apiKeyStatsDesc": "按 API 密钥统计调用量。",
-    "noApiKeyStats": "暂无密钥统计"
+    "noApiKeyStats": "暂无密钥统计",
+    "tableWsAcquire": "取得连接"
   },
   "promptFilter": {
     "title": "Prompt 检查",
@@ -2328,7 +2328,11 @@
     "codexContinueThinking": "思考截断自动续想",
     "codexContinueThinkingDesc": "检测到上游按特征指纹截断思考（“516 降智”）时，自动携带已有思考续发请求并折叠成单次响应。每次续想都是一次真实上游请求，会成倍放大额度消耗，且属于显式绕过上游截断行为，风险自负。默认关闭。",
     "codexContinueMaxRounds": "最大续想轮数",
-    "codexContinueMaxRoundsDesc": "单次请求允许的上游请求总轮数（含首轮），到达上限后按当前结果返回。范围 1-32，默认 8。"
+    "codexContinueMaxRoundsDesc": "单次请求允许的上游请求总轮数（含首轮），到达上限后按当前结果返回。范围 1-32，默认 8。",
+    "overflowAutoCompact": "超窗自动压缩（实验性）",
+    "overflowAutoCompactDesc": "上游报上下文超窗（context_length_exceeded）时，网关自动把旧轮次摘要成一条上下文说明并重试一次，代替直接向客户端返回 400。",
+    "overflowAutoCompactEnabled": "启用超窗自动压缩",
+    "overflowAutoCompactEnabledDesc": "实验性功能，默认关闭。摘要通过内部模型调用完成，会消耗账号额度并增加约 10 秒延迟；摘要有损，最近轮次保留原文。也可在 API 密钥的 limits.auto_compact_overflow 按 Key 单独开启。"
   },
   "proxies": {
     "description": "管理代理池，支持轮询分配给账号使用",
