@@ -987,6 +987,7 @@ export interface UsageLog {
   output_tokens: number
   reasoning_tokens: number
   first_token_ms: number
+  ws_acquire_ms?: number
   reasoning_effort: string
   inbound_endpoint: string
   upstream_endpoint: string

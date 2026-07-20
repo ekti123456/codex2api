@@ -2222,6 +2222,14 @@ export default function Usage() {
                               {log.first_token_ms > 1000 ? `${(log.first_token_ms / 1000).toFixed(1)}s` : `${log.first_token_ms}ms`}
                             </span>
                           ) : <span className={`${usageTableMonoClass} text-muted-foreground`}>-</span>}
+                          {(log.ws_acquire_ms ?? 0) >= 500 && (
+                            <span
+                              className={`${usageTableMonoClass} ml-1 text-[10px] text-muted-foreground`}
+                              title={t('usage.wsAcquireTooltip')}
+                            >
+                              {(log.ws_acquire_ms as number) > 1000 ? `${((log.ws_acquire_ms as number) / 1000).toFixed(1)}s` : `${log.ws_acquire_ms}ms`}{t('usage.wsAcquireSuffix')}
+                            </span>
+                          )}
                         </TableCell>}
                         {visibleColumns.tokensPerSec && (
                           <TableCell>

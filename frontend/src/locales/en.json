@@ -1413,6 +1413,8 @@
     "imageTooltipNoDetails": "No image details recorded",
     "unknownApiKey": "Not Recorded",
     "costDetails": "Cost Details",
+    "wsAcquireSuffix": " acquire",
+    "wsAcquireTooltip": "Time spent acquiring the upstream WebSocket connection for this request (busy queueing + probe + handshake); included in first-token time. Consistently high values indicate same-session queueing or account connection capacity pressure.",
     "inputCost": "Input Cost",
     "outputCost": "Output Cost",
     "cacheReadCost": "Cache Read Cost",

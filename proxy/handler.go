@@ -640,6 +640,7 @@ func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInp
 	populateAPIKeyMetaFromContext(c, input)
 	populateClientIPFromRequest(c, input)
 	populateUserAgentMetaFromRequest(c, input)
+	populateWsAcquireFromRequest(c, input)
 	populateCompactUsageMetaFromRequest(c, input)
 	markCyberPolicyUsageKind(input)
 	h.logUsage(input)
@@ -1447,6 +1448,7 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 	allowAnonymous := h.cfg != nil && h.cfg.AllowAnonymousV1
 	return func(c *gin.Context) {
 		attachUserAgentAudit(c)
+		attachWsAcquireAudit(c)
 		// 如果没有配置任何密钥
 		if !h.hasAnyKeys() {
 			if allowAnonymous {

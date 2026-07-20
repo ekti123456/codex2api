@@ -422,6 +422,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		ctx = context.Background()
 	}
 	resetUpstreamUserAgentAudit(ctx)
+	resetWsAcquireAudit(ctx)
 	responsesLite := codexResponsesLiteRequested(requestBody, headers)
 
 	// Payload 规则改写：在 WS/HTTP 分叉前统一应用，两条上游路径共享改写结果。
@@ -563,6 +564,7 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 		ctx = context.Background()
 	}
 	resetUpstreamUserAgentAudit(ctx)
+	resetWsAcquireAudit(ctx)
 	responsesLite := codexResponsesLiteRequested(requestBody, headers)
 	requestBody, headers = prepareCodexResponsesLiteTransport(requestBody, headers, false, responsesLite)
 
@@ -702,6 +704,7 @@ func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Acc
 		ctx = context.Background()
 	}
 	resetUpstreamUserAgentAudit(ctx)
+	resetWsAcquireAudit(ctx)
 	responsesLite := codexResponsesLiteRequested(requestBody, headers)
 	requestBody, headers = prepareCodexResponsesLiteTransport(requestBody, headers, false, responsesLite)
 
@@ -739,6 +742,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 		ctx = context.Background()
 	}
 	resetUpstreamUserAgentAudit(ctx)
+	resetWsAcquireAudit(ctx)
 	responsesLite := codexResponsesLiteRequested(requestBody, headers)
 
 	account.Mu().RLock()

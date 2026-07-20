@@ -1413,6 +1413,8 @@
     "imageTooltipNoDetails": "暂无详细图像信息",
     "unknownApiKey": "未记录",
     "costDetails": "成本明细",
+    "wsAcquireSuffix": " 取连",
+    "wsAcquireTooltip": "本次请求获取上游 WebSocket 连接的耗时（busy 排队 + 探活 + 握手），已包含在首字耗时内。持续偏高说明同会话并发排队或账号连接容量吃紧。",
     "inputCost": "输入成本",
     "outputCost": "输出成本",
     "cacheReadCost": "缓存读取成本",
