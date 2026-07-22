@@ -39,6 +39,12 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 		return h.probeUsageViaGrokBilling(ctx, account)
 	}
 
+	// Agent Identity 无 AccessToken，wham（Bearer）用不了；直接用 /responses 最小探针
+	// （ExecuteRequest 会用 AgentAssertion 动态签名），从响应头同步用量快照。
+	if account.IsCodexAgentIdentity() {
+		return h.probeUsageViaResponses(ctx, account)
+	}
+
 	account.Mu().RLock()
 	hasToken := account.AccessToken != ""
 	account.Mu().RUnlock()

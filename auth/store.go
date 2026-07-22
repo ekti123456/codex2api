@@ -105,6 +105,13 @@ type Account struct {
 	Models                  []string
 	ModelMapping            string
 	CodexClientMetadataMode string
+	// Codex Agent Identity（auth_mode=agentIdentity）：不存 AT/RT，每次上游请求用
+	// agent_private_key(Ed25519, PKCS#8 base64) 动态签名。AgentTaskID 由 task 注册获得，
+	// 运行时缓存并落库(credentials.task_id)。
+	CodexAuthMode   string
+	AgentRuntimeID  string
+	AgentPrivateKey string
+	AgentTaskID     string
 	// Grok OAuth 刷新元数据（upstream_type=grok 且 OAuth 凭据时有效）
 	GrokClientID      string
 	GrokTokenEndpoint string
@@ -330,6 +337,10 @@ func (a *Account) hasDispatchCredentialLocked() bool {
 	if a.isGrokAPILocked() {
 		// API Key 直接可调度；OAuth 需等 AT 刷出（RT-only 由后台/lazy 刷新补齐）
 		return strings.TrimSpace(a.APIKey) != "" || strings.TrimSpace(a.AccessToken) != ""
+	}
+	if a.isCodexAgentIdentityLocked() {
+		// Agent Identity 无 AT：私钥即凭据，可直接调度（task_id 于请求前惰性注册）。
+		return true
 	}
 	return strings.TrimSpace(a.AccessToken) != ""
 }
@@ -3752,7 +3763,11 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 	codexClientMetadataMode := NormalizeCodexClientMetadataMode(row.GetCredential("codex_client_metadata_mode"))
 	isOpenAIResponsesAccount := strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamOpenAIResponses) && strings.TrimSpace(baseURL) != "" && strings.TrimSpace(apiKey) != ""
 	isGrokAccount := strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamGrok) && (strings.TrimSpace(apiKey) != "" || rt != "" || at != "")
-	if rt == "" && st == "" && at == "" && !isOpenAIResponsesAccount && !isGrokAccount {
+	// Agent Identity：无 AT/RT，凭 agent_private_key 动态签名，不能被下面的空凭据 guard 拒绝。
+	isAgentIdentityAccount := strings.EqualFold(strings.TrimSpace(row.GetCredential("auth_mode")), CodexAuthModeAgentIdentity) &&
+		strings.TrimSpace(row.GetCredential("agent_runtime_id")) != "" &&
+		strings.TrimSpace(row.GetCredential("agent_private_key")) != ""
+	if rt == "" && st == "" && at == "" && !isOpenAIResponsesAccount && !isGrokAccount && !isAgentIdentityAccount {
 		log.Printf("[账号 %d] 缺少 refresh_token、session_token 和 access_token，跳过", row.ID)
 		return nil
 	}
@@ -3831,6 +3846,23 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		account.Status = StatusError
 		account.ErrorMsg = row.ErrorMessage
 		account.HealthTier = HealthTierRisky
+	}
+
+	// Agent Identity：填充签名凭据与身份信息（无 AT/RT，健康档直接置为 healthy）
+	if isAgentIdentityAccount {
+		account.CodexAuthMode = CodexAuthModeAgentIdentity
+		account.AgentRuntimeID = strings.TrimSpace(row.GetCredential("agent_runtime_id"))
+		account.AgentPrivateKey = strings.TrimSpace(row.GetCredential("agent_private_key"))
+		account.AgentTaskID = strings.TrimSpace(row.GetCredential("task_id"))
+		account.AccountID = row.GetCredential("account_id")
+		account.Email = row.GetCredential("email")
+		account.PlanType = row.GetCredential("plan_type")
+		if account.PlanType == "" {
+			account.PlanType = "free"
+		}
+		if account.Status != StatusError {
+			account.HealthTier = HealthTierHealthy
+		}
 	}
 
 	// 尝试从 credentials 恢复已有的 AT

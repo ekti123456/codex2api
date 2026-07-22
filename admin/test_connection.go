@@ -58,7 +58,8 @@ func (h *Handler) TestConnection(c *gin.Context) {
 	}
 
 	isOpenAIResponsesAccount := account.IsRelayStyle()
-	if !isOpenAIResponsesAccount && account.GetAccessToken() == "" {
+	// Agent Identity 无 AT，凭私钥动态签名，跳过 AT 预检（请求走 Codex 执行器动态签名）。
+	if !isOpenAIResponsesAccount && !account.IsCodexAgentIdentity() && account.GetAccessToken() == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "账号没有可用的 Access Token，请先刷新"})
 		return
 	}
@@ -892,7 +893,7 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 	testCtx, cancel := context.WithTimeout(ctx, batchTestAccountTimeout)
 	defer cancel()
 
-	if !acc.IsRelayStyle() && acc.GetAccessToken() == "" {
+	if !acc.IsRelayStyle() && !acc.IsCodexAgentIdentity() && acc.GetAccessToken() == "" {
 		acc.Mu().RLock()
 		hasRefreshToken := acc.RefreshToken != ""
 		acc.Mu().RUnlock()
@@ -994,7 +995,7 @@ func (h *Handler) runRecycleBinSingleTest(ctx context.Context, acc *auth.Account
 	testCtx, cancel := context.WithTimeout(ctx, batchTestAccountTimeout)
 	defer cancel()
 
-	if !acc.IsRelayStyle() && acc.GetAccessToken() == "" {
+	if !acc.IsRelayStyle() && !acc.IsCodexAgentIdentity() && acc.GetAccessToken() == "" {
 		return "failed", "账号缺少可用的 Access Token"
 	}
 

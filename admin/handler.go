@@ -169,7 +169,8 @@ func (h *Handler) probeImportedAccountUsage(ctx context.Context, accountID int64
 	if account == nil {
 		return
 	}
-	if account.GetAccessToken() == "" {
+	// Agent Identity 无 AccessToken 但可凭签名做 /responses 探针，不能被此门拦下。
+	if account.GetAccessToken() == "" && !account.IsCodexAgentIdentity() {
 		return
 	}
 	probeFn := h.usageProbeFunc()
@@ -180,6 +181,10 @@ func (h *Handler) probeImportedAccountUsage(ctx context.Context, accountID int64
 	defer cancel()
 	if err := probeFn(probeCtx, account); err != nil {
 		log.Printf("导入账号 %d 用量采样失败 (%s): %v", accountID, source, err)
+		return
+	}
+	// Agent Identity 无 OAuth 身份合并需求（无 RT/AT），探针后直接返回。
+	if account.IsCodexAgentIdentity() {
 		return
 	}
 	// AT / codex_at 账号的 OAuth 身份（email + account_id）在插入时无法从
@@ -422,6 +427,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/accounts", h.ListAccounts)
 	api.POST("/accounts", h.AddAccount)
 	api.POST("/accounts/at", h.AddATAccount)
+	api.POST("/accounts/codex/agent-identity", h.ImportCodexAgentIdentity)
+	api.POST("/accounts/codex/agent-identity/import", h.BatchImportCodexAgentIdentity)
 	api.POST("/accounts/openai-responses", h.AddOpenAIResponsesAccount)
 	api.POST("/accounts/openai-responses/models", h.FetchOpenAIResponsesModels)
 	api.PATCH("/accounts/:id/openai-responses", h.UpdateOpenAIResponsesAccount)
@@ -432,7 +439,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/grok/sso/import", h.ImportGrokSSO)
 	api.POST("/accounts/grok/refresh/import", h.ImportGrokRefreshTokens)
 	api.POST("/accounts/grok/import", h.BatchImportGrokAccounts)
-	api.POST("/accounts/grok/oauth/auth-url", h.GenerateGrokAuthURL)         // 兼容旧客户端
+	api.POST("/accounts/grok/oauth/auth-url", h.GenerateGrokAuthURL)        // 兼容旧客户端
 	api.POST("/accounts/grok/oauth/exchange-code", h.ExchangeGrokOAuthCode) // 兼容旧客户端
 	api.PATCH("/accounts/:id/grok", h.UpdateGrokAccount)
 	api.POST("/accounts/:id/oauth/exchange-code", h.UpdateOAuthAccountCode)
@@ -747,92 +754,93 @@ func isDashboardRateLimitedAccount(status string, cooldownReason string) bool {
 // ==================== Accounts ====================
 
 type accountResponse struct {
-	ID                         int64                      `json:"id"`
-	Name                       string                     `json:"name"`
-	Email                      string                     `json:"email"`
-	EmailDomain                string                     `json:"email_domain,omitempty"`
-	ChatGPTAccountID           string                     `json:"chatgpt_account_id,omitempty"`
-	PlanType                   string                     `json:"plan_type"`
-	SubscriptionExpiresAt      string                     `json:"subscription_expires_at,omitempty"`
-	Status                     string                     `json:"status"`
-	ErrorMessage               string                     `json:"error_message,omitempty"`
-	ATOnly                     bool                       `json:"at_only"`
-	CreditEnabled              bool                       `json:"credit_enabled"`
-	CreditSkipUsageWindow      bool                       `json:"credit_skip_usage_window"`
-	SkipWarmTier               bool                       `json:"skip_warm_tier"`
-	AccountType                string                     `json:"account_type,omitempty"`
-	AccessTokenType            string                     `json:"access_token_type,omitempty"`
-	OpenAIResponsesAPI         bool                       `json:"openai_responses_api,omitempty"`
-	GrokAPI                    bool                       `json:"grok_api,omitempty"`
-	GrokAuthKind               string                     `json:"grok_auth_kind,omitempty"`
-	GrokBilling                json.RawMessage            `json:"grok_billing,omitempty"`
+	ID                         int64                       `json:"id"`
+	Name                       string                      `json:"name"`
+	Email                      string                      `json:"email"`
+	EmailDomain                string                      `json:"email_domain,omitempty"`
+	ChatGPTAccountID           string                      `json:"chatgpt_account_id,omitempty"`
+	PlanType                   string                      `json:"plan_type"`
+	SubscriptionExpiresAt      string                      `json:"subscription_expires_at,omitempty"`
+	Status                     string                      `json:"status"`
+	ErrorMessage               string                      `json:"error_message,omitempty"`
+	ATOnly                     bool                        `json:"at_only"`
+	CreditEnabled              bool                        `json:"credit_enabled"`
+	CreditSkipUsageWindow      bool                        `json:"credit_skip_usage_window"`
+	SkipWarmTier               bool                        `json:"skip_warm_tier"`
+	AccountType                string                      `json:"account_type,omitempty"`
+	AccessTokenType            string                      `json:"access_token_type,omitempty"`
+	OpenAIResponsesAPI         bool                        `json:"openai_responses_api,omitempty"`
+	GrokAPI                    bool                        `json:"grok_api,omitempty"`
+	AgentIdentity              bool                        `json:"agent_identity,omitempty"`
+	GrokAuthKind               string                      `json:"grok_auth_kind,omitempty"`
+	GrokBilling                json.RawMessage             `json:"grok_billing,omitempty"`
 	GrokRateLimit              *auth.GrokRateLimitSnapshot `json:"grok_rate_limit,omitempty"`
-	BaseURL                    string                     `json:"base_url,omitempty"`
-	Models                     []string                   `json:"models,omitempty"`
-	ModelMapping               string                     `json:"model_mapping,omitempty"`
-	CodexClientMetadataMode    string                     `json:"codex_client_metadata_mode,omitempty"`
-	CustomHeaders              map[string]string          `json:"custom_headers,omitempty"`
-	HealthTier                 string                     `json:"health_tier"`
-	SchedulerScore             float64                    `json:"scheduler_score"`
-	DispatchScore              float64                    `json:"dispatch_score"`
-	ScoreBiasOverride          *int64                     `json:"score_bias_override"`
-	ScoreBiasEffective         int64                      `json:"score_bias_effective"`
-	BaseConcurrencyOverride    *int64                     `json:"base_concurrency_override"`
-	BaseConcurrencyEffective   int64                      `json:"base_concurrency_effective"`
-	ConcurrencyCap             int64                      `json:"dynamic_concurrency_limit"`
-	ProxyURL                   string                     `json:"proxy_url"`
-	CreatedAt                  string                     `json:"created_at"`
-	UpdatedAt                  string                     `json:"updated_at"`
-	CodexUsageUpdatedAt        string                     `json:"codex_usage_updated_at,omitempty"`
-	Codex5HUsageUpdatedAt      string                     `json:"codex_5h_usage_updated_at,omitempty"`
-	ActiveRequests             int64                      `json:"active_requests"`
-	TotalRequests              int64                      `json:"total_requests"`
-	LastUsedAt                 string                     `json:"last_used_at"`
-	SuccessRequests            int64                      `json:"success_requests"`
-	ErrorRequests              int64                      `json:"error_requests"`
-	RetryErrorRequests         int64                      `json:"retry_error_requests"`
-	RateLimitAttempts          int64                      `json:"rate_limit_attempts"`
-	UsagePercent7d             *float64                   `json:"usage_percent_7d"`
-	UsagePercent5h             *float64                   `json:"usage_percent_5h"`
-	RateLimitResetCredits      *int                       `json:"rate_limit_reset_credits"`
-	ApplicableResetCredits     *int                       `json:"applicable_reset_credits"`
-	CreditsBalance             *string                    `json:"credits_balance"`
-	CreditsHasCredits          *bool                      `json:"credits_has_credits"`
-	CreditsUnlimited           *bool                      `json:"credits_unlimited"`
-	CreditsOverageLimitReached *bool                      `json:"credits_overage_limit_reached"`
-	AutoPause5hThreshold       *float64                   `json:"auto_pause_5h_threshold"`
-	AutoPause7dThreshold       *float64                   `json:"auto_pause_7d_threshold"`
-	AutoPause5hDisabled        bool                       `json:"auto_pause_5h_disabled"`
-	AutoPause7dDisabled        bool                       `json:"auto_pause_7d_disabled"`
-	UsageLimitOverride         *bool                      `json:"ignore_usage_limit_status_override"`
-	UsageLimitEffective        bool                       `json:"ignore_usage_limit_status_effective"`
-	DispatchCountLimit         *int64                     `json:"dispatch_count_limit"`
-	DispatchCountUsed          int64                      `json:"dispatch_count_used,omitempty"`
-	DispatchCountResetAt       string                     `json:"dispatch_count_reset_at,omitempty"`
-	DispatchCountLimited       bool                       `json:"dispatch_count_limited,omitempty"`
-	SchedulerPriority          *int64                     `json:"scheduler_priority"`
-	Usage5hDetail              *accountUsageWindow        `json:"usage_5h_detail,omitempty"`
-	Usage7dDetail              *accountUsageWindow        `json:"usage_7d_detail,omitempty"`
-	Reset5hAt                  string                     `json:"reset_5h_at,omitempty"`
-	Reset7dAt                  string                     `json:"reset_7d_at,omitempty"`
-	Window7dKind               string                     `json:"usage_window_7d_kind,omitempty"`    // "monthly"(team 月窗)/"weekly"/""；供前端标「30天」而非误标「7天」
-	Window7dSeconds            *int64                     `json:"usage_window_7d_seconds,omitempty"` // 长窗口真实周期秒数
-	Billed5h                   *float64                   `json:"billed_5h"`
-	Billed7d                   *float64                   `json:"billed_7d"`
-	ScoreBreakdown             schedulerBreakdownResponse `json:"scheduler_breakdown"`
-	LastUnauthorizedAt         string                     `json:"last_unauthorized_at,omitempty"`
-	LastRateLimitedAt          string                     `json:"last_rate_limited_at,omitempty"`
-	LastTimeoutAt              string                     `json:"last_timeout_at,omitempty"`
-	LastServerErrorAt          string                     `json:"last_server_error_at,omitempty"`
-	CooldownReason             string                     `json:"cooldown_reason,omitempty"`
-	CooldownUntil              string                     `json:"cooldown_until,omitempty"`
-	ModelCooldowns             []modelCooldownResponse    `json:"model_cooldowns,omitempty"`
-	Enabled                    bool                       `json:"enabled"`
-	Locked                     bool                       `json:"locked"`
-	AllowedAPIKeyIDs           []int64                    `json:"allowed_api_key_ids"`
-	Tags                       []string                   `json:"tags"`
-	GroupIDs                   []int64                    `json:"group_ids"`
-	Note                       string                     `json:"note"`
+	BaseURL                    string                      `json:"base_url,omitempty"`
+	Models                     []string                    `json:"models,omitempty"`
+	ModelMapping               string                      `json:"model_mapping,omitempty"`
+	CodexClientMetadataMode    string                      `json:"codex_client_metadata_mode,omitempty"`
+	CustomHeaders              map[string]string           `json:"custom_headers,omitempty"`
+	HealthTier                 string                      `json:"health_tier"`
+	SchedulerScore             float64                     `json:"scheduler_score"`
+	DispatchScore              float64                     `json:"dispatch_score"`
+	ScoreBiasOverride          *int64                      `json:"score_bias_override"`
+	ScoreBiasEffective         int64                       `json:"score_bias_effective"`
+	BaseConcurrencyOverride    *int64                      `json:"base_concurrency_override"`
+	BaseConcurrencyEffective   int64                       `json:"base_concurrency_effective"`
+	ConcurrencyCap             int64                       `json:"dynamic_concurrency_limit"`
+	ProxyURL                   string                      `json:"proxy_url"`
+	CreatedAt                  string                      `json:"created_at"`
+	UpdatedAt                  string                      `json:"updated_at"`
+	CodexUsageUpdatedAt        string                      `json:"codex_usage_updated_at,omitempty"`
+	Codex5HUsageUpdatedAt      string                      `json:"codex_5h_usage_updated_at,omitempty"`
+	ActiveRequests             int64                       `json:"active_requests"`
+	TotalRequests              int64                       `json:"total_requests"`
+	LastUsedAt                 string                      `json:"last_used_at"`
+	SuccessRequests            int64                       `json:"success_requests"`
+	ErrorRequests              int64                       `json:"error_requests"`
+	RetryErrorRequests         int64                       `json:"retry_error_requests"`
+	RateLimitAttempts          int64                       `json:"rate_limit_attempts"`
+	UsagePercent7d             *float64                    `json:"usage_percent_7d"`
+	UsagePercent5h             *float64                    `json:"usage_percent_5h"`
+	RateLimitResetCredits      *int                        `json:"rate_limit_reset_credits"`
+	ApplicableResetCredits     *int                        `json:"applicable_reset_credits"`
+	CreditsBalance             *string                     `json:"credits_balance"`
+	CreditsHasCredits          *bool                       `json:"credits_has_credits"`
+	CreditsUnlimited           *bool                       `json:"credits_unlimited"`
+	CreditsOverageLimitReached *bool                       `json:"credits_overage_limit_reached"`
+	AutoPause5hThreshold       *float64                    `json:"auto_pause_5h_threshold"`
+	AutoPause7dThreshold       *float64                    `json:"auto_pause_7d_threshold"`
+	AutoPause5hDisabled        bool                        `json:"auto_pause_5h_disabled"`
+	AutoPause7dDisabled        bool                        `json:"auto_pause_7d_disabled"`
+	UsageLimitOverride         *bool                       `json:"ignore_usage_limit_status_override"`
+	UsageLimitEffective        bool                        `json:"ignore_usage_limit_status_effective"`
+	DispatchCountLimit         *int64                      `json:"dispatch_count_limit"`
+	DispatchCountUsed          int64                       `json:"dispatch_count_used,omitempty"`
+	DispatchCountResetAt       string                      `json:"dispatch_count_reset_at,omitempty"`
+	DispatchCountLimited       bool                        `json:"dispatch_count_limited,omitempty"`
+	SchedulerPriority          *int64                      `json:"scheduler_priority"`
+	Usage5hDetail              *accountUsageWindow         `json:"usage_5h_detail,omitempty"`
+	Usage7dDetail              *accountUsageWindow         `json:"usage_7d_detail,omitempty"`
+	Reset5hAt                  string                      `json:"reset_5h_at,omitempty"`
+	Reset7dAt                  string                      `json:"reset_7d_at,omitempty"`
+	Window7dKind               string                      `json:"usage_window_7d_kind,omitempty"`    // "monthly"(team 月窗)/"weekly"/""；供前端标「30天」而非误标「7天」
+	Window7dSeconds            *int64                      `json:"usage_window_7d_seconds,omitempty"` // 长窗口真实周期秒数
+	Billed5h                   *float64                    `json:"billed_5h"`
+	Billed7d                   *float64                    `json:"billed_7d"`
+	ScoreBreakdown             schedulerBreakdownResponse  `json:"scheduler_breakdown"`
+	LastUnauthorizedAt         string                      `json:"last_unauthorized_at,omitempty"`
+	LastRateLimitedAt          string                      `json:"last_rate_limited_at,omitempty"`
+	LastTimeoutAt              string                      `json:"last_timeout_at,omitempty"`
+	LastServerErrorAt          string                      `json:"last_server_error_at,omitempty"`
+	CooldownReason             string                      `json:"cooldown_reason,omitempty"`
+	CooldownUntil              string                      `json:"cooldown_until,omitempty"`
+	ModelCooldowns             []modelCooldownResponse     `json:"model_cooldowns,omitempty"`
+	Enabled                    bool                        `json:"enabled"`
+	Locked                     bool                        `json:"locked"`
+	AllowedAPIKeyIDs           []int64                     `json:"allowed_api_key_ids"`
+	Tags                       []string                    `json:"tags"`
+	GroupIDs                   []int64                     `json:"group_ids"`
+	Note                       string                      `json:"note"`
 	// 图片配额信息
 	ImageQuotaRemaining *int   `json:"image_quota_remaining,omitempty"`
 	ImageQuotaTotal     *int   `json:"image_quota_total,omitempty"`
@@ -972,6 +980,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			AccessTokenType:          accountAccessTokenType(row),
 			OpenAIResponsesAPI:       isOpenAIResponsesAccount,
 			GrokAPI:                  isGrokAccount,
+			AgentIdentity:            isAgentIdentityCredentialRow(row),
 			GrokAuthKind:             grokAuthKind,
 			GrokBilling:              grokBilling,
 			BaseURL:                  baseURL,
@@ -3117,10 +3126,59 @@ type importToken struct {
 	codex5HResetAt        string
 	codex5HUsageUpdatedAt string
 	codexUsageUpdatedAt   string
+	// Agent Identity（auth_mode=agentIdentity）：无 RT/ST/AT，凭私钥动态签名。
+	agentRuntimeID  string
+	agentPrivateKey string
+	agentTaskID     string
+	chatgptUserID   string
+	agentFedRAMP    bool
+}
+
+func (t importToken) isAgentIdentity() bool {
+	return strings.TrimSpace(t.agentRuntimeID) != "" && strings.TrimSpace(t.agentPrivateKey) != ""
+}
+
+// jsonAgentIdentityNode 是 CLIProxyAPI/Sub2Api 导出里的 agent_identity 子对象。
+type jsonAgentIdentityNode struct {
+	AgentRuntimeID  string `json:"agent_runtime_id"`
+	AgentPrivateKey string `json:"agent_private_key"`
+	TaskID          string `json:"task_id"`
+	AccountID       string `json:"account_id"`
+	ChatGPTUserID   string `json:"chatgpt_user_id"`
+	Email           string `json:"email"`
+	PlanType        string `json:"plan_type"`
+	FedRAMP         bool   `json:"chatgpt_account_is_fedramp"`
+}
+
+// agentIdentityImportTokenFromNode 把 agent_identity 子对象转成 importToken（无有效字段时返回 ok=false）。
+func agentIdentityImportTokenFromNode(node *jsonAgentIdentityNode, fallbackName string) (importToken, bool) {
+	if node == nil {
+		return importToken{}, false
+	}
+	runtimeID := strings.TrimSpace(node.AgentRuntimeID)
+	privateKey := strings.TrimSpace(node.AgentPrivateKey)
+	if runtimeID == "" || privateKey == "" {
+		return importToken{}, false
+	}
+	email := strings.TrimSpace(node.Email)
+	name := firstNonEmpty(fallbackName, email)
+	return importToken{
+		name:            name,
+		email:           email,
+		accountID:       strings.TrimSpace(node.AccountID),
+		planType:        strings.TrimSpace(node.PlanType),
+		agentRuntimeID:  runtimeID,
+		agentPrivateKey: privateKey,
+		agentTaskID:     strings.TrimSpace(node.TaskID),
+		chatgptUserID:   strings.TrimSpace(node.ChatGPTUserID),
+		agentFedRAMP:    node.FedRAMP,
+	}, true
 }
 
 // jsonAccountEntry CLIProxyAPI 凭证 JSON 条目
 type jsonAccountEntry struct {
+	AuthMode              string                 `json:"auth_mode"`
+	AgentIdentity         *jsonAgentIdentityNode `json:"agent_identity"`
 	RefreshToken          string                 `json:"refresh_token"`
 	SessionToken          string                 `json:"session_token"`
 	SessionTokenCamel     string                 `json:"sessionToken"`
@@ -3169,6 +3227,8 @@ type sub2apiAccountEntry struct {
 }
 
 type sub2apiAccountCredentials struct {
+	AuthMode              string                 `json:"auth_mode"`
+	AgentIdentity         *jsonAgentIdentityNode `json:"agent_identity"`
 	RefreshToken          string                 `json:"refresh_token"`
 	SessionToken          string                 `json:"session_token"`
 	SessionTokenCamel     string                 `json:"sessionToken"`
@@ -3274,6 +3334,12 @@ func jsonAccountEntriesToTokens(entries []jsonAccountEntry) []importToken {
 		accID := firstNonEmpty(entry.AccountID, entry.User.ID, entry.Account.ID)
 		expiresAt := firstNonEmpty(entry.ExpiresAt.String(), entry.Expired.String(), entry.Expires.String())
 
+		// Agent Identity 条目：无 RT/ST/AT，单独识别。
+		if tok, ok := agentIdentityImportTokenFromNode(entry.AgentIdentity, name); ok {
+			tokens = append(tokens, tok)
+			continue
+		}
+
 		if rt != "" || st != "" || at != "" {
 			tokens = append(tokens, importToken{
 				refreshToken:          rt,
@@ -3320,6 +3386,12 @@ func parseSub2APIJSONImportTokens(data []byte) []importToken {
 		planType := firstNonEmpty(c.PlanType, c.PlanTypeCamel, c.Account.PlanType, c.Account.PlanTypeCamel)
 		accID := firstNonEmpty(c.AccountID, c.User.ID, c.Account.ID)
 		expiresAt := firstNonEmpty(c.ExpiresAt.String(), c.Expired.String(), c.Expires.String())
+
+		// Agent Identity 条目：无 RT/ST/AT，单独识别。
+		if tok, ok := agentIdentityImportTokenFromNode(c.AgentIdentity, name); ok {
+			tokens = append(tokens, tok)
+			continue
+		}
 
 		if rt != "" || st != "" || at != "" {
 			tokens = append(tokens, importToken{
@@ -3732,6 +3804,25 @@ func sendSSEJSON(c *gin.Context, event any) {
 // importAccountsCommon 公共的去重、并发插入、SSE 进度推送逻辑（支持 RT 和 AT-only 混合导入）
 func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, proxyURL string, allowDuplicate bool, customHeaders ...map[string]string) {
 	importCustomHeaders := firstCustomHeaders(customHeaders)
+
+	// Agent Identity 条目单独处理（无 RT/ST/AT，按 runtime_id 去重、动态签名），
+	// 从常规 token 流里拆出，计数在收尾时并入总响应。
+	var agentTokens, regularTokens []importToken
+	for _, t := range tokens {
+		if t.isAgentIdentity() {
+			agentTokens = append(agentTokens, t)
+		} else {
+			regularTokens = append(regularTokens, t)
+		}
+	}
+	agentSuccess, agentDuplicate, agentFailed := 0, 0, 0
+	if len(agentTokens) > 0 {
+		agentCtx, agentCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		agentSuccess, agentDuplicate, agentFailed = h.importAgentIdentityTokens(agentCtx, agentTokens, proxyURL, allowDuplicate)
+		agentCancel()
+		log.Printf("导入: Agent Identity 条目 %d 个（新增 %d，跳过 %d，失败 %d）", len(agentTokens), agentSuccess, agentDuplicate, agentFailed)
+	}
+	tokens = regularTokens
 	// 文件内去重：
 	// 1) 当条目可解析出 email + account_id 时，以它作为 OAuth 身份键；
 	//    同身份同 RT/ST/AT 折叠，同身份不同 RT/ST/AT 整组跳过，避免任选一个覆盖。
@@ -3909,19 +4000,21 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 		}
 	}
 
-	total := len(unique) + ambiguousOAuthIdentityCount
+	total := len(unique) + ambiguousOAuthIdentityCount + len(agentTokens)
 	if allowDuplicate {
-		total = len(tokens)
+		total = len(tokens) + len(agentTokens)
 	}
+	duplicateCount += agentDuplicate
 
 	log.Printf("导入去重: 总计 %d 条, 数据库已存在 %d 条, 待导入 %d 条", total, duplicateCount, len(newTokens))
 
 	if len(newTokens) == 0 {
+		// 无常规 token 待导入（可能是纯 Agent Identity 文件）；反映 agent 计数。
 		c.JSON(http.StatusOK, gin.H{
-			"message":   fmt.Sprintf("所有 %d 个 Token 已存在或已跳过，无需导入", total),
-			"success":   0,
+			"message":   fmt.Sprintf("导入完成：新增 %d 个，跳过 %d 个，失败 %d 个", agentSuccess, duplicateCount, agentFailed),
+			"success":   agentSuccess,
 			"duplicate": duplicateCount,
-			"failed":    0,
+			"failed":    agentFailed,
 			"total":     total,
 		})
 		return
@@ -4095,10 +4188,10 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 	wg.Wait()
 	close(done)
 
-	// 发送完成事件
-	suc := int(atomic.LoadInt64(&successCount))
+	// 发送完成事件（并入 Agent Identity 计数）
+	suc := int(atomic.LoadInt64(&successCount)) + agentSuccess
 	upd := int(atomic.LoadInt64(&updatedCount))
-	fai := int(atomic.LoadInt64(&failCount))
+	fai := int(atomic.LoadInt64(&failCount)) + agentFailed
 	sendImportEvent(c, importEvent{
 		Type: "complete", Current: total, Total: total,
 		Success: suc, Updated: upd, Duplicate: duplicateCount, Failed: fai,

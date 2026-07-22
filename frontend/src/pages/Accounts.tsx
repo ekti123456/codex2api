@@ -35,6 +35,7 @@ import type {
   AccountGroup,
   SystemSettings,
   RecycleBinAccountRow,
+  AgentIdentityImportItem,
 } from "../types";
 import { getErrorMessage } from "../utils/error";
 import { formatRelativeTime, formatBeijingTime } from "../utils/time";
@@ -889,8 +890,19 @@ export default function Accounts() {
     done: false,
   });
   const [addMethod, setAddMethod] = useState<
-    "rt" | "st" | "at" | "session" | "openai" | "oauth"
+    "rt" | "st" | "at" | "session" | "openai" | "oauth" | "agentIdentity"
   >("oauth");
+  const [agentIdentityJson, setAgentIdentityJson] = useState("");
+  const [agentIdentityProxyUrl, setAgentIdentityProxyUrl] = useState("");
+  const agentIdentityFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [agentIdentityFilesImporting, setAgentIdentityFilesImporting] =
+    useState(false);
+  const [agentIdentityFilesResult, setAgentIdentityFilesResult] = useState<{
+    total: number;
+    imported: number;
+    failed: number;
+    items: AgentIdentityImportItem[];
+  } | null>(null);
   const [atForm, setAtForm] = useState<AddATAccountRequest>({
     access_token: "",
     proxy_url: "",
@@ -2083,6 +2095,67 @@ export default function Accounts() {
       setSubmitting(false);
     }
   };
+  const handleAddAgentIdentity = async () => {
+    if (!agentIdentityJson.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      const res = await api.importCodexAgentIdentity({
+        auth_json: agentIdentityJson,
+        proxy_url: agentIdentityProxyUrl.trim() || undefined,
+      });
+      showToast(
+        res.email
+          ? t("accounts.agentIdentitySuccess", { email: res.email })
+          : t("accounts.addSuccess"),
+      );
+      setShowAdd(false);
+      setAgentIdentityJson("");
+      setAgentIdentityProxyUrl("");
+      void reload();
+    } catch (error) {
+      showToast(
+        t("accounts.addFailed", { error: getErrorMessage(error) }),
+        "error",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleImportAgentIdentityFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setAgentIdentityFilesImporting(true);
+    setAgentIdentityFilesResult(null);
+    try {
+      const files = await Promise.all(
+        Array.from(fileList).map((file) => file.text()),
+      );
+      const res = await api.batchImportCodexAgentIdentity({
+        files,
+        proxy_url: agentIdentityProxyUrl.trim() || undefined,
+      });
+      setAgentIdentityFilesResult(res);
+      if (res.imported > 0) {
+        showToast(
+          t("accounts.agentIdentityFileImportDone", {
+            imported: res.imported,
+            total: res.total,
+          }),
+        );
+        void reload();
+      }
+    } catch (error) {
+      showToast(
+        t("accounts.addFailed", { error: getErrorMessage(error) }),
+        "error",
+      );
+    } finally {
+      setAgentIdentityFilesImporting(false);
+      if (agentIdentityFileInputRef.current)
+        agentIdentityFileInputRef.current.value = "";
+    }
+  };
+
   const handleAddOpenAIResponses = async () => {
     const models = openAIForm.models;
     if (!openAIForm.api_key.trim() || models.length === 0) return;
@@ -5331,6 +5404,7 @@ export default function Accounts() {
                                   {(account.at_only ||
                                     account.openai_responses_api ||
                                     account.grok_api ||
+                                    account.agent_identity ||
                                     account.enabled === false ||
                                     account.locked ||
                                     (account.rate_limit_reset_credits ?? 0) >
@@ -5341,6 +5415,12 @@ export default function Accounts() {
                                       {account.at_only && (
                                         <span className="inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:text-amber-400 dark:ring-amber-400/20">
                                           {formatAccessTokenBadge(account)}
+                                        </span>
+                                      )}
+                                      {account.agent_identity && (
+                                        <span className="inline-flex items-center gap-0.5 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 ring-1 ring-inset ring-blue-600/20 dark:bg-blue-950 dark:text-blue-400 dark:ring-blue-400/20">
+                                          <Fingerprint className="size-2.5" />
+                                          Agent Identity
                                         </span>
                                       )}
                                       {account.openai_responses_api && (
@@ -5793,6 +5873,15 @@ export default function Accounts() {
                   >
                     {submitting ? t("accounts.adding") : t("accounts.submit")}
                   </Button>
+                ) : addMethod === "agentIdentity" ? (
+                  <Button
+                    onClick={() => void handleAddAgentIdentity()}
+                    disabled={submitting || !agentIdentityJson.trim()}
+                  >
+                    {submitting
+                      ? t("accounts.adding")
+                      : t("accounts.agentIdentityImportBtn")}
+                  </Button>
                 ) : oauthStep === "generate" ? (
                   <Button
                     onClick={() => void handleOAuthGenerate()}
@@ -5816,7 +5905,7 @@ export default function Accounts() {
             }
           >
             {/* Tab switcher */}
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1 p-1 mb-5 rounded-xl bg-muted/50 border border-border">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 mb-5 rounded-xl bg-muted/50 border border-border">
               <button
                 onClick={() => {
                   setAddMethod("oauth");
@@ -5887,6 +5976,17 @@ export default function Accounts() {
               >
                 <KeyRound className="size-3.5" />
                 {t("accounts.addMethodOpenAI")}
+              </button>
+              <button
+                onClick={() => setAddMethod("agentIdentity")}
+                className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold whitespace-nowrap transition-all ${
+                  addMethod === "agentIdentity"
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Fingerprint className="size-3.5" />
+                {t("accounts.addMethodAgentIdentity")}
               </button>
             </div>
 
@@ -6191,6 +6291,110 @@ export default function Accounts() {
                 {renderCustomHeadersTextarea({
                   value: addCustomHeadersText,
                   onChange: setAddCustomHeadersText,
+                })}
+              </div>
+            ) : addMethod === "agentIdentity" ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-300">
+                  {t("accounts.agentIdentityHint")}
+                </div>
+                <div>
+                  <label className="block mb-2 text-sm font-semibold text-muted-foreground">
+                    {t("accounts.agentIdentityJsonLabel")} *
+                  </label>
+                  <textarea
+                    className="w-full min-h-[240px] p-3 border border-input rounded-xl bg-background text-sm resize-y font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+                    placeholder={t("accounts.agentIdentityJsonPlaceholder")}
+                    value={agentIdentityJson}
+                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                      setAgentIdentityJson(event.target.value)
+                    }
+                    rows={10}
+                  />
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {t("accounts.agentIdentityNote")}
+                  </p>
+                </div>
+
+                {/* 多文件批量导入 */}
+                <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">
+                        {t("accounts.agentIdentityFileImportTitle")}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {t("accounts.agentIdentityFileImportDesc")}
+                      </p>
+                    </div>
+                    <input
+                      ref={agentIdentityFileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      multiple
+                      className="hidden"
+                      onChange={(e) =>
+                        void handleImportAgentIdentityFiles(e.target.files)
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={agentIdentityFilesImporting}
+                      onClick={() => agentIdentityFileInputRef.current?.click()}
+                    >
+                      {agentIdentityFilesImporting ? (
+                        <>
+                          <Loader2 className="size-3.5 animate-spin" />
+                          {t("accounts.agentIdentityFileImporting")}
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="size-3.5" />
+                          {t("accounts.agentIdentityFileImportBtn")}
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {agentIdentityFilesResult ? (
+                    <div className="mt-3 space-y-2 border-t border-border pt-3">
+                      <p className="text-sm font-semibold text-foreground">
+                        {t("accounts.agentIdentityFileImportSummary", {
+                          imported: agentIdentityFilesResult.imported,
+                          total: agentIdentityFilesResult.total,
+                        })}
+                      </p>
+                      <div className="max-h-40 space-y-1 overflow-y-auto">
+                        {agentIdentityFilesResult.items.map((item, index) => (
+                          <div
+                            key={index}
+                            className="flex items-start gap-1.5 text-xs"
+                          >
+                            {item.ok ? (
+                              <CheckCircle className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+                            ) : (
+                              <XCircle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+                            )}
+                            <span className="min-w-0 flex-1 break-all text-muted-foreground">
+                              {item.email || `#${index + 1}`}
+                              {item.ok
+                                ? null
+                                : item.error
+                                  ? ` — ${item.error}`
+                                  : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {renderProxyInput({
+                  value: agentIdentityProxyUrl,
+                  testKey: "add-agent-identity",
+                  onChange: setAgentIdentityProxyUrl,
                 })}
               </div>
             ) : (
@@ -10782,7 +10986,8 @@ function AccountRowActionsMenu({
     authJsonExporting ||
     account.at_only ||
     account.openai_responses_api ||
-    account.grok_api;
+    account.grok_api ||
+    account.agent_identity;
   const resetCredits = account.rate_limit_reset_credits ?? 0;
 
   const items: HeaderActionMenuItem[] = [
@@ -10817,7 +11022,10 @@ function AccountRowActionsMenu({
       icon: <FileJson className="size-3.5" />,
       disabled: authJsonDisabled,
       title:
-        account.at_only || account.openai_responses_api || account.grok_api
+        account.at_only ||
+        account.openai_responses_api ||
+        account.grok_api ||
+        account.agent_identity
           ? t("accounts.authJsonDisabled")
           : undefined,
       onSelect: onGenerateAuthJson,

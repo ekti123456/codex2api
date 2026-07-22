@@ -79,6 +79,7 @@ export interface AccountRow {
   account_type?: string
   openai_responses_api?: boolean
   grok_api?: boolean
+  agent_identity?: boolean
   grok_auth_kind?: string
   grok_billing?: GrokBillingDetail
   // 上游逐请求返回的配额余量(x-ratelimit-* 头),运行时快照
@@ -261,6 +262,39 @@ export interface AddATAccountRequest {
   proxy_url: string
   allow_duplicate?: boolean
   custom_headers?: Record<string, string> | null
+}
+
+// Codex Agent Identity auth.json 导入（auth_mode=agentIdentity，动态签名，不存 AT/RT）。
+export interface ImportAgentIdentityRequest {
+  name?: string
+  auth_json: string
+  proxy_url?: string
+}
+
+export interface ImportAgentIdentityResponse {
+  message: string
+  id: number
+  email?: string
+}
+
+// Agent Identity auth.json 文件批量导入(每项一个文件的原始 JSON 内容)。
+export interface AgentIdentityBatchImportRequest {
+  files: string[]
+  proxy_url?: string
+}
+
+export interface AgentIdentityImportItem {
+  email?: string
+  id?: number
+  ok: boolean
+  error?: string
+}
+
+export interface AgentIdentityBatchImportResponse {
+  total: number
+  imported: number
+  failed: number
+  items: AgentIdentityImportItem[]
 }
 
 export interface AddOpenAIResponsesAccountRequest {
