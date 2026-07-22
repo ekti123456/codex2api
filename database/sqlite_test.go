@@ -1130,6 +1130,7 @@ func TestSQLiteSystemSettingsPersistsFirstTokenTimeoutSeconds(t *testing.T) {
 		StreamFlushIntervalMS:             20,
 		FirstTokenMode:                    "loose",
 		FirstTokenTimeoutSeconds:          17,
+		FirstTokenExcludesWsAcquire:       true,
 		BillingTierPolicy:                 "requested",
 		ImageStorageConfig:                "{}",
 		SchedulerMode:                     "round_robin",
@@ -1157,6 +1158,9 @@ func TestSQLiteSystemSettingsPersistsFirstTokenTimeoutSeconds(t *testing.T) {
 	}
 	if settings.FirstTokenTimeoutSeconds != 17 {
 		t.Fatalf("FirstTokenTimeoutSeconds = %d, want 17", settings.FirstTokenTimeoutSeconds)
+	}
+	if !settings.FirstTokenExcludesWsAcquire {
+		t.Fatal("FirstTokenExcludesWsAcquire = false, want true")
 	}
 	if !settings.PromptFilterStrictTerminalEnabled {
 		t.Fatal("PromptFilterStrictTerminalEnabled = false, want true")
@@ -1250,6 +1254,21 @@ func TestSQLiteSystemSettingsPersistsFirstTokenTimeoutSeconds(t *testing.T) {
 	}
 	if settings.PublicImageStudioPageEnabled {
 		t.Fatal("PublicImageStudioPageEnabled = true, want false")
+	}
+
+	settings.FirstTokenExcludesWsAcquire = false
+	if err := db.UpdateSystemSettings(ctx, settings); err != nil {
+		t.Fatalf("UpdateSystemSettings false FirstTokenExcludesWsAcquire 返回错误: %v", err)
+	}
+	settings, err = db.GetSystemSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSystemSettings after false FirstTokenExcludesWsAcquire 返回错误: %v", err)
+	}
+	if settings.FirstTokenExcludesWsAcquire {
+		t.Fatal("FirstTokenExcludesWsAcquire = true, want false")
+	}
+	if settings.PromptFilterAdvancedConfig != `{"normalization":{"enabled":true}}` {
+		t.Fatalf("PromptFilterAdvancedConfig after FirstTokenExcludesWsAcquire update = %q", settings.PromptFilterAdvancedConfig)
 	}
 }
 
