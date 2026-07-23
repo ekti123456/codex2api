@@ -2238,6 +2238,7 @@ func TestRestoreAccountRejectsDuplicateOAuthIdentity(t *testing.T) {
 		"refresh_token": "rt-active",
 		"email":         "restore@example.com",
 		"account_id":    "acc-restore",
+		"workspace_id":  "workspace-restore",
 	}, "")
 	if err != nil {
 		t.Fatalf("Insert active: %v", err)
@@ -2246,6 +2247,7 @@ func TestRestoreAccountRejectsDuplicateOAuthIdentity(t *testing.T) {
 		"refresh_token": "rt-deleted",
 		"email":         "Restore@Example.com",
 		"account_id":    "acc-restore",
+		"workspace_id":  "workspace-restore",
 	}, "")
 	if err != nil {
 		t.Fatalf("Insert deleted: %v", err)
