@@ -28,6 +28,8 @@ import {
   Pencil,
 } from "lucide-react";
 import { api, getAdminKey } from "../api";
+import type { ProxyRow } from "../api";
+import { ProxyPoolSelect } from "../components/ProxyPoolSelect";
 import type {
   AccountRow,
   AccountHealthBucket,
@@ -243,6 +245,23 @@ export default function GrokAccounts({
   const [showAdd, setShowAdd] = useState(false);
   const [addMethod, setAddMethod] = useState<AddMethod>("oauth_link");
   const [form, setForm] = useState<AddGrokAccountRequest>(EMPTY_FORM);
+  // 代理池条目：账号表单"从代理池选择"下拉的数据源；加载失败静默留空
+  // （选择器为空时自动隐藏，不影响手动填代理）。
+  const [proxyPool, setProxyPool] = useState<ProxyRow[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listProxies()
+      .then((res) => {
+        if (!cancelled) setProxyPool(res.proxies ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setProxyPool([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [modelDraft, setModelDraft] = useState("");
   const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -543,11 +562,14 @@ export default function GrokAccounts({
     if (!editAccount) return;
     setEditSubmitting(true);
     try {
+      const isApiKey = editAccount.grok_auth_kind === "api_key";
       await api.updateGrokAccount(editAccount.id, {
         auth_kind: (editAccount.grok_auth_kind ??
           "oauth") as AddGrokAccountRequest["auth_kind"],
         models: editForm.models,
-        base_url: editForm.base_url.trim(),
+        // OAuth 端点固定官方 cli-chat-proxy，Base URL 字段已隐藏；提交空值交
+        // 后端规整为默认，避免持久化用户已看不到的自定义值。
+        base_url: isApiKey ? editForm.base_url.trim() : "",
         model_mapping: editForm.model_mapping.trim(),
         proxy_url: editForm.proxy_url.trim(),
       });
@@ -566,9 +588,13 @@ export default function GrokAccounts({
     if (!credentialReady) return;
     setSubmitting(true);
     try {
+      const isApiKey = addMethod === "api_key";
       await api.addGrokAccount({
         ...form,
-        auth_kind: addMethod === "api_key" ? "api_key" : "oauth",
+        // OAuth 走固定官方端点，忽略表单里可能残留的自定义 base_url
+        // （用户从 API Key 模式切过来时不再上送）。
+        base_url: isApiKey ? form.base_url : "",
+        auth_kind: isApiKey ? "api_key" : "oauth",
       });
       showToast(t("grok.addSuccess"));
       setShowAdd(false);
@@ -1607,13 +1633,23 @@ export default function GrokAccounts({
                     <label className="mb-2 block text-sm font-medium text-muted-foreground">
                       {t("grok.proxyUrl")}
                     </label>
-                    <Input
-                      placeholder="http://user:pass@host:port"
-                      value={form.proxy_url ?? ""}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm((f) => ({ ...f, proxy_url: e.target.value }))
-                      }
-                    />
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        className="min-w-0 flex-1"
+                        placeholder="http://user:pass@host:port"
+                        value={form.proxy_url ?? ""}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm((f) => ({ ...f, proxy_url: e.target.value }))
+                        }
+                      />
+                      <ProxyPoolSelect
+                        className="shrink-0 sm:w-[180px]"
+                        proxies={proxyPool}
+                        onSelect={(url) =>
+                          setForm((f) => ({ ...f, proxy_url: url }))
+                        }
+                      />
+                    </div>
                   </div>
                 </>
               ) : (
@@ -1719,13 +1755,21 @@ export default function GrokAccounts({
                 <label className="mb-2 block text-sm font-medium text-muted-foreground">
                   {t("grok.proxyUrl")}
                 </label>
-                <Input
-                  placeholder="http://user:pass@host:port"
-                  value={form.proxy_url ?? ""}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm((f) => ({ ...f, proxy_url: e.target.value }))
-                  }
-                />
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    className="min-w-0 flex-1"
+                    placeholder="http://user:pass@host:port"
+                    value={form.proxy_url ?? ""}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm((f) => ({ ...f, proxy_url: e.target.value }))
+                    }
+                  />
+                  <ProxyPoolSelect
+                    className="shrink-0 sm:w-[180px]"
+                    proxies={proxyPool}
+                    onSelect={(url) => setForm((f) => ({ ...f, proxy_url: url }))}
+                  />
+                </div>
               </div>
 
               {ssoResult ? (
@@ -1805,21 +1849,25 @@ export default function GrokAccounts({
                 </div>
               )}
 
-              <div>
-                <label className="mb-2 block text-sm font-medium text-muted-foreground">
-                  {t("grok.baseUrl")}
-                </label>
-                <Input
-                  placeholder={t("grok.baseUrlPlaceholder")}
-                  value={form.base_url ?? ""}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm((f) => ({ ...f, base_url: e.target.value }))
-                  }
-                />
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  {t("grok.baseUrlHint")}
-                </p>
-              </div>
+              {/* OAuth 端点固定为 grok 官方 cli-chat-proxy，无需手填 Base URL；
+                  仅 API Key 方式允许自定义上游（默认 api.x.ai）。 */}
+              {addMethod === "api_key" ? (
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-muted-foreground">
+                    {t("grok.baseUrl")}
+                  </label>
+                  <Input
+                    placeholder={t("grok.baseUrlPlaceholder")}
+                    value={form.base_url ?? ""}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm((f) => ({ ...f, base_url: e.target.value }))
+                    }
+                  />
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {t("grok.baseUrlHint")}
+                  </p>
+                </div>
+              ) : null}
 
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -1893,13 +1941,21 @@ export default function GrokAccounts({
                 <label className="mb-2 block text-sm font-medium text-muted-foreground">
                   {t("grok.proxyUrl")}
                 </label>
-                <Input
-                  placeholder="http://user:pass@host:port"
-                  value={form.proxy_url ?? ""}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm((f) => ({ ...f, proxy_url: e.target.value }))
-                  }
-                />
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    className="min-w-0 flex-1"
+                    placeholder="http://user:pass@host:port"
+                    value={form.proxy_url ?? ""}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm((f) => ({ ...f, proxy_url: e.target.value }))
+                    }
+                  />
+                  <ProxyPoolSelect
+                    className="shrink-0 sm:w-[180px]"
+                    proxies={proxyPool}
+                    onSelect={(url) => setForm((f) => ({ ...f, proxy_url: url }))}
+                  />
+                </div>
               </div>
             </>
           )}
@@ -2124,30 +2180,44 @@ export default function GrokAccounts({
               )}
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-muted-foreground">
-                {t("grok.baseUrl")}
-              </label>
-              <Input
-                placeholder={t("grok.baseUrlPlaceholder")}
-                value={editForm.base_url}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setEditForm((f) => ({ ...f, base_url: e.target.value }))
-                }
-              />
-            </div>
+            {/* OAuth 账号端点固定为官方 cli-chat-proxy，不显示 Base URL；
+                仅 API Key 账号允许自定义上游（默认 api.x.ai）。 */}
+            {editAccount.grok_auth_kind === "api_key" ? (
+              <div>
+                <label className="mb-2 block text-sm font-medium text-muted-foreground">
+                  {t("grok.baseUrl")}
+                </label>
+                <Input
+                  placeholder={t("grok.baseUrlPlaceholder")}
+                  value={editForm.base_url}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setEditForm((f) => ({ ...f, base_url: e.target.value }))
+                  }
+                />
+              </div>
+            ) : null}
 
             <div>
               <label className="mb-2 block text-sm font-medium text-muted-foreground">
                 {t("grok.proxyUrl")}
               </label>
-              <Input
-                placeholder="http://user:pass@host:port"
-                value={editForm.proxy_url}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setEditForm((f) => ({ ...f, proxy_url: e.target.value }))
-                }
-              />
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  className="min-w-0 flex-1"
+                  placeholder="http://user:pass@host:port"
+                  value={editForm.proxy_url}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setEditForm((f) => ({ ...f, proxy_url: e.target.value }))
+                  }
+                />
+                <ProxyPoolSelect
+                  className="shrink-0 sm:w-[180px]"
+                  proxies={proxyPool}
+                  onSelect={(url) =>
+                    setEditForm((f) => ({ ...f, proxy_url: url }))
+                  }
+                />
+              </div>
             </div>
           </div>
         ) : null}

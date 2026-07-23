@@ -2529,6 +2529,7 @@
   },
   "proxies": {
     "description": "管理代理池，支持轮询分配给账号使用",
+    "selectFromPool": "从代理池选择",
     "addFirstProxy": "请先添加至少一个代理",
     "poolEnabled": "代理池已启用",
     "poolDisabled": "代理池已关闭",

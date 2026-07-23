@@ -2529,6 +2529,7 @@
   },
   "proxies": {
     "description": "Manage proxy pool with round-robin distribution to accounts",
+    "selectFromPool": "Select from proxy pool",
     "addFirstProxy": "Please add at least one proxy first",
     "poolEnabled": "Proxy Pool Enabled",
     "poolDisabled": "Proxy Pool Disabled",
