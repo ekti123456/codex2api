@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.6.1 - 2026-07-23
+
+### Features
+
+- **Key × account cross-usage attribution, from both the account and the API-key views.** A shared pool split across several downstream keys can now be attributed in both directions off the existing `usage_logs` (which already carries both `account_id` and `api_key_id`, so no write-path change). The account usage modal gains a **by-key breakdown** — which downstream keys drove this account and how much (requests / tokens / cost, with a share bar and a requests/tokens/cost metric toggle). The Token Usage panel's per-key rows become **expandable**: opening a row drills into a **by-account breakdown** — which upstream accounts that key called and how much — fetched on demand for the panel's current time range, with multiple rows expandable at once. Backed by a new admin endpoint `GET /usage/api-keys/:id/accounts` and `AccountUsageDetail.by_api_key`.
+- **Usage analysis available from the Grok account page.** Grok accounts get the same usage-analysis entry as Codex accounts — a `BarChart3` action opens the shared usage modal (overview / detail / quality tabs plus the by-key breakdown), reusing `AccountUsageModal` with the Codex-only credit-voucher / reset-credit sections hidden via a new `showCreditSettings` prop. The account detail sheet also grows a Grok-aware variant (rate-limit filter, OAuth-vs-API-key fields, Codex-only actions suppressed).
+
+### Fixes
+
+- **`/v1/alpha/search` no longer 400s on `prompt_cache_key` (#433).** Newer Codex clients (`codex_vscode/0.144.5`) include a Responses-style `prompt_cache_key` in the standalone `/alpha/search` request body, but the ChatGPT backend search endpoint has a narrower schema and rejects it with `400 Unknown parameter: 'prompt_cache_key'` — so every request with a search task failed while sibling `/responses` calls (which accept the field) succeeded. The standalone-search handler forwarded the body verbatim; it now sanitizes the body before forwarding, dropping fields the search endpoint doesn't accept. `prompt_cache_key` is a caching hint with no meaning for a retrieval call, so removing it doesn't change search semantics; the strip is kept as a field list so any future incompatible parameter is a one-line addition.
+
 ## v2.6.0 - 2026-07-23
 
 ### Features
