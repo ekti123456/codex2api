@@ -159,3 +159,44 @@ func TestExtractResponsesSSEOutputText(t *testing.T) {
 		t.Fatalf("no completed event should yield empty, got %q", got)
 	}
 }
+
+func TestShouldDeferPreContentSSEEvent(t *testing.T) {
+	cases := []struct {
+		name             string
+		eventType        string
+		contentTokenSeen bool
+		gotTerminal      bool
+		passthrough      bool
+		want             bool
+	}{
+		// 开关关闭:preflight 元数据与生命周期事件均缓冲(v2.5.9 基线)
+		{"off_rate_limits_deferred", "codex.rate_limits", false, false, false, true},
+		{"off_codex_metadata_deferred", "codex.response.metadata", false, false, false, true},
+		{"off_http_metadata_deferred", "response.metadata", false, false, false, true},
+		{"off_created_deferred", "response.created", false, false, false, true},
+		{"off_in_progress_deferred", "response.in_progress", false, false, false, true},
+		// 开关开启:preflight 元数据立即写出,生命周期事件仍缓冲
+		{"on_rate_limits_passthrough", "codex.rate_limits", false, false, true, false},
+		{"on_codex_metadata_passthrough", "codex.response.metadata", false, false, true, false},
+		{"on_http_metadata_passthrough", "response.metadata", false, false, true, false},
+		{"on_created_still_deferred", "response.created", false, false, true, true},
+		{"on_in_progress_still_deferred", "response.in_progress", false, false, true, true},
+		// 内容开始后不再缓冲,与开关状态无关
+		{"content_seen_off", "codex.rate_limits", true, false, false, false},
+		{"content_seen_on", "response.created", true, false, true, false},
+		// 终态后不再缓冲
+		{"terminal_off", "response.in_progress", false, true, false, false},
+		// 内容/失败事件从不缓冲
+		{"delta_never_deferred", "response.output_text.delta", false, false, false, false},
+		{"failed_never_deferred", "response.failed", false, false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldDeferPreContentSSEEvent(tc.eventType, tc.contentTokenSeen, tc.gotTerminal, tc.passthrough)
+			if got != tc.want {
+				t.Fatalf("shouldDeferPreContentSSEEvent(%q, seen=%t, terminal=%t, passthrough=%t) = %t, want %t",
+					tc.eventType, tc.contentTokenSeen, tc.gotTerminal, tc.passthrough, got, tc.want)
+			}
+		})
+	}
+}

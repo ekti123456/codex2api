@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -232,5 +233,47 @@ func TestGrokSubjectFromAccessToken(t *testing.T) {
 	}
 	if got := GrokSubjectFromAccessToken("not-a-jwt"); got != "" {
 		t.Fatalf("expected empty, got %q", got)
+	}
+}
+
+// Grok 账号页的一键清理只应删除 Grok 账号，同状态的其它平台账号必须保留。
+func TestCleanGrokByRuntimeStatusOnlyTouchesGrokAccounts(t *testing.T) {
+	grokBanned := &Account{
+		DBID:         1,
+		UpstreamType: UpstreamGrok,
+		APIKey:       "xai-banned",
+		Status:       StatusReady,
+		HealthTier:   HealthTierBanned,
+	}
+	codexBanned := &Account{
+		DBID:        2,
+		AccessToken: "codex-banned",
+		Status:      StatusReady,
+		HealthTier:  HealthTierBanned,
+	}
+	grokError := &Account{
+		DBID:         3,
+		UpstreamType: UpstreamGrok,
+		APIKey:       "xai-error",
+		Status:       StatusError,
+	}
+
+	store := &Store{accounts: []*Account{grokBanned, codexBanned, grokError}}
+
+	if cleaned := store.CleanGrokByRuntimeStatus(context.Background(), "unauthorized"); cleaned != 1 {
+		t.Fatalf("CleanGrokByRuntimeStatus(unauthorized) cleaned = %d, want 1", cleaned)
+	}
+	if store.FindByID(1) != nil {
+		t.Fatal("封禁的 Grok 账号应被清理")
+	}
+	if store.FindByID(2) == nil {
+		t.Fatal("封禁的非 Grok 账号不应被 Grok 清理波及")
+	}
+
+	if cleaned := store.CleanGrokByRuntimeStatus(context.Background(), "error"); cleaned != 1 {
+		t.Fatalf("CleanGrokByRuntimeStatus(error) cleaned = %d, want 1", cleaned)
+	}
+	if store.FindByID(3) != nil {
+		t.Fatal("错误状态的 Grok 账号应被清理")
 	}
 }

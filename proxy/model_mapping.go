@@ -264,7 +264,7 @@ func accountModelMappingAliases(account *auth.Account) []string {
 			continue
 		}
 		mappedModel, ok := resolveConfiguredModelMapping(rule.From, account.OpenAIResponsesModelMapping(), accountModels)
-		if !ok || mappedModel == "" || !account.SupportsOpenAIResponsesModel(mappedModel) {
+		if !ok || mappedModel == "" || !relayAccountSupportsModel(account, mappedModel) {
 			continue
 		}
 		aliases = append(aliases, rule.From)

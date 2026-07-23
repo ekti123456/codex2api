@@ -2710,6 +2710,43 @@ func TestDeactivatedWorkspace402MarksAccountError(t *testing.T) {
 	}
 }
 
+// TestAgentRuntimeDeleted403MarksAccountBanned 验证代理请求会将 runtime 已删除的账号标记为封禁。
+func TestAgentRuntimeDeleted403MarksAccountBanned(t *testing.T) {
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2, TestConcurrency: 1, TestModel: "gpt-5.4"})
+	account := &auth.Account{DBID: 42, AccessToken: "at", Status: auth.StatusReady, HealthTier: auth.HealthTierHealthy}
+	handler := &Handler{store: store}
+	body := []byte(`{"error":{"message":"Agent runtime has been deleted.","type":null,"code":"biscuit_baker_service_agent_error_status","param":null},"status":403}`)
+
+	if !IsAgentRuntimeDeletedError(body) {
+		t.Fatal("expected deleted Agent runtime body to be detected")
+	}
+	if IsAgentRuntimeDeletedError([]byte(`{"error":{"message":"Agent runtime has been deleted.","code":"permission_denied"}}`)) {
+		t.Fatal("unrelated error code must not be detected as deleted Agent runtime")
+	}
+	if got := upstreamErrorKind(http.StatusForbidden, body, codex429Decision{}); got != "agent_runtime_deleted" {
+		t.Fatalf("upstreamErrorKind = %q, want agent_runtime_deleted", got)
+	}
+
+	handler.applyCooldownForModel(account, http.StatusForbidden, body, &http.Response{Header: make(http.Header)}, "gpt-5.4")
+
+	if got := account.RuntimeStatus(); got != "unauthorized" {
+		t.Fatalf("RuntimeStatus() = %q, want unauthorized", got)
+	}
+	if !account.IsBanned() {
+		t.Fatal("account should be in banned health tier")
+	}
+	_, cooldownUntil := account.GetCooldownSnapshot()
+	if remaining := time.Until(cooldownUntil); remaining < 23*time.Hour+59*time.Minute || remaining > 24*time.Hour {
+		t.Fatalf("cooldown remaining = %s, want approximately 24h", remaining)
+	}
+	account.Mu().RLock()
+	errorMsg := account.ErrorMsg
+	account.Mu().RUnlock()
+	if !strings.Contains(errorMsg, "Agent runtime has been deleted") {
+		t.Fatalf("ErrorMsg = %q, want deleted runtime message", errorMsg)
+	}
+}
+
 func TestSendFinalUpstreamError_UsageLimitRewrites429(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

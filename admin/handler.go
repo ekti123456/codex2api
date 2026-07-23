@@ -479,6 +479,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/clean-banned", h.CleanBanned)
 	api.POST("/accounts/clean-rate-limited", h.CleanRateLimited)
 	api.POST("/accounts/clean-error", h.CleanError)
+	api.POST("/accounts/grok/clean-banned", h.CleanGrokBanned)
+	api.POST("/accounts/grok/clean-error", h.CleanGrokError)
 	api.GET("/accounts/export", h.ExportAccounts)
 	api.POST("/accounts/migrate", h.MigrateAccounts)
 	api.GET("/accounts/event-trend", h.GetAccountEventTrend)
@@ -741,11 +743,11 @@ func isDashboardAbnormalAccount(status string) bool {
 
 func isDashboardRateLimitedAccount(status string, cooldownReason string) bool {
 	switch status {
-	case "rate_limited", "usage_exhausted", "quota_paused", "rate_limited_5h", "rate_limited_7d":
+	case "rate_limited", "usage_exhausted", "usage_limited", "quota_paused", "rate_limited_5h", "rate_limited_7d":
 		return true
 	}
 	switch cooldownReason {
-	case "rate_limited", "rate_limited_5h", "rate_limited_7d":
+	case "rate_limited", "rate_limited_5h", "rate_limited_7d", "usage_limited":
 		return true
 	}
 	return false
@@ -775,6 +777,7 @@ type accountResponse struct {
 	GrokAuthKind               string                      `json:"grok_auth_kind,omitempty"`
 	GrokBilling                json.RawMessage             `json:"grok_billing,omitempty"`
 	GrokRateLimit              *auth.GrokRateLimitSnapshot `json:"grok_rate_limit,omitempty"`
+	GrokFreeQuota              *auth.GrokFreeQuotaSnapshot `json:"grok_free_quota,omitempty"`
 	BaseURL                    string                      `json:"base_url,omitempty"`
 	Models                     []string                    `json:"models,omitempty"`
 	ModelMapping               string                      `json:"model_mapping,omitempty"`
@@ -1017,6 +1020,9 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			if isGrokAccount {
 				if snap, hasSnap := acc.GetGrokRateLimitSnapshot(); hasSnap {
 					resp.GrokRateLimit = &snap
+				}
+				if snap, hasSnap := acc.GetGrokFreeQuotaSnapshot(); hasSnap {
+					resp.GrokFreeQuota = &snap
 				}
 			}
 			acc.Mu().RLock()
@@ -6389,233 +6395,243 @@ func (h *Handler) DeleteAPIKey(c *gin.Context) {
 // ==================== Settings ====================
 
 type settingsResponse struct {
-	SiteName                           string  `json:"site_name"`
-	SiteLogo                           string  `json:"site_logo"`
-	BackgroundImage                    string  `json:"background_image"`
-	BackgroundOpacity                  int     `json:"background_opacity"`
-	BackgroundBlur                     int     `json:"background_blur"`
-	BackgroundGlassOpacity             int     `json:"background_glass_opacity"`
-	BackgroundGlassBlur                int     `json:"background_glass_blur"`
-	MaxConcurrency                     int     `json:"max_concurrency"`
-	GlobalRPM                          int     `json:"global_rpm"`
-	TestModel                          string  `json:"test_model"`
-	TestContent                        string  `json:"test_content"`
-	TestConcurrency                    int     `json:"test_concurrency"`
-	BackgroundRefreshIntervalMinutes   int     `json:"background_refresh_interval_minutes"`
-	UsageProbeMaxAgeMinutes            int     `json:"usage_probe_max_age_minutes"`
-	UsageProbeConcurrency              int     `json:"usage_probe_concurrency"`
-	UsageProbeResponsesFallbackEnabled bool    `json:"usage_probe_responses_fallback_enabled"`
-	RecoveryProbeIntervalMinutes       int     `json:"recovery_probe_interval_minutes"`
-	LazyMode                           bool    `json:"lazy_mode"`
-	ProxyURL                           string  `json:"proxy_url"`
-	PgMaxConns                         int     `json:"pg_max_conns"`
-	RedisPoolSize                      int     `json:"redis_pool_size"`
-	AutoCleanUnauthorized              bool    `json:"auto_clean_unauthorized"`
-	AutoCleanRateLimited               bool    `json:"auto_clean_rate_limited"`
-	AdminSecret                        string  `json:"admin_secret"`
-	AdminAuthSource                    string  `json:"admin_auth_source"`
-	AutoCleanFullUsage                 bool    `json:"auto_clean_full_usage"`
-	AutoCleanError                     bool    `json:"auto_clean_error"`
-	AutoCleanExpired                   bool    `json:"auto_clean_expired"`
-	AutoResetCreditsEnabled            bool    `json:"auto_reset_credits_enabled"`
-	AutoResetCreditsBeforeExpiryMin    int     `json:"auto_reset_credits_before_expiry_min"`
-	ProxyPoolEnabled                   bool    `json:"proxy_pool_enabled"`
-	FastSchedulerEnabled               bool    `json:"fast_scheduler_enabled"`
-	CodexForceWebsocket                bool    `json:"codex_force_websocket"`
-	CodexWSKeepaliveEnabled            bool    `json:"codex_ws_keepalive_enabled"`
-	CodexWSKeepaliveIntervalSec        int     `json:"codex_ws_keepalive_interval_sec"`
-	CodexWSHideUpstreamErrors          bool    `json:"codex_ws_hide_upstream_errors"`
-	CodexWSSilentRetryEnabled          bool    `json:"codex_ws_silent_retry_enabled"`
-	CodexWSSilentMaxRetries            int     `json:"codex_ws_silent_max_retries"`
-	CodexWSSizeRouterEnabled           bool    `json:"codex_ws_size_router_enabled"`
-	CodexWSBusyAcquireMaxWaitSec       int     `json:"codex_ws_busy_acquire_max_wait_sec"`
-	CodexWSBusyOverflowEnabled         bool    `json:"codex_ws_busy_overflow_enabled"`
-	CodexWSBusyPatienceSec             int     `json:"codex_ws_busy_patience_sec"`
-	OverflowAutoCompactEnabled         bool    `json:"overflow_auto_compact_enabled"`
-	FirstTokenExcludesWsAcquire        bool    `json:"first_token_excludes_ws_acquire"`
-	CodexContinueThinkingEnabled       bool    `json:"codex_continue_thinking_enabled"`
-	CodexContinueMaxRounds             int     `json:"codex_continue_max_rounds"`
-	CodexCLIVersionSyncEnabled         bool    `json:"codex_cli_version_sync_enabled"`
-	CodexCLIVersionSyncIntervalHours   int     `json:"codex_cli_version_sync_interval_hours"`
-	CodexSyncedCLIVersion              string  `json:"codex_synced_cli_version"`
-	SchedulerMode                      string  `json:"scheduler_mode"`
-	AffinityMode                       string  `json:"affinity_mode"`
-	MaxRetries                         int     `json:"max_retries"`
-	MaxRateLimitRetries                int     `json:"max_rate_limit_retries"`
-	RetryIntervalMS                    int     `json:"retry_interval_ms"`
-	TransportRetryPolicy               string  `json:"transport_retry_policy"`
-	AllowRemoteMigration               bool    `json:"allow_remote_migration"`
-	DatabaseDriver                     string  `json:"database_driver"`
-	DatabaseLabel                      string  `json:"database_label"`
-	CacheDriver                        string  `json:"cache_driver"`
-	CacheLabel                         string  `json:"cache_label"`
-	ExpiredCleaned                     int     `json:"expired_cleaned,omitempty"`
-	ModelMapping                       string  `json:"model_mapping"`
-	CodexModelMapping                  string  `json:"codex_model_mapping"`
-	PayloadRules                       string  `json:"payload_rules"`
-	ReasoningEffortModels              string  `json:"reasoning_effort_models"`
-	ResinURL                           string  `json:"resin_url"`
-	ResinPlatformName                  string  `json:"resin_platform_name"`
-	PromptFilterEnabled                bool    `json:"prompt_filter_enabled"`
-	PromptFilterMode                   string  `json:"prompt_filter_mode"`
-	PromptFilterThreshold              int     `json:"prompt_filter_threshold"`
-	PromptFilterStrictThreshold        int     `json:"prompt_filter_strict_threshold"`
-	PromptFilterStrictTerminalEnabled  bool    `json:"prompt_filter_strict_terminal_enabled"`
-	PromptFilterAdvancedConfig         string  `json:"prompt_filter_advanced_config"`
-	PromptFilterLogMatches             bool    `json:"prompt_filter_log_matches"`
-	PromptFilterMaxTextLength          int     `json:"prompt_filter_max_text_length"`
-	PromptFilterSensitiveWords         string  `json:"prompt_filter_sensitive_words"`
-	PromptFilterCustomPatterns         string  `json:"prompt_filter_custom_patterns"`
-	PromptFilterDisabledPatterns       string  `json:"prompt_filter_disabled_patterns"`
-	PromptFilterReviewEnabled          bool    `json:"prompt_filter_review_enabled"`
-	PromptFilterReviewAPIKeyConfigured bool    `json:"prompt_filter_review_api_key_configured"`
-	PromptFilterReviewAPIKeyCount      int     `json:"prompt_filter_review_api_key_count"`
-	PromptFilterReviewBaseURL          string  `json:"prompt_filter_review_base_url"`
-	PromptFilterReviewModel            string  `json:"prompt_filter_review_model"`
-	PromptFilterReviewTimeoutSeconds   int     `json:"prompt_filter_review_timeout_seconds"`
-	PromptFilterReviewFailClosed       bool    `json:"prompt_filter_review_fail_closed"`
-	ClientCompatMode                   string  `json:"client_compat_mode"`
-	CodexMinCLIVersion                 string  `json:"codex_min_cli_version"`
-	CodexUserAgentConfig               string  `json:"codex_user_agent_config"`
-	UsageLogMode                       string  `json:"usage_log_mode"`
-	UsageLogBatchSize                  int     `json:"usage_log_batch_size"`
-	UsageLogFlushIntervalSeconds       int     `json:"usage_log_flush_interval_seconds"`
-	StreamFlushPolicy                  string  `json:"stream_flush_policy"`
-	StreamFlushIntervalMS              int     `json:"stream_flush_interval_ms"`
-	FirstTokenMode                     string  `json:"first_token_mode"`
-	FirstTokenTimeoutSeconds           int     `json:"first_token_timeout_seconds"`
-	BillingTierPolicy                  string  `json:"billing_tier_policy"`
-	ShowFullUsageNumbers               bool    `json:"show_full_usage_numbers"`
-	PublicKeyUsagePageEnabled          bool    `json:"public_key_usage_page_enabled"`
-	PublicImageStudioPageEnabled       bool    `json:"public_image_studio_page_enabled"`
-	PublicAccountPortalPageEnabled     bool    `json:"public_account_portal_page_enabled"`
-	ImageStorageBackend                string  `json:"image_storage_backend"`
-	ImageS3Endpoint                    string  `json:"image_s3_endpoint"`
-	ImageS3Region                      string  `json:"image_s3_region"`
-	ImageS3Bucket                      string  `json:"image_s3_bucket"`
-	ImageS3AccessKey                   string  `json:"image_s3_access_key"`
-	ImageS3SecretKey                   string  `json:"image_s3_secret_key"`
-	ImageS3Prefix                      string  `json:"image_s3_prefix"`
-	ImageS3ForcePathStyle              bool    `json:"image_s3_force_path_style"`
-	AutoPause5hThreshold               float64 `json:"auto_pause_5h_threshold"`
-	AutoPause7dThreshold               float64 `json:"auto_pause_7d_threshold"`
-	AutoPause5hGuardBandPercent        float64 `json:"auto_pause_5h_guard_band_percent"`
-	AutoPause5hGuardConcurrency        int     `json:"auto_pause_5h_guard_concurrency"`
-	SmartPacingEnabled                 bool    `json:"smart_pacing_enabled"`
-	SmartPacingMinConcurrency          int     `json:"smart_pacing_min_concurrency"`
-	SmartPacingWindows                 string  `json:"smart_pacing_windows"`
-	IgnoreUsageLimitStatus             bool    `json:"ignore_usage_limit_status"`
+	SiteName                            string  `json:"site_name"`
+	SiteLogo                            string  `json:"site_logo"`
+	BackgroundImage                     string  `json:"background_image"`
+	BackgroundOpacity                   int     `json:"background_opacity"`
+	BackgroundBlur                      int     `json:"background_blur"`
+	BackgroundGlassOpacity              int     `json:"background_glass_opacity"`
+	BackgroundGlassBlur                 int     `json:"background_glass_blur"`
+	MaxConcurrency                      int     `json:"max_concurrency"`
+	GlobalRPM                           int     `json:"global_rpm"`
+	TestModel                           string  `json:"test_model"`
+	TestContent                         string  `json:"test_content"`
+	TestConcurrency                     int     `json:"test_concurrency"`
+	BackgroundRefreshIntervalMinutes    int     `json:"background_refresh_interval_minutes"`
+	UsageProbeMaxAgeMinutes             int     `json:"usage_probe_max_age_minutes"`
+	UsageProbeConcurrency               int     `json:"usage_probe_concurrency"`
+	UsageProbeResponsesFallbackEnabled  bool    `json:"usage_probe_responses_fallback_enabled"`
+	RecoveryProbeIntervalMinutes        int     `json:"recovery_probe_interval_minutes"`
+	LazyMode                            bool    `json:"lazy_mode"`
+	ProxyURL                            string  `json:"proxy_url"`
+	PgMaxConns                          int     `json:"pg_max_conns"`
+	RedisPoolSize                       int     `json:"redis_pool_size"`
+	AutoCleanUnauthorized               bool    `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited                bool    `json:"auto_clean_rate_limited"`
+	AdminSecret                         string  `json:"admin_secret"`
+	AdminAuthSource                     string  `json:"admin_auth_source"`
+	AutoCleanFullUsage                  bool    `json:"auto_clean_full_usage"`
+	AutoCleanError                      bool    `json:"auto_clean_error"`
+	AutoCleanExpired                    bool    `json:"auto_clean_expired"`
+	AutoResetCreditsEnabled             bool    `json:"auto_reset_credits_enabled"`
+	AutoResetCreditsBeforeExpiryMin     int     `json:"auto_reset_credits_before_expiry_min"`
+	ProxyPoolEnabled                    bool    `json:"proxy_pool_enabled"`
+	FastSchedulerEnabled                bool    `json:"fast_scheduler_enabled"`
+	CodexForceWebsocket                 bool    `json:"codex_force_websocket"`
+	CodexWSKeepaliveEnabled             bool    `json:"codex_ws_keepalive_enabled"`
+	CodexWSKeepaliveIntervalSec         int     `json:"codex_ws_keepalive_interval_sec"`
+	CodexWSHideUpstreamErrors           bool    `json:"codex_ws_hide_upstream_errors"`
+	CodexWSSilentRetryEnabled           bool    `json:"codex_ws_silent_retry_enabled"`
+	CodexWSSilentMaxRetries             int     `json:"codex_ws_silent_max_retries"`
+	CodexWSSizeRouterEnabled            bool    `json:"codex_ws_size_router_enabled"`
+	CodexWSBusyAcquireMaxWaitSec        int     `json:"codex_ws_busy_acquire_max_wait_sec"`
+	CodexWSBusyOverflowEnabled          bool    `json:"codex_ws_busy_overflow_enabled"`
+	CodexWSBusyPatienceSec              int     `json:"codex_ws_busy_patience_sec"`
+	OverflowAutoCompactEnabled          bool    `json:"overflow_auto_compact_enabled"`
+	CodexPreflightSSEPassthroughEnabled bool    `json:"codex_preflight_sse_passthrough_enabled"`
+	FirstTokenExcludesWsAcquire         bool    `json:"first_token_excludes_ws_acquire"`
+	CodexContinueThinkingEnabled        bool    `json:"codex_continue_thinking_enabled"`
+	CodexContinueMaxRounds              int     `json:"codex_continue_max_rounds"`
+	CodexCLIVersionSyncEnabled          bool    `json:"codex_cli_version_sync_enabled"`
+	CodexCLIVersionSyncIntervalHours    int     `json:"codex_cli_version_sync_interval_hours"`
+	CodexSyncedCLIVersion               string  `json:"codex_synced_cli_version"`
+	SchedulerMode                       string  `json:"scheduler_mode"`
+	AffinityMode                        string  `json:"affinity_mode"`
+	GrokAffinityMode                    string  `json:"grok_affinity_mode"`
+	GrokProbeEnabled                    bool    `json:"grok_probe_enabled"`
+	GrokProbeIntervalMinutes            int     `json:"grok_probe_interval_minutes"`
+	GrokMaxRateLimitRetries             int     `json:"grok_max_rate_limit_retries"`
+	MaxRetries                          int     `json:"max_retries"`
+	MaxRateLimitRetries                 int     `json:"max_rate_limit_retries"`
+	RetryIntervalMS                     int     `json:"retry_interval_ms"`
+	TransportRetryPolicy                string  `json:"transport_retry_policy"`
+	AllowRemoteMigration                bool    `json:"allow_remote_migration"`
+	DatabaseDriver                      string  `json:"database_driver"`
+	DatabaseLabel                       string  `json:"database_label"`
+	CacheDriver                         string  `json:"cache_driver"`
+	CacheLabel                          string  `json:"cache_label"`
+	ExpiredCleaned                      int     `json:"expired_cleaned,omitempty"`
+	ModelMapping                        string  `json:"model_mapping"`
+	CodexModelMapping                   string  `json:"codex_model_mapping"`
+	PayloadRules                        string  `json:"payload_rules"`
+	ReasoningEffortModels               string  `json:"reasoning_effort_models"`
+	ResinURL                            string  `json:"resin_url"`
+	ResinPlatformName                   string  `json:"resin_platform_name"`
+	PromptFilterEnabled                 bool    `json:"prompt_filter_enabled"`
+	PromptFilterMode                    string  `json:"prompt_filter_mode"`
+	PromptFilterThreshold               int     `json:"prompt_filter_threshold"`
+	PromptFilterStrictThreshold         int     `json:"prompt_filter_strict_threshold"`
+	PromptFilterStrictTerminalEnabled   bool    `json:"prompt_filter_strict_terminal_enabled"`
+	PromptFilterAdvancedConfig          string  `json:"prompt_filter_advanced_config"`
+	PromptFilterLogMatches              bool    `json:"prompt_filter_log_matches"`
+	PromptFilterMaxTextLength           int     `json:"prompt_filter_max_text_length"`
+	PromptFilterSensitiveWords          string  `json:"prompt_filter_sensitive_words"`
+	PromptFilterCustomPatterns          string  `json:"prompt_filter_custom_patterns"`
+	PromptFilterDisabledPatterns        string  `json:"prompt_filter_disabled_patterns"`
+	PromptFilterReviewEnabled           bool    `json:"prompt_filter_review_enabled"`
+	PromptFilterReviewAPIKeyConfigured  bool    `json:"prompt_filter_review_api_key_configured"`
+	PromptFilterReviewAPIKeyCount       int     `json:"prompt_filter_review_api_key_count"`
+	PromptFilterReviewBaseURL           string  `json:"prompt_filter_review_base_url"`
+	PromptFilterReviewModel             string  `json:"prompt_filter_review_model"`
+	PromptFilterReviewTimeoutSeconds    int     `json:"prompt_filter_review_timeout_seconds"`
+	PromptFilterReviewFailClosed        bool    `json:"prompt_filter_review_fail_closed"`
+	ClientCompatMode                    string  `json:"client_compat_mode"`
+	CodexMinCLIVersion                  string  `json:"codex_min_cli_version"`
+	CodexUserAgentConfig                string  `json:"codex_user_agent_config"`
+	UsageLogMode                        string  `json:"usage_log_mode"`
+	UsageLogBatchSize                   int     `json:"usage_log_batch_size"`
+	UsageLogFlushIntervalSeconds        int     `json:"usage_log_flush_interval_seconds"`
+	StreamFlushPolicy                   string  `json:"stream_flush_policy"`
+	StreamFlushIntervalMS               int     `json:"stream_flush_interval_ms"`
+	FirstTokenMode                      string  `json:"first_token_mode"`
+	FirstTokenTimeoutSeconds            int     `json:"first_token_timeout_seconds"`
+	BillingTierPolicy                   string  `json:"billing_tier_policy"`
+	ShowFullUsageNumbers                bool    `json:"show_full_usage_numbers"`
+	PublicKeyUsagePageEnabled           bool    `json:"public_key_usage_page_enabled"`
+	PublicImageStudioPageEnabled        bool    `json:"public_image_studio_page_enabled"`
+	PublicAccountPortalPageEnabled      bool    `json:"public_account_portal_page_enabled"`
+	ImageStorageBackend                 string  `json:"image_storage_backend"`
+	ImageS3Endpoint                     string  `json:"image_s3_endpoint"`
+	ImageS3Region                       string  `json:"image_s3_region"`
+	ImageS3Bucket                       string  `json:"image_s3_bucket"`
+	ImageS3AccessKey                    string  `json:"image_s3_access_key"`
+	ImageS3SecretKey                    string  `json:"image_s3_secret_key"`
+	ImageS3Prefix                       string  `json:"image_s3_prefix"`
+	ImageS3ForcePathStyle               bool    `json:"image_s3_force_path_style"`
+	AutoPause5hThreshold                float64 `json:"auto_pause_5h_threshold"`
+	AutoPause7dThreshold                float64 `json:"auto_pause_7d_threshold"`
+	AutoPause5hGuardBandPercent         float64 `json:"auto_pause_5h_guard_band_percent"`
+	AutoPause5hGuardConcurrency         int     `json:"auto_pause_5h_guard_concurrency"`
+	SmartPacingEnabled                  bool    `json:"smart_pacing_enabled"`
+	SmartPacingMinConcurrency           int     `json:"smart_pacing_min_concurrency"`
+	SmartPacingWindows                  string  `json:"smart_pacing_windows"`
+	IgnoreUsageLimitStatus              bool    `json:"ignore_usage_limit_status"`
 }
 
 type updateSettingsReq struct {
-	SiteName                           *string  `json:"site_name"`
-	SiteLogo                           *string  `json:"site_logo"`
-	BackgroundImage                    *string  `json:"background_image"`
-	BackgroundOpacity                  *int     `json:"background_opacity"`
-	BackgroundBlur                     *int     `json:"background_blur"`
-	BackgroundGlassOpacity             *int     `json:"background_glass_opacity"`
-	BackgroundGlassBlur                *int     `json:"background_glass_blur"`
-	MaxConcurrency                     *int     `json:"max_concurrency"`
-	GlobalRPM                          *int     `json:"global_rpm"`
-	TestModel                          *string  `json:"test_model"`
-	TestContent                        *string  `json:"test_content"`
-	TestConcurrency                    *int     `json:"test_concurrency"`
-	BackgroundRefreshIntervalMinutes   *int     `json:"background_refresh_interval_minutes"`
-	UsageProbeMaxAgeMinutes            *int     `json:"usage_probe_max_age_minutes"`
-	UsageProbeConcurrency              *int     `json:"usage_probe_concurrency"`
-	UsageProbeResponsesFallbackEnabled *bool    `json:"usage_probe_responses_fallback_enabled"`
-	RecoveryProbeIntervalMinutes       *int     `json:"recovery_probe_interval_minutes"`
-	LazyMode                           *bool    `json:"lazy_mode"`
-	ProxyURL                           *string  `json:"proxy_url"`
-	PgMaxConns                         *int     `json:"pg_max_conns"`
-	RedisPoolSize                      *int     `json:"redis_pool_size"`
-	AutoCleanUnauthorized              *bool    `json:"auto_clean_unauthorized"`
-	AutoCleanRateLimited               *bool    `json:"auto_clean_rate_limited"`
-	AdminSecret                        *string  `json:"admin_secret"`
-	AutoCleanFullUsage                 *bool    `json:"auto_clean_full_usage"`
-	AutoCleanError                     *bool    `json:"auto_clean_error"`
-	AutoCleanExpired                   *bool    `json:"auto_clean_expired"`
-	AutoResetCreditsEnabled            *bool    `json:"auto_reset_credits_enabled"`
-	AutoResetCreditsBeforeExpiryMin    *int     `json:"auto_reset_credits_before_expiry_min"`
-	ProxyPoolEnabled                   *bool    `json:"proxy_pool_enabled"`
-	FastSchedulerEnabled               *bool    `json:"fast_scheduler_enabled"`
-	CodexForceWebsocket                *bool    `json:"codex_force_websocket"`
-	CodexWSKeepaliveEnabled            *bool    `json:"codex_ws_keepalive_enabled"`
-	CodexWSKeepaliveIntervalSec        *int     `json:"codex_ws_keepalive_interval_sec"`
-	CodexWSHideUpstreamErrors          *bool    `json:"codex_ws_hide_upstream_errors"`
-	CodexWSSilentRetryEnabled          *bool    `json:"codex_ws_silent_retry_enabled"`
-	CodexWSSilentMaxRetries            *int     `json:"codex_ws_silent_max_retries"`
-	CodexWSSizeRouterEnabled           *bool    `json:"codex_ws_size_router_enabled"`
-	CodexWSBusyAcquireMaxWaitSec       *int     `json:"codex_ws_busy_acquire_max_wait_sec"`
-	CodexWSBusyOverflowEnabled         *bool    `json:"codex_ws_busy_overflow_enabled"`
-	CodexWSBusyPatienceSec             *int     `json:"codex_ws_busy_patience_sec"`
-	OverflowAutoCompactEnabled         *bool    `json:"overflow_auto_compact_enabled"`
-	FirstTokenExcludesWsAcquire        *bool    `json:"first_token_excludes_ws_acquire"`
-	CodexContinueThinkingEnabled       *bool    `json:"codex_continue_thinking_enabled"`
-	CodexContinueMaxRounds             *int     `json:"codex_continue_max_rounds"`
-	CodexCLIVersionSyncEnabled         *bool    `json:"codex_cli_version_sync_enabled"`
-	CodexCLIVersionSyncIntervalHours   *int     `json:"codex_cli_version_sync_interval_hours"`
-	SchedulerMode                      *string  `json:"scheduler_mode"`
-	AffinityMode                       *string  `json:"affinity_mode"`
-	MaxRetries                         *int     `json:"max_retries"`
-	MaxRateLimitRetries                *int     `json:"max_rate_limit_retries"`
-	RetryIntervalMS                    *int     `json:"retry_interval_ms"`
-	TransportRetryPolicy               *string  `json:"transport_retry_policy"`
-	AllowRemoteMigration               *bool    `json:"allow_remote_migration"`
-	ModelMapping                       *string  `json:"model_mapping"`
-	CodexModelMapping                  *string  `json:"codex_model_mapping"`
-	PayloadRules                       *string  `json:"payload_rules"`
-	ReasoningEffortModels              *string  `json:"reasoning_effort_models"`
-	ResinURL                           *string  `json:"resin_url"`
-	ResinPlatformName                  *string  `json:"resin_platform_name"`
-	PromptFilterEnabled                *bool    `json:"prompt_filter_enabled"`
-	PromptFilterMode                   *string  `json:"prompt_filter_mode"`
-	PromptFilterThreshold              *int     `json:"prompt_filter_threshold"`
-	PromptFilterStrictThreshold        *int     `json:"prompt_filter_strict_threshold"`
-	PromptFilterStrictTerminalEnabled  *bool    `json:"prompt_filter_strict_terminal_enabled"`
-	PromptFilterAdvancedConfig         *string  `json:"prompt_filter_advanced_config"`
-	PromptFilterLogMatches             *bool    `json:"prompt_filter_log_matches"`
-	PromptFilterMaxTextLength          *int     `json:"prompt_filter_max_text_length"`
-	PromptFilterSensitiveWords         *string  `json:"prompt_filter_sensitive_words"`
-	PromptFilterCustomPatterns         *string  `json:"prompt_filter_custom_patterns"`
-	PromptFilterDisabledPatterns       *string  `json:"prompt_filter_disabled_patterns"`
-	PromptFilterReviewEnabled          *bool    `json:"prompt_filter_review_enabled"`
-	PromptFilterReviewAPIKey           *string  `json:"prompt_filter_review_api_key"`
-	PromptFilterReviewBaseURL          *string  `json:"prompt_filter_review_base_url"`
-	PromptFilterReviewModel            *string  `json:"prompt_filter_review_model"`
-	PromptFilterReviewTimeoutSeconds   *int     `json:"prompt_filter_review_timeout_seconds"`
-	PromptFilterReviewFailClosed       *bool    `json:"prompt_filter_review_fail_closed"`
-	ClientCompatMode                   *string  `json:"client_compat_mode"`
-	CodexMinCLIVersion                 *string  `json:"codex_min_cli_version"`
-	CodexUserAgentConfig               *string  `json:"codex_user_agent_config"`
-	UsageLogMode                       *string  `json:"usage_log_mode"`
-	UsageLogBatchSize                  *int     `json:"usage_log_batch_size"`
-	UsageLogFlushIntervalSeconds       *int     `json:"usage_log_flush_interval_seconds"`
-	StreamFlushPolicy                  *string  `json:"stream_flush_policy"`
-	StreamFlushIntervalMS              *int     `json:"stream_flush_interval_ms"`
-	FirstTokenMode                     *string  `json:"first_token_mode"`
-	FirstTokenTimeoutSeconds           *int     `json:"first_token_timeout_seconds"`
-	BillingTierPolicy                  *string  `json:"billing_tier_policy"`
-	ShowFullUsageNumbers               *bool    `json:"show_full_usage_numbers"`
-	PublicKeyUsagePageEnabled          *bool    `json:"public_key_usage_page_enabled"`
-	PublicImageStudioPageEnabled       *bool    `json:"public_image_studio_page_enabled"`
-	PublicAccountPortalPageEnabled     *bool    `json:"public_account_portal_page_enabled"`
-	ImageStorageBackend                *string  `json:"image_storage_backend"`
-	ImageS3Endpoint                    *string  `json:"image_s3_endpoint"`
-	ImageS3Region                      *string  `json:"image_s3_region"`
-	ImageS3Bucket                      *string  `json:"image_s3_bucket"`
-	ImageS3AccessKey                   *string  `json:"image_s3_access_key"`
-	ImageS3SecretKey                   *string  `json:"image_s3_secret_key"`
-	ImageS3Prefix                      *string  `json:"image_s3_prefix"`
-	ImageS3ForcePathStyle              *bool    `json:"image_s3_force_path_style"`
-	AutoPause5hThreshold               *float64 `json:"auto_pause_5h_threshold"`
-	AutoPause7dThreshold               *float64 `json:"auto_pause_7d_threshold"`
-	AutoPause5hGuardBandPercent        *float64 `json:"auto_pause_5h_guard_band_percent"`
-	AutoPause5hGuardConcurrency        *int     `json:"auto_pause_5h_guard_concurrency"`
-	SmartPacingEnabled                 *bool    `json:"smart_pacing_enabled"`
-	SmartPacingMinConcurrency          *int     `json:"smart_pacing_min_concurrency"`
-	SmartPacingWindows                 *string  `json:"smart_pacing_windows"`
-	IgnoreUsageLimitStatus             *bool    `json:"ignore_usage_limit_status"`
+	SiteName                            *string  `json:"site_name"`
+	SiteLogo                            *string  `json:"site_logo"`
+	BackgroundImage                     *string  `json:"background_image"`
+	BackgroundOpacity                   *int     `json:"background_opacity"`
+	BackgroundBlur                      *int     `json:"background_blur"`
+	BackgroundGlassOpacity              *int     `json:"background_glass_opacity"`
+	BackgroundGlassBlur                 *int     `json:"background_glass_blur"`
+	MaxConcurrency                      *int     `json:"max_concurrency"`
+	GlobalRPM                           *int     `json:"global_rpm"`
+	TestModel                           *string  `json:"test_model"`
+	TestContent                         *string  `json:"test_content"`
+	TestConcurrency                     *int     `json:"test_concurrency"`
+	BackgroundRefreshIntervalMinutes    *int     `json:"background_refresh_interval_minutes"`
+	UsageProbeMaxAgeMinutes             *int     `json:"usage_probe_max_age_minutes"`
+	UsageProbeConcurrency               *int     `json:"usage_probe_concurrency"`
+	UsageProbeResponsesFallbackEnabled  *bool    `json:"usage_probe_responses_fallback_enabled"`
+	RecoveryProbeIntervalMinutes        *int     `json:"recovery_probe_interval_minutes"`
+	LazyMode                            *bool    `json:"lazy_mode"`
+	ProxyURL                            *string  `json:"proxy_url"`
+	PgMaxConns                          *int     `json:"pg_max_conns"`
+	RedisPoolSize                       *int     `json:"redis_pool_size"`
+	AutoCleanUnauthorized               *bool    `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited                *bool    `json:"auto_clean_rate_limited"`
+	AdminSecret                         *string  `json:"admin_secret"`
+	AutoCleanFullUsage                  *bool    `json:"auto_clean_full_usage"`
+	AutoCleanError                      *bool    `json:"auto_clean_error"`
+	AutoCleanExpired                    *bool    `json:"auto_clean_expired"`
+	AutoResetCreditsEnabled             *bool    `json:"auto_reset_credits_enabled"`
+	AutoResetCreditsBeforeExpiryMin     *int     `json:"auto_reset_credits_before_expiry_min"`
+	ProxyPoolEnabled                    *bool    `json:"proxy_pool_enabled"`
+	FastSchedulerEnabled                *bool    `json:"fast_scheduler_enabled"`
+	CodexForceWebsocket                 *bool    `json:"codex_force_websocket"`
+	CodexWSKeepaliveEnabled             *bool    `json:"codex_ws_keepalive_enabled"`
+	CodexWSKeepaliveIntervalSec         *int     `json:"codex_ws_keepalive_interval_sec"`
+	CodexWSHideUpstreamErrors           *bool    `json:"codex_ws_hide_upstream_errors"`
+	CodexWSSilentRetryEnabled           *bool    `json:"codex_ws_silent_retry_enabled"`
+	CodexWSSilentMaxRetries             *int     `json:"codex_ws_silent_max_retries"`
+	CodexWSSizeRouterEnabled            *bool    `json:"codex_ws_size_router_enabled"`
+	CodexWSBusyAcquireMaxWaitSec        *int     `json:"codex_ws_busy_acquire_max_wait_sec"`
+	CodexWSBusyOverflowEnabled          *bool    `json:"codex_ws_busy_overflow_enabled"`
+	CodexWSBusyPatienceSec              *int     `json:"codex_ws_busy_patience_sec"`
+	OverflowAutoCompactEnabled          *bool    `json:"overflow_auto_compact_enabled"`
+	CodexPreflightSSEPassthroughEnabled *bool    `json:"codex_preflight_sse_passthrough_enabled"`
+	FirstTokenExcludesWsAcquire         *bool    `json:"first_token_excludes_ws_acquire"`
+	CodexContinueThinkingEnabled        *bool    `json:"codex_continue_thinking_enabled"`
+	CodexContinueMaxRounds              *int     `json:"codex_continue_max_rounds"`
+	CodexCLIVersionSyncEnabled          *bool    `json:"codex_cli_version_sync_enabled"`
+	CodexCLIVersionSyncIntervalHours    *int     `json:"codex_cli_version_sync_interval_hours"`
+	SchedulerMode                       *string  `json:"scheduler_mode"`
+	AffinityMode                        *string  `json:"affinity_mode"`
+	GrokAffinityMode                    *string  `json:"grok_affinity_mode"`
+	GrokProbeEnabled                    *bool    `json:"grok_probe_enabled"`
+	GrokProbeIntervalMinutes            *int     `json:"grok_probe_interval_minutes"`
+	GrokMaxRateLimitRetries             *int     `json:"grok_max_rate_limit_retries"`
+	MaxRetries                          *int     `json:"max_retries"`
+	MaxRateLimitRetries                 *int     `json:"max_rate_limit_retries"`
+	RetryIntervalMS                     *int     `json:"retry_interval_ms"`
+	TransportRetryPolicy                *string  `json:"transport_retry_policy"`
+	AllowRemoteMigration                *bool    `json:"allow_remote_migration"`
+	ModelMapping                        *string  `json:"model_mapping"`
+	CodexModelMapping                   *string  `json:"codex_model_mapping"`
+	PayloadRules                        *string  `json:"payload_rules"`
+	ReasoningEffortModels               *string  `json:"reasoning_effort_models"`
+	ResinURL                            *string  `json:"resin_url"`
+	ResinPlatformName                   *string  `json:"resin_platform_name"`
+	PromptFilterEnabled                 *bool    `json:"prompt_filter_enabled"`
+	PromptFilterMode                    *string  `json:"prompt_filter_mode"`
+	PromptFilterThreshold               *int     `json:"prompt_filter_threshold"`
+	PromptFilterStrictThreshold         *int     `json:"prompt_filter_strict_threshold"`
+	PromptFilterStrictTerminalEnabled   *bool    `json:"prompt_filter_strict_terminal_enabled"`
+	PromptFilterAdvancedConfig          *string  `json:"prompt_filter_advanced_config"`
+	PromptFilterLogMatches              *bool    `json:"prompt_filter_log_matches"`
+	PromptFilterMaxTextLength           *int     `json:"prompt_filter_max_text_length"`
+	PromptFilterSensitiveWords          *string  `json:"prompt_filter_sensitive_words"`
+	PromptFilterCustomPatterns          *string  `json:"prompt_filter_custom_patterns"`
+	PromptFilterDisabledPatterns        *string  `json:"prompt_filter_disabled_patterns"`
+	PromptFilterReviewEnabled           *bool    `json:"prompt_filter_review_enabled"`
+	PromptFilterReviewAPIKey            *string  `json:"prompt_filter_review_api_key"`
+	PromptFilterReviewBaseURL           *string  `json:"prompt_filter_review_base_url"`
+	PromptFilterReviewModel             *string  `json:"prompt_filter_review_model"`
+	PromptFilterReviewTimeoutSeconds    *int     `json:"prompt_filter_review_timeout_seconds"`
+	PromptFilterReviewFailClosed        *bool    `json:"prompt_filter_review_fail_closed"`
+	ClientCompatMode                    *string  `json:"client_compat_mode"`
+	CodexMinCLIVersion                  *string  `json:"codex_min_cli_version"`
+	CodexUserAgentConfig                *string  `json:"codex_user_agent_config"`
+	UsageLogMode                        *string  `json:"usage_log_mode"`
+	UsageLogBatchSize                   *int     `json:"usage_log_batch_size"`
+	UsageLogFlushIntervalSeconds        *int     `json:"usage_log_flush_interval_seconds"`
+	StreamFlushPolicy                   *string  `json:"stream_flush_policy"`
+	StreamFlushIntervalMS               *int     `json:"stream_flush_interval_ms"`
+	FirstTokenMode                      *string  `json:"first_token_mode"`
+	FirstTokenTimeoutSeconds            *int     `json:"first_token_timeout_seconds"`
+	BillingTierPolicy                   *string  `json:"billing_tier_policy"`
+	ShowFullUsageNumbers                *bool    `json:"show_full_usage_numbers"`
+	PublicKeyUsagePageEnabled           *bool    `json:"public_key_usage_page_enabled"`
+	PublicImageStudioPageEnabled        *bool    `json:"public_image_studio_page_enabled"`
+	PublicAccountPortalPageEnabled      *bool    `json:"public_account_portal_page_enabled"`
+	ImageStorageBackend                 *string  `json:"image_storage_backend"`
+	ImageS3Endpoint                     *string  `json:"image_s3_endpoint"`
+	ImageS3Region                       *string  `json:"image_s3_region"`
+	ImageS3Bucket                       *string  `json:"image_s3_bucket"`
+	ImageS3AccessKey                    *string  `json:"image_s3_access_key"`
+	ImageS3SecretKey                    *string  `json:"image_s3_secret_key"`
+	ImageS3Prefix                       *string  `json:"image_s3_prefix"`
+	ImageS3ForcePathStyle               *bool    `json:"image_s3_force_path_style"`
+	AutoPause5hThreshold                *float64 `json:"auto_pause_5h_threshold"`
+	AutoPause7dThreshold                *float64 `json:"auto_pause_7d_threshold"`
+	AutoPause5hGuardBandPercent         *float64 `json:"auto_pause_5h_guard_band_percent"`
+	AutoPause5hGuardConcurrency         *int     `json:"auto_pause_5h_guard_concurrency"`
+	SmartPacingEnabled                  *bool    `json:"smart_pacing_enabled"`
+	SmartPacingMinConcurrency           *int     `json:"smart_pacing_min_concurrency"`
+	SmartPacingWindows                  *string  `json:"smart_pacing_windows"`
+	IgnoreUsageLimitStatus              *bool    `json:"ignore_usage_limit_status"`
 }
 
 type brandingResponse struct {
@@ -7046,6 +7062,35 @@ func decodeBackgroundConfig(raw string) brandingBackgroundConfig {
 	return normalizeBackgroundConfig(cfg)
 }
 
+// encodeGrokConfig 把 Grok 会话粘性模式 + 定期探测 + 限流重试配置编码成 grok_config JSON 落库。
+func encodeGrokConfig(affinityMode string, probeEnabled bool, probeIntervalMinutes int, maxRateLimitRetries int) string {
+	mode := strings.TrimSpace(affinityMode)
+	switch mode {
+	case auth.AffinityModeFollow, auth.AffinityModeBounded, auth.AffinityModeOff, auth.AffinityModeStrict:
+	default:
+		mode = auth.AffinityModeStrict
+	}
+	if probeIntervalMinutes <= 0 {
+		probeIntervalMinutes = auth.GrokProbeDefaultIntervalMinutes
+	}
+	if probeIntervalMinutes < auth.GrokProbeMinIntervalMinutes {
+		probeIntervalMinutes = auth.GrokProbeMinIntervalMinutes
+	}
+	if maxRateLimitRetries < 0 {
+		maxRateLimitRetries = 0
+	}
+	b, err := json.Marshal(map[string]any{
+		"affinity_mode":          mode,
+		"probe_enabled":          probeEnabled,
+		"probe_interval_minutes": probeIntervalMinutes,
+		"max_rate_limit_retries": maxRateLimitRetries,
+	})
+	if err != nil {
+		return `{"affinity_mode":"strict"}`
+	}
+	return string(b)
+}
+
 func encodeBackgroundConfig(cfg brandingBackgroundConfig) string {
 	cfg = normalizeBackgroundConfig(cfg)
 	data, err := json.Marshal(cfg)
@@ -7139,121 +7184,126 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		bgCfg = decodeBackgroundConfig(dbSettings.BackgroundConfig)
 	}
 	c.JSON(http.StatusOK, settingsResponse{
-		SiteName:                           branding.SiteName,
-		SiteLogo:                           branding.SiteLogo,
-		BackgroundImage:                    bgCfg.Image,
-		BackgroundOpacity:                  bgCfg.Opacity,
-		BackgroundBlur:                     bgCfg.Blur,
-		BackgroundGlassOpacity:             bgCfg.GlassOpacity,
-		BackgroundGlassBlur:                bgCfg.GlassBlur,
-		MaxConcurrency:                     h.store.GetMaxConcurrency(),
-		GlobalRPM:                          h.rateLimiter.GetRPM(),
-		TestModel:                          h.store.GetTestModel(),
-		TestContent:                        h.store.GetTestContent(),
-		TestConcurrency:                    h.store.GetTestConcurrency(),
-		BackgroundRefreshIntervalMinutes:   h.store.GetBackgroundRefreshIntervalMinutes(),
-		UsageProbeMaxAgeMinutes:            h.store.GetUsageProbeMaxAgeMinutes(),
-		UsageProbeConcurrency:              h.store.GetUsageProbeConcurrency(),
-		UsageProbeResponsesFallbackEnabled: h.store.UsageProbeResponsesFallbackEnabled(),
-		RecoveryProbeIntervalMinutes:       h.store.GetRecoveryProbeIntervalMinutes(),
-		LazyMode:                           h.store.GetLazyMode(),
-		ProxyURL:                           h.store.GetProxyURL(),
-		PgMaxConns:                         h.pgMaxConns,
-		RedisPoolSize:                      h.redisPoolSize,
-		AutoCleanUnauthorized:              h.store.GetAutoCleanUnauthorized(),
-		AutoCleanRateLimited:               h.store.GetAutoCleanRateLimited(),
-		AdminSecret:                        adminSecret,
-		AdminAuthSource:                    adminAuthSource,
-		AutoCleanFullUsage:                 h.store.GetAutoCleanFullUsage(),
-		AutoCleanError:                     h.store.GetAutoCleanError(),
-		AutoCleanExpired:                   h.store.GetAutoCleanExpired(),
-		AutoResetCreditsEnabled:            autoResetCreditsEnabled,
-		AutoResetCreditsBeforeExpiryMin:    autoResetCreditsBeforeExpiryMin,
-		ProxyPoolEnabled:                   h.store.GetProxyPoolEnabled(),
-		FastSchedulerEnabled:               h.store.FastSchedulerEnabled(),
-		CodexForceWebsocket:                h.store.CodexForceWebsocket(),
-		CodexWSKeepaliveEnabled:            h.store.CodexWSKeepaliveEnabled(),
-		CodexWSKeepaliveIntervalSec:        h.store.CodexWSKeepaliveIntervalSec(),
-		CodexWSHideUpstreamErrors:          h.store.CodexWSHideUpstreamErrors(),
-		CodexWSSilentRetryEnabled:          h.store.CodexWSSilentRetryEnabled(),
-		CodexWSSilentMaxRetries:            h.store.CodexWSSilentMaxRetries(),
-		CodexWSSizeRouterEnabled:           h.store.CodexWSSizeRouterEnabled(),
-		CodexWSBusyAcquireMaxWaitSec:       h.store.CodexWSBusyAcquireMaxWaitSec(),
-		CodexWSBusyOverflowEnabled:         h.store.CodexWSBusyOverflowEnabled(),
-		CodexWSBusyPatienceSec:             h.store.CodexWSBusyPatienceSec(),
-		OverflowAutoCompactEnabled:         h.store.OverflowAutoCompactEnabled(),
-		FirstTokenExcludesWsAcquire:        h.store.FirstTokenExcludesWsAcquire(),
-		CodexContinueThinkingEnabled:       h.store.CodexContinueThinkingEnabled(),
-		CodexContinueMaxRounds:             h.store.CodexContinueMaxRounds(),
-		CodexCLIVersionSyncEnabled:         h.store.CodexCLIVersionSyncEnabled(),
-		CodexCLIVersionSyncIntervalHours:   h.store.CodexCLIVersionSyncIntervalHours(),
-		CodexSyncedCLIVersion:              proxy.CurrentRuntimeSettings().CodexSyncedCLIVersion,
-		SchedulerMode:                      h.store.GetSchedulerMode(),
-		AffinityMode:                       h.store.GetAffinityMode(),
-		MaxRetries:                         h.store.GetMaxRetries(),
-		MaxRateLimitRetries:                h.store.GetMaxRateLimitRetries(),
-		RetryIntervalMS:                    h.store.GetRetryIntervalMS(),
-		TransportRetryPolicy:               h.store.GetTransportRetryPolicy(),
-		AllowRemoteMigration:               h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
-		DatabaseDriver:                     h.databaseDriver,
-		DatabaseLabel:                      h.databaseLabel,
-		CacheDriver:                        h.cacheDriver,
-		CacheLabel:                         h.cacheLabel,
-		ModelMapping:                       h.store.GetModelMapping(),
-		CodexModelMapping:                  h.store.GetCodexModelMapping(),
-		PayloadRules:                       h.store.GetPayloadRules(),
-		ReasoningEffortModels:              h.store.GetReasoningEffortModels(),
-		ResinURL:                           resinURL,
-		ResinPlatformName:                  resinPlatformName,
-		PromptFilterEnabled:                promptFilterCfg.Enabled,
-		PromptFilterMode:                   promptFilterCfg.Mode,
-		PromptFilterThreshold:              promptFilterCfg.Threshold,
-		PromptFilterStrictThreshold:        promptFilterCfg.StrictThreshold,
-		PromptFilterStrictTerminalEnabled:  promptFilterCfg.StrictTerminalEnabled,
-		PromptFilterAdvancedConfig:         promptFilterAdvancedRaw,
-		PromptFilterLogMatches:             promptFilterCfg.LogMatches,
-		PromptFilterMaxTextLength:          promptFilterCfg.MaxTextLength,
-		PromptFilterSensitiveWords:         promptFilterCfg.SensitiveWords,
-		PromptFilterCustomPatterns:         promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
-		PromptFilterDisabledPatterns:       promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
-		PromptFilterReviewEnabled:          promptFilterCfg.Review.Enabled,
-		PromptFilterReviewAPIKeyConfigured: promptFilterCfg.Review.APIKey != "",
-		PromptFilterReviewAPIKeyCount:      len(promptFilterCfg.Review.APIKeyList()),
-		PromptFilterReviewBaseURL:          promptFilterCfg.Review.BaseURL,
-		PromptFilterReviewModel:            promptFilterCfg.Review.Model,
-		PromptFilterReviewTimeoutSeconds:   promptFilterCfg.Review.TimeoutSeconds,
-		PromptFilterReviewFailClosed:       promptFilterCfg.Review.FailClosed,
-		ClientCompatMode:                   runtimeCfg.ClientCompatMode,
-		CodexMinCLIVersion:                 runtimeCfg.CodexMinCLIVersion,
-		CodexUserAgentConfig:               runtimeCfg.CodexUserAgentConfig,
-		UsageLogMode:                       h.db.GetUsageLogMode(),
-		UsageLogBatchSize:                  h.db.GetUsageLogBatchSize(),
-		UsageLogFlushIntervalSeconds:       h.db.GetUsageLogFlushIntervalSeconds(),
-		StreamFlushPolicy:                  runtimeCfg.StreamFlushPolicy,
-		StreamFlushIntervalMS:              runtimeCfg.StreamFlushIntervalMS,
-		FirstTokenMode:                     runtimeCfg.FirstTokenMode,
-		FirstTokenTimeoutSeconds:           runtimeCfg.FirstTokenTimeoutSec,
-		BillingTierPolicy:                  runtimeCfg.BillingTierPolicy,
-		ShowFullUsageNumbers:               showFullUsageNumbers,
-		PublicKeyUsagePageEnabled:          publicKeyUsagePageEnabled,
-		PublicImageStudioPageEnabled:       publicImageStudioPageEnabled,
-		PublicAccountPortalPageEnabled:     publicAccountPortalPageEnabled,
-		ImageStorageBackend:                imgCfg.Backend,
-		ImageS3Endpoint:                    imgCfg.Endpoint,
-		ImageS3Region:                      imgCfg.Region,
-		ImageS3Bucket:                      imgCfg.Bucket,
-		ImageS3AccessKey:                   imgCfg.AccessKey,
-		ImageS3SecretKey:                   imgCfg.SecretKey,
-		ImageS3Prefix:                      imgPrefix,
-		ImageS3ForcePathStyle:              imgCfg.ForcePathStyle,
-		AutoPause5hThreshold:               h.store.GetGlobalAutoPause5hThreshold(),
-		AutoPause7dThreshold:               h.store.GetGlobalAutoPause7dThreshold(),
-		AutoPause5hGuardBandPercent:        h.store.GetAutoPause5hGuardBandPercent(),
-		AutoPause5hGuardConcurrency:        h.store.GetAutoPause5hGuardConcurrency(),
-		SmartPacingEnabled:                 h.store.GetSmartPacingEnabled(),
-		SmartPacingMinConcurrency:          h.store.GetSmartPacingMinConcurrency(),
-		SmartPacingWindows:                 h.store.GetSmartPacingWindows(),
-		IgnoreUsageLimitStatus:             h.store.IgnoreUsageLimitStatus(),
+		SiteName:                            branding.SiteName,
+		SiteLogo:                            branding.SiteLogo,
+		BackgroundImage:                     bgCfg.Image,
+		BackgroundOpacity:                   bgCfg.Opacity,
+		BackgroundBlur:                      bgCfg.Blur,
+		BackgroundGlassOpacity:              bgCfg.GlassOpacity,
+		BackgroundGlassBlur:                 bgCfg.GlassBlur,
+		MaxConcurrency:                      h.store.GetMaxConcurrency(),
+		GlobalRPM:                           h.rateLimiter.GetRPM(),
+		TestModel:                           h.store.GetTestModel(),
+		TestContent:                         h.store.GetTestContent(),
+		TestConcurrency:                     h.store.GetTestConcurrency(),
+		BackgroundRefreshIntervalMinutes:    h.store.GetBackgroundRefreshIntervalMinutes(),
+		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
+		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
+		UsageProbeResponsesFallbackEnabled:  h.store.UsageProbeResponsesFallbackEnabled(),
+		RecoveryProbeIntervalMinutes:        h.store.GetRecoveryProbeIntervalMinutes(),
+		LazyMode:                            h.store.GetLazyMode(),
+		ProxyURL:                            h.store.GetProxyURL(),
+		PgMaxConns:                          h.pgMaxConns,
+		RedisPoolSize:                       h.redisPoolSize,
+		AutoCleanUnauthorized:               h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:                h.store.GetAutoCleanRateLimited(),
+		AdminSecret:                         adminSecret,
+		AdminAuthSource:                     adminAuthSource,
+		AutoCleanFullUsage:                  h.store.GetAutoCleanFullUsage(),
+		AutoCleanError:                      h.store.GetAutoCleanError(),
+		AutoCleanExpired:                    h.store.GetAutoCleanExpired(),
+		AutoResetCreditsEnabled:             autoResetCreditsEnabled,
+		AutoResetCreditsBeforeExpiryMin:     autoResetCreditsBeforeExpiryMin,
+		ProxyPoolEnabled:                    h.store.GetProxyPoolEnabled(),
+		FastSchedulerEnabled:                h.store.FastSchedulerEnabled(),
+		CodexForceWebsocket:                 h.store.CodexForceWebsocket(),
+		CodexWSKeepaliveEnabled:             h.store.CodexWSKeepaliveEnabled(),
+		CodexWSKeepaliveIntervalSec:         h.store.CodexWSKeepaliveIntervalSec(),
+		CodexWSHideUpstreamErrors:           h.store.CodexWSHideUpstreamErrors(),
+		CodexWSSilentRetryEnabled:           h.store.CodexWSSilentRetryEnabled(),
+		CodexWSSilentMaxRetries:             h.store.CodexWSSilentMaxRetries(),
+		CodexWSSizeRouterEnabled:            h.store.CodexWSSizeRouterEnabled(),
+		CodexWSBusyAcquireMaxWaitSec:        h.store.CodexWSBusyAcquireMaxWaitSec(),
+		CodexWSBusyOverflowEnabled:          h.store.CodexWSBusyOverflowEnabled(),
+		CodexWSBusyPatienceSec:              h.store.CodexWSBusyPatienceSec(),
+		OverflowAutoCompactEnabled:          h.store.OverflowAutoCompactEnabled(),
+		CodexPreflightSSEPassthroughEnabled: h.store.CodexPreflightSSEPassthroughEnabled(),
+		FirstTokenExcludesWsAcquire:         h.store.FirstTokenExcludesWsAcquire(),
+		CodexContinueThinkingEnabled:        h.store.CodexContinueThinkingEnabled(),
+		CodexContinueMaxRounds:              h.store.CodexContinueMaxRounds(),
+		CodexCLIVersionSyncEnabled:          h.store.CodexCLIVersionSyncEnabled(),
+		CodexCLIVersionSyncIntervalHours:    h.store.CodexCLIVersionSyncIntervalHours(),
+		CodexSyncedCLIVersion:               proxy.CurrentRuntimeSettings().CodexSyncedCLIVersion,
+		SchedulerMode:                       h.store.GetSchedulerMode(),
+		AffinityMode:                        h.store.GetAffinityMode(),
+		GrokAffinityMode:                    h.store.GetGrokAffinityMode(),
+		GrokProbeEnabled:                    h.store.GrokProbeEnabled(),
+		GrokProbeIntervalMinutes:            h.store.GrokProbeIntervalMinutes(),
+		GrokMaxRateLimitRetries:             h.store.GrokMaxRateLimitRetries(),
+		MaxRetries:                          h.store.GetMaxRetries(),
+		MaxRateLimitRetries:                 h.store.GetMaxRateLimitRetries(),
+		RetryIntervalMS:                     h.store.GetRetryIntervalMS(),
+		TransportRetryPolicy:                h.store.GetTransportRetryPolicy(),
+		AllowRemoteMigration:                h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
+		DatabaseDriver:                      h.databaseDriver,
+		DatabaseLabel:                       h.databaseLabel,
+		CacheDriver:                         h.cacheDriver,
+		CacheLabel:                          h.cacheLabel,
+		ModelMapping:                        h.store.GetModelMapping(),
+		CodexModelMapping:                   h.store.GetCodexModelMapping(),
+		PayloadRules:                        h.store.GetPayloadRules(),
+		ReasoningEffortModels:               h.store.GetReasoningEffortModels(),
+		ResinURL:                            resinURL,
+		ResinPlatformName:                   resinPlatformName,
+		PromptFilterEnabled:                 promptFilterCfg.Enabled,
+		PromptFilterMode:                    promptFilterCfg.Mode,
+		PromptFilterThreshold:               promptFilterCfg.Threshold,
+		PromptFilterStrictThreshold:         promptFilterCfg.StrictThreshold,
+		PromptFilterStrictTerminalEnabled:   promptFilterCfg.StrictTerminalEnabled,
+		PromptFilterAdvancedConfig:          promptFilterAdvancedRaw,
+		PromptFilterLogMatches:              promptFilterCfg.LogMatches,
+		PromptFilterMaxTextLength:           promptFilterCfg.MaxTextLength,
+		PromptFilterSensitiveWords:          promptFilterCfg.SensitiveWords,
+		PromptFilterCustomPatterns:          promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
+		PromptFilterDisabledPatterns:        promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
+		PromptFilterReviewEnabled:           promptFilterCfg.Review.Enabled,
+		PromptFilterReviewAPIKeyConfigured:  promptFilterCfg.Review.APIKey != "",
+		PromptFilterReviewAPIKeyCount:       len(promptFilterCfg.Review.APIKeyList()),
+		PromptFilterReviewBaseURL:           promptFilterCfg.Review.BaseURL,
+		PromptFilterReviewModel:             promptFilterCfg.Review.Model,
+		PromptFilterReviewTimeoutSeconds:    promptFilterCfg.Review.TimeoutSeconds,
+		PromptFilterReviewFailClosed:        promptFilterCfg.Review.FailClosed,
+		ClientCompatMode:                    runtimeCfg.ClientCompatMode,
+		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
+		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
+		UsageLogMode:                        h.db.GetUsageLogMode(),
+		UsageLogBatchSize:                   h.db.GetUsageLogBatchSize(),
+		UsageLogFlushIntervalSeconds:        h.db.GetUsageLogFlushIntervalSeconds(),
+		StreamFlushPolicy:                   runtimeCfg.StreamFlushPolicy,
+		StreamFlushIntervalMS:               runtimeCfg.StreamFlushIntervalMS,
+		FirstTokenMode:                      runtimeCfg.FirstTokenMode,
+		FirstTokenTimeoutSeconds:            runtimeCfg.FirstTokenTimeoutSec,
+		BillingTierPolicy:                   runtimeCfg.BillingTierPolicy,
+		ShowFullUsageNumbers:                showFullUsageNumbers,
+		PublicKeyUsagePageEnabled:           publicKeyUsagePageEnabled,
+		PublicImageStudioPageEnabled:        publicImageStudioPageEnabled,
+		PublicAccountPortalPageEnabled:      publicAccountPortalPageEnabled,
+		ImageStorageBackend:                 imgCfg.Backend,
+		ImageS3Endpoint:                     imgCfg.Endpoint,
+		ImageS3Region:                       imgCfg.Region,
+		ImageS3Bucket:                       imgCfg.Bucket,
+		ImageS3AccessKey:                    imgCfg.AccessKey,
+		ImageS3SecretKey:                    imgCfg.SecretKey,
+		ImageS3Prefix:                       imgPrefix,
+		ImageS3ForcePathStyle:               imgCfg.ForcePathStyle,
+		AutoPause5hThreshold:                h.store.GetGlobalAutoPause5hThreshold(),
+		AutoPause7dThreshold:                h.store.GetGlobalAutoPause7dThreshold(),
+		AutoPause5hGuardBandPercent:         h.store.GetAutoPause5hGuardBandPercent(),
+		AutoPause5hGuardConcurrency:         h.store.GetAutoPause5hGuardConcurrency(),
+		SmartPacingEnabled:                  h.store.GetSmartPacingEnabled(),
+		SmartPacingMinConcurrency:           h.store.GetSmartPacingMinConcurrency(),
+		SmartPacingWindows:                  h.store.GetSmartPacingWindows(),
+		IgnoreUsageLimitStatus:              h.store.IgnoreUsageLimitStatus(),
 	})
 }
 
@@ -7659,6 +7709,12 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		log.Printf("设置已更新: overflow_auto_compact_enabled = %t", *req.OverflowAutoCompactEnabled)
 	}
 
+	if req.CodexPreflightSSEPassthroughEnabled != nil {
+		h.store.SetCodexPreflightSSEPassthroughEnabled(*req.CodexPreflightSSEPassthroughEnabled)
+		runtimeCfg.CodexPreflightSSEPassthrough = *req.CodexPreflightSSEPassthroughEnabled
+		log.Printf("设置已更新: codex_preflight_sse_passthrough_enabled = %t", *req.CodexPreflightSSEPassthroughEnabled)
+	}
+
 	if req.FirstTokenExcludesWsAcquire != nil {
 		h.store.SetFirstTokenExcludesWsAcquire(*req.FirstTokenExcludesWsAcquire)
 		runtimeCfg.FirstTokenExcludesWsAcquire = *req.FirstTokenExcludesWsAcquire
@@ -7699,6 +7755,30 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if req.AffinityMode != nil {
 		h.store.SetAffinityMode(*req.AffinityMode)
 		log.Printf("设置已更新: affinity_mode = %s", *req.AffinityMode)
+	}
+
+	if req.GrokAffinityMode != nil {
+		h.store.SetGrokAffinityMode(*req.GrokAffinityMode)
+		log.Printf("设置已更新: grok_affinity_mode = %s", *req.GrokAffinityMode)
+	}
+
+	// 定期探测:开关与间隔任一变更都重设运行时配置(SetGrokProbeConfig 会钳间隔下限)。
+	if req.GrokProbeEnabled != nil || req.GrokProbeIntervalMinutes != nil {
+		enabled := h.store.GrokProbeEnabled()
+		if req.GrokProbeEnabled != nil {
+			enabled = *req.GrokProbeEnabled
+		}
+		interval := h.store.GrokProbeIntervalMinutes()
+		if req.GrokProbeIntervalMinutes != nil {
+			interval = *req.GrokProbeIntervalMinutes
+		}
+		h.store.SetGrokProbeConfig(enabled, interval)
+		log.Printf("设置已更新: grok_probe_enabled=%v grok_probe_interval_minutes=%d", enabled, h.store.GrokProbeIntervalMinutes())
+	}
+
+	if req.GrokMaxRateLimitRetries != nil {
+		h.store.SetGrokMaxRateLimitRetries(*req.GrokMaxRateLimitRetries)
+		log.Printf("设置已更新: grok_max_rate_limit_retries = %d", h.store.GrokMaxRateLimitRetries())
 	}
 
 	if req.MaxRetries != nil {
@@ -8119,106 +8199,108 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 
 	// 持久化保存到数据库
 	err := h.db.UpdateSystemSettings(c.Request.Context(), &database.SystemSettings{
-		SiteName:                           siteName,
-		SiteLogo:                           siteLogo,
-		MaxConcurrency:                     h.store.GetMaxConcurrency(),
-		GlobalRPM:                          h.rateLimiter.GetRPM(),
-		TestModel:                          h.store.GetTestModel(),
-		TestContent:                        h.store.GetTestContent(),
-		TestConcurrency:                    h.store.GetTestConcurrency(),
-		BackgroundRefreshIntervalMinutes:   h.store.GetBackgroundRefreshIntervalMinutes(),
-		UsageProbeMaxAgeMinutes:            h.store.GetUsageProbeMaxAgeMinutes(),
-		UsageProbeConcurrency:              h.store.GetUsageProbeConcurrency(),
-		UsageProbeResponsesFallbackEnabled: h.store.UsageProbeResponsesFallbackEnabled(),
-		RecoveryProbeIntervalMinutes:       h.store.GetRecoveryProbeIntervalMinutes(),
-		LazyMode:                           h.store.GetLazyMode(),
-		ProxyURL:                           h.store.GetProxyURL(),
-		PgMaxConns:                         h.pgMaxConns,
-		RedisPoolSize:                      h.redisPoolSize,
-		AutoCleanUnauthorized:              h.store.GetAutoCleanUnauthorized(),
-		AutoCleanRateLimited:               h.store.GetAutoCleanRateLimited(),
-		AdminSecret:                        currentAdminSecret,
-		AutoCleanFullUsage:                 h.store.GetAutoCleanFullUsage(),
-		AutoCleanError:                     h.store.GetAutoCleanError(),
-		AutoCleanExpired:                   h.store.GetAutoCleanExpired(),
-		AutoResetCreditsEnabled:            runtimeCfg.AutoResetCreditsEnabled,
-		AutoResetCreditsBeforeExpiryMin:    runtimeCfg.AutoResetCreditsBeforeExpiryMin,
-		ProxyPoolEnabled:                   h.store.GetProxyPoolEnabled(),
-		FastSchedulerEnabled:               h.store.FastSchedulerEnabled(),
-		CodexForceWebsocket:                h.store.CodexForceWebsocket(),
-		CodexWSKeepaliveEnabled:            h.store.CodexWSKeepaliveEnabled(),
-		CodexWSKeepaliveIntervalSec:        h.store.CodexWSKeepaliveIntervalSec(),
-		CodexWSHideUpstreamErrors:          h.store.CodexWSHideUpstreamErrors(),
-		CodexWSSilentRetryEnabled:          h.store.CodexWSSilentRetryEnabled(),
-		CodexWSSilentMaxRetries:            h.store.CodexWSSilentMaxRetries(),
-		CodexWSSizeRouterEnabled:           h.store.CodexWSSizeRouterEnabled(),
-		CodexWSBusyAcquireMaxWaitSec:       h.store.CodexWSBusyAcquireMaxWaitSec(),
-		CodexWSBusyOverflowEnabled:         h.store.CodexWSBusyOverflowEnabled(),
-		CodexWSBusyPatienceSec:             h.store.CodexWSBusyPatienceSec(),
-		OverflowAutoCompactEnabled:         h.store.OverflowAutoCompactEnabled(),
-		FirstTokenExcludesWsAcquire:        h.store.FirstTokenExcludesWsAcquire(),
-		CodexContinueThinkingEnabled:       h.store.CodexContinueThinkingEnabled(),
-		CodexContinueMaxRounds:             h.store.CodexContinueMaxRounds(),
-		CodexCLIVersionSyncEnabled:         h.store.CodexCLIVersionSyncEnabled(),
-		CodexCLIVersionSyncIntervalHours:   h.store.CodexCLIVersionSyncIntervalHours(),
-		CodexSyncedCLIVersion:              proxy.CurrentRuntimeSettings().CodexSyncedCLIVersion,
-		SchedulerMode:                      h.store.GetSchedulerMode(),
-		AffinityMode:                       h.store.GetAffinityMode(),
-		MaxRetries:                         h.store.GetMaxRetries(),
-		MaxRateLimitRetries:                h.store.GetMaxRateLimitRetries(),
-		RetryIntervalMS:                    h.store.GetRetryIntervalMS(),
-		TransportRetryPolicy:               h.store.GetTransportRetryPolicy(),
-		AllowRemoteMigration:               h.store.GetAllowRemoteMigration() && hasAdminSecret,
-		ModelMapping:                       h.store.GetModelMapping(),
-		CodexModelMapping:                  h.store.GetCodexModelMapping(),
-		PayloadRules:                       h.store.GetPayloadRules(),
-		ReasoningEffortModels:              h.store.GetReasoningEffortModels(),
-		ResinURL:                           resinURL,
-		ResinPlatformName:                  resinPlatformName,
-		PromptFilterEnabled:                promptFilterCfg.Enabled,
-		PromptFilterMode:                   promptFilterCfg.Mode,
-		PromptFilterThreshold:              promptFilterCfg.Threshold,
-		PromptFilterStrictThreshold:        promptFilterCfg.StrictThreshold,
-		PromptFilterStrictTerminalEnabled:  promptFilterCfg.StrictTerminalEnabled,
-		PromptFilterAdvancedConfig:         promptFilterAdvancedRaw,
-		PromptFilterLogMatches:             promptFilterCfg.LogMatches,
-		PromptFilterMaxTextLength:          promptFilterCfg.MaxTextLength,
-		PromptFilterSensitiveWords:         promptFilterCfg.SensitiveWords,
-		PromptFilterCustomPatterns:         promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
-		PromptFilterDisabledPatterns:       promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
-		PromptFilterReviewEnabled:          promptFilterCfg.Review.Enabled,
-		PromptFilterReviewAPIKey:           promptFilterCfg.Review.APIKey,
-		PromptFilterReviewBaseURL:          promptFilterCfg.Review.BaseURL,
-		PromptFilterReviewModel:            promptFilterCfg.Review.Model,
-		PromptFilterReviewTimeoutSeconds:   promptFilterCfg.Review.TimeoutSeconds,
-		PromptFilterReviewFailClosed:       promptFilterCfg.Review.FailClosed,
-		ClientCompatMode:                   runtimeCfg.ClientCompatMode,
-		CodexMinCLIVersion:                 runtimeCfg.CodexMinCLIVersion,
-		CodexUserAgentConfig:               runtimeCfg.CodexUserAgentConfig,
-		UsageLogMode:                       usageLogMode,
-		UsageLogBatchSize:                  usageLogBatchSize,
-		UsageLogFlushIntervalSeconds:       usageLogFlushIntervalSeconds,
-		StreamFlushPolicy:                  runtimeCfg.StreamFlushPolicy,
-		StreamFlushIntervalMS:              runtimeCfg.StreamFlushIntervalMS,
-		FirstTokenMode:                     runtimeCfg.FirstTokenMode,
-		FirstTokenTimeoutSeconds:           runtimeCfg.FirstTokenTimeoutSec,
-		BillingTierPolicy:                  runtimeCfg.BillingTierPolicy,
-		ShowFullUsageNumbers:               showFullUsageNumbers,
-		PublicKeyUsagePageEnabled:          publicKeyUsagePageEnabled,
-		PublicImageStudioPageEnabled:       publicImageStudioPageEnabled,
-		PublicAccountPortalPageEnabled:     publicAccountPortalPageEnabled,
-		ImageStorageConfig:                 imgConfigJSON,
-		BackgroundConfig:                   encodeBackgroundConfig(bgCfg),
-		AutoPause5hThreshold:               h.store.GetGlobalAutoPause5hThreshold(),
-		AutoPause7dThreshold:               h.store.GetGlobalAutoPause7dThreshold(),
-		AutoPause5hGuardBandPercent:        h.store.GetAutoPause5hGuardBandPercent(),
-		AutoPause5hGuardConcurrency:        h.store.GetAutoPause5hGuardConcurrency(),
-		SmartPacingEnabled:                 h.store.GetSmartPacingEnabled(),
-		SmartPacingMinConcurrency:          h.store.GetSmartPacingMinConcurrency(),
-		SmartPacingWindows:                 h.store.GetSmartPacingWindows(),
-		IgnoreUsageLimitStatus:             h.store.IgnoreUsageLimitStatus(),
-		ModelPricingOverrides:              modelPricingOverrides,
-		ModelPricingSyncURL:                modelPricingSyncURL,
+		SiteName:                            siteName,
+		SiteLogo:                            siteLogo,
+		MaxConcurrency:                      h.store.GetMaxConcurrency(),
+		GlobalRPM:                           h.rateLimiter.GetRPM(),
+		TestModel:                           h.store.GetTestModel(),
+		TestContent:                         h.store.GetTestContent(),
+		TestConcurrency:                     h.store.GetTestConcurrency(),
+		BackgroundRefreshIntervalMinutes:    h.store.GetBackgroundRefreshIntervalMinutes(),
+		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
+		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
+		UsageProbeResponsesFallbackEnabled:  h.store.UsageProbeResponsesFallbackEnabled(),
+		RecoveryProbeIntervalMinutes:        h.store.GetRecoveryProbeIntervalMinutes(),
+		LazyMode:                            h.store.GetLazyMode(),
+		ProxyURL:                            h.store.GetProxyURL(),
+		PgMaxConns:                          h.pgMaxConns,
+		RedisPoolSize:                       h.redisPoolSize,
+		AutoCleanUnauthorized:               h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:                h.store.GetAutoCleanRateLimited(),
+		AdminSecret:                         currentAdminSecret,
+		AutoCleanFullUsage:                  h.store.GetAutoCleanFullUsage(),
+		AutoCleanError:                      h.store.GetAutoCleanError(),
+		AutoCleanExpired:                    h.store.GetAutoCleanExpired(),
+		AutoResetCreditsEnabled:             runtimeCfg.AutoResetCreditsEnabled,
+		AutoResetCreditsBeforeExpiryMin:     runtimeCfg.AutoResetCreditsBeforeExpiryMin,
+		ProxyPoolEnabled:                    h.store.GetProxyPoolEnabled(),
+		FastSchedulerEnabled:                h.store.FastSchedulerEnabled(),
+		CodexForceWebsocket:                 h.store.CodexForceWebsocket(),
+		CodexWSKeepaliveEnabled:             h.store.CodexWSKeepaliveEnabled(),
+		CodexWSKeepaliveIntervalSec:         h.store.CodexWSKeepaliveIntervalSec(),
+		CodexWSHideUpstreamErrors:           h.store.CodexWSHideUpstreamErrors(),
+		CodexWSSilentRetryEnabled:           h.store.CodexWSSilentRetryEnabled(),
+		CodexWSSilentMaxRetries:             h.store.CodexWSSilentMaxRetries(),
+		CodexWSSizeRouterEnabled:            h.store.CodexWSSizeRouterEnabled(),
+		CodexWSBusyAcquireMaxWaitSec:        h.store.CodexWSBusyAcquireMaxWaitSec(),
+		CodexWSBusyOverflowEnabled:          h.store.CodexWSBusyOverflowEnabled(),
+		CodexWSBusyPatienceSec:              h.store.CodexWSBusyPatienceSec(),
+		OverflowAutoCompactEnabled:          h.store.OverflowAutoCompactEnabled(),
+		CodexPreflightSSEPassthroughEnabled: h.store.CodexPreflightSSEPassthroughEnabled(),
+		FirstTokenExcludesWsAcquire:         h.store.FirstTokenExcludesWsAcquire(),
+		CodexContinueThinkingEnabled:        h.store.CodexContinueThinkingEnabled(),
+		CodexContinueMaxRounds:              h.store.CodexContinueMaxRounds(),
+		CodexCLIVersionSyncEnabled:          h.store.CodexCLIVersionSyncEnabled(),
+		CodexCLIVersionSyncIntervalHours:    h.store.CodexCLIVersionSyncIntervalHours(),
+		CodexSyncedCLIVersion:               proxy.CurrentRuntimeSettings().CodexSyncedCLIVersion,
+		SchedulerMode:                       h.store.GetSchedulerMode(),
+		AffinityMode:                        h.store.GetAffinityMode(),
+		MaxRetries:                          h.store.GetMaxRetries(),
+		MaxRateLimitRetries:                 h.store.GetMaxRateLimitRetries(),
+		RetryIntervalMS:                     h.store.GetRetryIntervalMS(),
+		TransportRetryPolicy:                h.store.GetTransportRetryPolicy(),
+		AllowRemoteMigration:                h.store.GetAllowRemoteMigration() && hasAdminSecret,
+		ModelMapping:                        h.store.GetModelMapping(),
+		CodexModelMapping:                   h.store.GetCodexModelMapping(),
+		PayloadRules:                        h.store.GetPayloadRules(),
+		ReasoningEffortModels:               h.store.GetReasoningEffortModels(),
+		ResinURL:                            resinURL,
+		ResinPlatformName:                   resinPlatformName,
+		PromptFilterEnabled:                 promptFilterCfg.Enabled,
+		PromptFilterMode:                    promptFilterCfg.Mode,
+		PromptFilterThreshold:               promptFilterCfg.Threshold,
+		PromptFilterStrictThreshold:         promptFilterCfg.StrictThreshold,
+		PromptFilterStrictTerminalEnabled:   promptFilterCfg.StrictTerminalEnabled,
+		PromptFilterAdvancedConfig:          promptFilterAdvancedRaw,
+		PromptFilterLogMatches:              promptFilterCfg.LogMatches,
+		PromptFilterMaxTextLength:           promptFilterCfg.MaxTextLength,
+		PromptFilterSensitiveWords:          promptFilterCfg.SensitiveWords,
+		PromptFilterCustomPatterns:          promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
+		PromptFilterDisabledPatterns:        promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
+		PromptFilterReviewEnabled:           promptFilterCfg.Review.Enabled,
+		PromptFilterReviewAPIKey:            promptFilterCfg.Review.APIKey,
+		PromptFilterReviewBaseURL:           promptFilterCfg.Review.BaseURL,
+		PromptFilterReviewModel:             promptFilterCfg.Review.Model,
+		PromptFilterReviewTimeoutSeconds:    promptFilterCfg.Review.TimeoutSeconds,
+		PromptFilterReviewFailClosed:        promptFilterCfg.Review.FailClosed,
+		ClientCompatMode:                    runtimeCfg.ClientCompatMode,
+		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
+		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
+		UsageLogMode:                        usageLogMode,
+		UsageLogBatchSize:                   usageLogBatchSize,
+		UsageLogFlushIntervalSeconds:        usageLogFlushIntervalSeconds,
+		StreamFlushPolicy:                   runtimeCfg.StreamFlushPolicy,
+		StreamFlushIntervalMS:               runtimeCfg.StreamFlushIntervalMS,
+		FirstTokenMode:                      runtimeCfg.FirstTokenMode,
+		FirstTokenTimeoutSeconds:            runtimeCfg.FirstTokenTimeoutSec,
+		BillingTierPolicy:                   runtimeCfg.BillingTierPolicy,
+		ShowFullUsageNumbers:                showFullUsageNumbers,
+		PublicKeyUsagePageEnabled:           publicKeyUsagePageEnabled,
+		PublicImageStudioPageEnabled:        publicImageStudioPageEnabled,
+		PublicAccountPortalPageEnabled:      publicAccountPortalPageEnabled,
+		ImageStorageConfig:                  imgConfigJSON,
+		BackgroundConfig:                    encodeBackgroundConfig(bgCfg),
+		GrokConfig:                          encodeGrokConfig(h.store.GetGrokAffinityMode(), h.store.GrokProbeEnabled(), h.store.GrokProbeIntervalMinutes(), h.store.GrokMaxRateLimitRetries()),
+		AutoPause5hThreshold:                h.store.GetGlobalAutoPause5hThreshold(),
+		AutoPause7dThreshold:                h.store.GetGlobalAutoPause7dThreshold(),
+		AutoPause5hGuardBandPercent:         h.store.GetAutoPause5hGuardBandPercent(),
+		AutoPause5hGuardConcurrency:         h.store.GetAutoPause5hGuardConcurrency(),
+		SmartPacingEnabled:                  h.store.GetSmartPacingEnabled(),
+		SmartPacingMinConcurrency:           h.store.GetSmartPacingMinConcurrency(),
+		SmartPacingWindows:                  h.store.GetSmartPacingWindows(),
+		IgnoreUsageLimitStatus:              h.store.IgnoreUsageLimitStatus(),
+		ModelPricingOverrides:               modelPricingOverrides,
+		ModelPricingSyncURL:                 modelPricingSyncURL,
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
@@ -8266,119 +8348,124 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, settingsResponse{
-		SiteName:                           siteName,
-		SiteLogo:                           siteLogo,
-		BackgroundImage:                    bgCfg.Image,
-		BackgroundOpacity:                  bgCfg.Opacity,
-		BackgroundBlur:                     bgCfg.Blur,
-		BackgroundGlassOpacity:             bgCfg.GlassOpacity,
-		BackgroundGlassBlur:                bgCfg.GlassBlur,
-		MaxConcurrency:                     h.store.GetMaxConcurrency(),
-		GlobalRPM:                          h.rateLimiter.GetRPM(),
-		TestModel:                          h.store.GetTestModel(),
-		TestContent:                        h.store.GetTestContent(),
-		TestConcurrency:                    h.store.GetTestConcurrency(),
-		BackgroundRefreshIntervalMinutes:   h.store.GetBackgroundRefreshIntervalMinutes(),
-		UsageProbeMaxAgeMinutes:            h.store.GetUsageProbeMaxAgeMinutes(),
-		UsageProbeConcurrency:              h.store.GetUsageProbeConcurrency(),
-		UsageProbeResponsesFallbackEnabled: h.store.UsageProbeResponsesFallbackEnabled(),
-		RecoveryProbeIntervalMinutes:       h.store.GetRecoveryProbeIntervalMinutes(),
-		LazyMode:                           h.store.GetLazyMode(),
-		ProxyURL:                           h.store.GetProxyURL(),
-		PgMaxConns:                         h.pgMaxConns,
-		RedisPoolSize:                      h.redisPoolSize,
-		AutoCleanUnauthorized:              h.store.GetAutoCleanUnauthorized(),
-		AutoCleanRateLimited:               h.store.GetAutoCleanRateLimited(),
-		AdminSecret:                        adminSecretForDisplay,
-		AdminAuthSource:                    adminAuthSource,
-		AutoCleanFullUsage:                 h.store.GetAutoCleanFullUsage(),
-		AutoCleanError:                     h.store.GetAutoCleanError(),
-		AutoCleanExpired:                   h.store.GetAutoCleanExpired(),
-		AutoResetCreditsEnabled:            runtimeCfg.AutoResetCreditsEnabled,
-		AutoResetCreditsBeforeExpiryMin:    runtimeCfg.AutoResetCreditsBeforeExpiryMin,
-		ProxyPoolEnabled:                   h.store.GetProxyPoolEnabled(),
-		FastSchedulerEnabled:               h.store.FastSchedulerEnabled(),
-		CodexForceWebsocket:                h.store.CodexForceWebsocket(),
-		CodexWSKeepaliveEnabled:            h.store.CodexWSKeepaliveEnabled(),
-		CodexWSKeepaliveIntervalSec:        h.store.CodexWSKeepaliveIntervalSec(),
-		CodexWSHideUpstreamErrors:          h.store.CodexWSHideUpstreamErrors(),
-		CodexWSSilentRetryEnabled:          h.store.CodexWSSilentRetryEnabled(),
-		CodexWSSilentMaxRetries:            h.store.CodexWSSilentMaxRetries(),
-		CodexWSSizeRouterEnabled:           h.store.CodexWSSizeRouterEnabled(),
-		CodexWSBusyAcquireMaxWaitSec:       h.store.CodexWSBusyAcquireMaxWaitSec(),
-		CodexWSBusyOverflowEnabled:         h.store.CodexWSBusyOverflowEnabled(),
-		CodexWSBusyPatienceSec:             h.store.CodexWSBusyPatienceSec(),
-		OverflowAutoCompactEnabled:         h.store.OverflowAutoCompactEnabled(),
-		FirstTokenExcludesWsAcquire:        h.store.FirstTokenExcludesWsAcquire(),
-		CodexContinueThinkingEnabled:       h.store.CodexContinueThinkingEnabled(),
-		CodexContinueMaxRounds:             h.store.CodexContinueMaxRounds(),
-		CodexCLIVersionSyncEnabled:         h.store.CodexCLIVersionSyncEnabled(),
-		CodexCLIVersionSyncIntervalHours:   h.store.CodexCLIVersionSyncIntervalHours(),
-		CodexSyncedCLIVersion:              proxy.CurrentRuntimeSettings().CodexSyncedCLIVersion,
-		SchedulerMode:                      h.store.GetSchedulerMode(),
-		AffinityMode:                       h.store.GetAffinityMode(),
-		MaxRetries:                         h.store.GetMaxRetries(),
-		MaxRateLimitRetries:                h.store.GetMaxRateLimitRetries(),
-		RetryIntervalMS:                    h.store.GetRetryIntervalMS(),
-		TransportRetryPolicy:               h.store.GetTransportRetryPolicy(),
-		AllowRemoteMigration:               h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
-		DatabaseDriver:                     h.databaseDriver,
-		DatabaseLabel:                      h.databaseLabel,
-		CacheDriver:                        h.cacheDriver,
-		CacheLabel:                         h.cacheLabel,
-		ExpiredCleaned:                     expiredCleaned,
-		ModelMapping:                       h.store.GetModelMapping(),
-		CodexModelMapping:                  h.store.GetCodexModelMapping(),
-		PayloadRules:                       h.store.GetPayloadRules(),
-		ReasoningEffortModels:              h.store.GetReasoningEffortModels(),
-		ResinURL:                           resinURL,
-		ResinPlatformName:                  resinPlatformName,
-		PromptFilterEnabled:                promptFilterCfg.Enabled,
-		PromptFilterMode:                   promptFilterCfg.Mode,
-		PromptFilterThreshold:              promptFilterCfg.Threshold,
-		PromptFilterStrictThreshold:        promptFilterCfg.StrictThreshold,
-		PromptFilterStrictTerminalEnabled:  promptFilterCfg.StrictTerminalEnabled,
-		PromptFilterAdvancedConfig:         promptFilterAdvancedRaw,
-		PromptFilterLogMatches:             promptFilterCfg.LogMatches,
-		PromptFilterMaxTextLength:          promptFilterCfg.MaxTextLength,
-		PromptFilterSensitiveWords:         promptFilterCfg.SensitiveWords,
-		PromptFilterCustomPatterns:         promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
-		PromptFilterDisabledPatterns:       promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
-		PromptFilterReviewEnabled:          promptFilterCfg.Review.Enabled,
-		PromptFilterReviewAPIKeyConfigured: promptFilterCfg.Review.APIKey != "",
-		PromptFilterReviewAPIKeyCount:      len(promptFilterCfg.Review.APIKeyList()),
-		PromptFilterReviewBaseURL:          promptFilterCfg.Review.BaseURL,
-		PromptFilterReviewModel:            promptFilterCfg.Review.Model,
-		PromptFilterReviewTimeoutSeconds:   promptFilterCfg.Review.TimeoutSeconds,
-		PromptFilterReviewFailClosed:       promptFilterCfg.Review.FailClosed,
-		ClientCompatMode:                   runtimeCfg.ClientCompatMode,
-		CodexMinCLIVersion:                 runtimeCfg.CodexMinCLIVersion,
-		CodexUserAgentConfig:               runtimeCfg.CodexUserAgentConfig,
-		UsageLogMode:                       usageLogMode,
-		UsageLogBatchSize:                  usageLogBatchSize,
-		UsageLogFlushIntervalSeconds:       usageLogFlushIntervalSeconds,
-		StreamFlushPolicy:                  runtimeCfg.StreamFlushPolicy,
-		StreamFlushIntervalMS:              runtimeCfg.StreamFlushIntervalMS,
-		FirstTokenMode:                     runtimeCfg.FirstTokenMode,
-		FirstTokenTimeoutSeconds:           runtimeCfg.FirstTokenTimeoutSec,
-		BillingTierPolicy:                  runtimeCfg.BillingTierPolicy,
-		ShowFullUsageNumbers:               showFullUsageNumbers,
-		ImageStorageBackend:                imgCfg.Backend,
-		ImageS3Endpoint:                    imgCfg.Endpoint,
-		ImageS3Region:                      imgCfg.Region,
-		ImageS3Bucket:                      imgCfg.Bucket,
-		ImageS3AccessKey:                   imgCfg.AccessKey,
-		ImageS3SecretKey:                   imgCfg.SecretKey,
-		ImageS3Prefix:                      strings.TrimSuffix(imgCfg.Prefix, "/"),
-		ImageS3ForcePathStyle:              imgCfg.ForcePathStyle,
-		AutoPause5hThreshold:               h.store.GetGlobalAutoPause5hThreshold(),
-		AutoPause7dThreshold:               h.store.GetGlobalAutoPause7dThreshold(),
-		AutoPause5hGuardBandPercent:        h.store.GetAutoPause5hGuardBandPercent(),
-		AutoPause5hGuardConcurrency:        h.store.GetAutoPause5hGuardConcurrency(),
-		SmartPacingEnabled:                 h.store.GetSmartPacingEnabled(),
-		SmartPacingMinConcurrency:          h.store.GetSmartPacingMinConcurrency(),
-		SmartPacingWindows:                 h.store.GetSmartPacingWindows(),
-		IgnoreUsageLimitStatus:             h.store.IgnoreUsageLimitStatus(),
+		SiteName:                            siteName,
+		SiteLogo:                            siteLogo,
+		BackgroundImage:                     bgCfg.Image,
+		BackgroundOpacity:                   bgCfg.Opacity,
+		BackgroundBlur:                      bgCfg.Blur,
+		BackgroundGlassOpacity:              bgCfg.GlassOpacity,
+		BackgroundGlassBlur:                 bgCfg.GlassBlur,
+		MaxConcurrency:                      h.store.GetMaxConcurrency(),
+		GlobalRPM:                           h.rateLimiter.GetRPM(),
+		TestModel:                           h.store.GetTestModel(),
+		TestContent:                         h.store.GetTestContent(),
+		TestConcurrency:                     h.store.GetTestConcurrency(),
+		BackgroundRefreshIntervalMinutes:    h.store.GetBackgroundRefreshIntervalMinutes(),
+		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
+		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
+		UsageProbeResponsesFallbackEnabled:  h.store.UsageProbeResponsesFallbackEnabled(),
+		RecoveryProbeIntervalMinutes:        h.store.GetRecoveryProbeIntervalMinutes(),
+		LazyMode:                            h.store.GetLazyMode(),
+		ProxyURL:                            h.store.GetProxyURL(),
+		PgMaxConns:                          h.pgMaxConns,
+		RedisPoolSize:                       h.redisPoolSize,
+		AutoCleanUnauthorized:               h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:                h.store.GetAutoCleanRateLimited(),
+		AdminSecret:                         adminSecretForDisplay,
+		AdminAuthSource:                     adminAuthSource,
+		AutoCleanFullUsage:                  h.store.GetAutoCleanFullUsage(),
+		AutoCleanError:                      h.store.GetAutoCleanError(),
+		AutoCleanExpired:                    h.store.GetAutoCleanExpired(),
+		AutoResetCreditsEnabled:             runtimeCfg.AutoResetCreditsEnabled,
+		AutoResetCreditsBeforeExpiryMin:     runtimeCfg.AutoResetCreditsBeforeExpiryMin,
+		ProxyPoolEnabled:                    h.store.GetProxyPoolEnabled(),
+		FastSchedulerEnabled:                h.store.FastSchedulerEnabled(),
+		CodexForceWebsocket:                 h.store.CodexForceWebsocket(),
+		CodexWSKeepaliveEnabled:             h.store.CodexWSKeepaliveEnabled(),
+		CodexWSKeepaliveIntervalSec:         h.store.CodexWSKeepaliveIntervalSec(),
+		CodexWSHideUpstreamErrors:           h.store.CodexWSHideUpstreamErrors(),
+		CodexWSSilentRetryEnabled:           h.store.CodexWSSilentRetryEnabled(),
+		CodexWSSilentMaxRetries:             h.store.CodexWSSilentMaxRetries(),
+		CodexWSSizeRouterEnabled:            h.store.CodexWSSizeRouterEnabled(),
+		CodexWSBusyAcquireMaxWaitSec:        h.store.CodexWSBusyAcquireMaxWaitSec(),
+		CodexWSBusyOverflowEnabled:          h.store.CodexWSBusyOverflowEnabled(),
+		CodexWSBusyPatienceSec:              h.store.CodexWSBusyPatienceSec(),
+		OverflowAutoCompactEnabled:          h.store.OverflowAutoCompactEnabled(),
+		CodexPreflightSSEPassthroughEnabled: h.store.CodexPreflightSSEPassthroughEnabled(),
+		FirstTokenExcludesWsAcquire:         h.store.FirstTokenExcludesWsAcquire(),
+		CodexContinueThinkingEnabled:        h.store.CodexContinueThinkingEnabled(),
+		CodexContinueMaxRounds:              h.store.CodexContinueMaxRounds(),
+		CodexCLIVersionSyncEnabled:          h.store.CodexCLIVersionSyncEnabled(),
+		CodexCLIVersionSyncIntervalHours:    h.store.CodexCLIVersionSyncIntervalHours(),
+		CodexSyncedCLIVersion:               proxy.CurrentRuntimeSettings().CodexSyncedCLIVersion,
+		SchedulerMode:                       h.store.GetSchedulerMode(),
+		AffinityMode:                        h.store.GetAffinityMode(),
+		GrokAffinityMode:                    h.store.GetGrokAffinityMode(),
+		GrokProbeEnabled:                    h.store.GrokProbeEnabled(),
+		GrokProbeIntervalMinutes:            h.store.GrokProbeIntervalMinutes(),
+		GrokMaxRateLimitRetries:             h.store.GrokMaxRateLimitRetries(),
+		MaxRetries:                          h.store.GetMaxRetries(),
+		MaxRateLimitRetries:                 h.store.GetMaxRateLimitRetries(),
+		RetryIntervalMS:                     h.store.GetRetryIntervalMS(),
+		TransportRetryPolicy:                h.store.GetTransportRetryPolicy(),
+		AllowRemoteMigration:                h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
+		DatabaseDriver:                      h.databaseDriver,
+		DatabaseLabel:                       h.databaseLabel,
+		CacheDriver:                         h.cacheDriver,
+		CacheLabel:                          h.cacheLabel,
+		ExpiredCleaned:                      expiredCleaned,
+		ModelMapping:                        h.store.GetModelMapping(),
+		CodexModelMapping:                   h.store.GetCodexModelMapping(),
+		PayloadRules:                        h.store.GetPayloadRules(),
+		ReasoningEffortModels:               h.store.GetReasoningEffortModels(),
+		ResinURL:                            resinURL,
+		ResinPlatformName:                   resinPlatformName,
+		PromptFilterEnabled:                 promptFilterCfg.Enabled,
+		PromptFilterMode:                    promptFilterCfg.Mode,
+		PromptFilterThreshold:               promptFilterCfg.Threshold,
+		PromptFilterStrictThreshold:         promptFilterCfg.StrictThreshold,
+		PromptFilterStrictTerminalEnabled:   promptFilterCfg.StrictTerminalEnabled,
+		PromptFilterAdvancedConfig:          promptFilterAdvancedRaw,
+		PromptFilterLogMatches:              promptFilterCfg.LogMatches,
+		PromptFilterMaxTextLength:           promptFilterCfg.MaxTextLength,
+		PromptFilterSensitiveWords:          promptFilterCfg.SensitiveWords,
+		PromptFilterCustomPatterns:          promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
+		PromptFilterDisabledPatterns:        promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
+		PromptFilterReviewEnabled:           promptFilterCfg.Review.Enabled,
+		PromptFilterReviewAPIKeyConfigured:  promptFilterCfg.Review.APIKey != "",
+		PromptFilterReviewAPIKeyCount:       len(promptFilterCfg.Review.APIKeyList()),
+		PromptFilterReviewBaseURL:           promptFilterCfg.Review.BaseURL,
+		PromptFilterReviewModel:             promptFilterCfg.Review.Model,
+		PromptFilterReviewTimeoutSeconds:    promptFilterCfg.Review.TimeoutSeconds,
+		PromptFilterReviewFailClosed:        promptFilterCfg.Review.FailClosed,
+		ClientCompatMode:                    runtimeCfg.ClientCompatMode,
+		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
+		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
+		UsageLogMode:                        usageLogMode,
+		UsageLogBatchSize:                   usageLogBatchSize,
+		UsageLogFlushIntervalSeconds:        usageLogFlushIntervalSeconds,
+		StreamFlushPolicy:                   runtimeCfg.StreamFlushPolicy,
+		StreamFlushIntervalMS:               runtimeCfg.StreamFlushIntervalMS,
+		FirstTokenMode:                      runtimeCfg.FirstTokenMode,
+		FirstTokenTimeoutSeconds:            runtimeCfg.FirstTokenTimeoutSec,
+		BillingTierPolicy:                   runtimeCfg.BillingTierPolicy,
+		ShowFullUsageNumbers:                showFullUsageNumbers,
+		ImageStorageBackend:                 imgCfg.Backend,
+		ImageS3Endpoint:                     imgCfg.Endpoint,
+		ImageS3Region:                       imgCfg.Region,
+		ImageS3Bucket:                       imgCfg.Bucket,
+		ImageS3AccessKey:                    imgCfg.AccessKey,
+		ImageS3SecretKey:                    imgCfg.SecretKey,
+		ImageS3Prefix:                       strings.TrimSuffix(imgCfg.Prefix, "/"),
+		ImageS3ForcePathStyle:               imgCfg.ForcePathStyle,
+		AutoPause5hThreshold:                h.store.GetGlobalAutoPause5hThreshold(),
+		AutoPause7dThreshold:                h.store.GetGlobalAutoPause7dThreshold(),
+		AutoPause5hGuardBandPercent:         h.store.GetAutoPause5hGuardBandPercent(),
+		AutoPause5hGuardConcurrency:         h.store.GetAutoPause5hGuardConcurrency(),
+		SmartPacingEnabled:                  h.store.GetSmartPacingEnabled(),
+		SmartPacingMinConcurrency:           h.store.GetSmartPacingMinConcurrency(),
+		SmartPacingWindows:                  h.store.GetSmartPacingWindows(),
+		IgnoreUsageLimitStatus:              h.store.IgnoreUsageLimitStatus(),
 	})
 }
 
@@ -8896,6 +8983,26 @@ func (h *Handler) CleanRateLimited(c *gin.Context) {
 // CleanError 清理错误（error）账号
 func (h *Handler) CleanError(c *gin.Context) {
 	h.cleanByStatus(c, "error")
+}
+
+// CleanGrokBanned 清理封禁（unauthorized）的 Grok 账号
+func (h *Handler) CleanGrokBanned(c *gin.Context) {
+	h.cleanGrokByStatus(c, "unauthorized")
+}
+
+// CleanGrokError 清理错误（error）的 Grok 账号
+func (h *Handler) CleanGrokError(c *gin.Context) {
+	h.cleanGrokByStatus(c, "error")
+}
+
+// cleanGrokByStatus 按运行时状态清理 Grok 账号，不影响其它平台
+func (h *Handler) cleanGrokByStatus(c *gin.Context, targetStatus string) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	cleaned := h.store.CleanGrokByRuntimeStatus(ctx, targetStatus)
+
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已清理 %d 个账号", cleaned), "cleaned": cleaned})
 }
 
 // cleanByStatus 按运行时状态清理账号

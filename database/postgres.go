@@ -259,6 +259,7 @@ func NormalizeUsageLogFlushIntervalSeconds(n int) int {
 
 // usageLogEntry 日志缓冲条目
 type usageLogEntry struct {
+	StoreUsageLog        bool
 	AccountID            int64
 	Channel              string
 	ClientIP             string
@@ -749,6 +750,7 @@ func (db *DB) migrate(ctx context.Context) error {
 				site_name          TEXT DEFAULT 'CodexProxy',
 				site_logo          TEXT DEFAULT '',
 				background_config  TEXT DEFAULT '{}',
+				grok_config        TEXT DEFAULT '{}',
 				max_concurrency    INT DEFAULT 2,
 			global_rpm         INT DEFAULT 0,
 			test_model         VARCHAR(100) DEFAULT 'gpt-5.4',
@@ -778,6 +780,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS site_name TEXT DEFAULT 'CodexProxy';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS site_logo TEXT DEFAULT '';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS background_config TEXT DEFAULT '{}';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS grok_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS test_content TEXT DEFAULT 'hi';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
@@ -849,6 +852,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_ws_busy_overflow_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_ws_busy_patience_sec INT DEFAULT 2;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS overflow_auto_compact_enabled BOOLEAN DEFAULT FALSE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_preflight_sse_passthrough_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS first_token_excludes_ws_acquire BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_ws_silent_max_retries INT DEFAULT 2;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_continue_thinking_enabled BOOLEAN DEFAULT FALSE;
@@ -1498,99 +1502,101 @@ func NormalizeSiteName(value string) string {
 
 // SystemSettings 运行时设置项
 type SystemSettings struct {
-	SiteName                           string
-	SiteLogo                           string
-	BackgroundConfig                   string // JSON: {"image":"...","opacity":18,"blur":0}
-	MaxConcurrency                     int
-	GlobalRPM                          int
-	TestModel                          string
-	TestContent                        string
-	TestConcurrency                    int
-	ProxyURL                           string
-	PgMaxConns                         int
-	RedisPoolSize                      int
-	AutoCleanUnauthorized              bool
-	AutoCleanRateLimited               bool
-	AdminSecret                        string
-	AutoCleanFullUsage                 bool
-	AutoCleanError                     bool
-	AutoCleanExpired                   bool
-	LazyMode                           bool
-	ProxyPoolEnabled                   bool
-	FastSchedulerEnabled               bool
-	MaxRetries                         int
-	MaxRateLimitRetries                int
-	AllowRemoteMigration               bool
-	ModelMapping                       string // JSON: {"anthropic_model": "codex_model", ...}
-	CodexModelMapping                  string // JSON: {"requested_codex_model": "upstream_codex_model", ...}
-	PayloadRules                       string // JSON: 请求体重写规则（default/override/append/filter 等规则组）
-	ReasoningEffortModels              string // JSON: [{"model":"gpt-5.5","effort":"xhigh"}, ...]
-	BackgroundRefreshIntervalMinutes   int
-	UsageProbeMaxAgeMinutes            int
-	UsageProbeConcurrency              int
-	UsageProbeResponsesFallbackEnabled bool
-	RecoveryProbeIntervalMinutes       int
-	SchedulerMode                      string
-	AffinityMode                       string // session 粘性模式: bounded / off / strict
-	ResinURL                           string // Resin 代理池地址（含 Token），例如 http://127.0.0.1:2260/my-token
-	ResinPlatformName                  string // Resin 平台标识，例如 codex2api
-	PromptFilterEnabled                bool
-	PromptFilterMode                   string
-	PromptFilterThreshold              int
-	PromptFilterStrictThreshold        int
-	PromptFilterStrictTerminalEnabled  bool
-	PromptFilterAdvancedConfig         string
-	PromptFilterLogMatches             bool
-	PromptFilterMaxTextLength          int
-	PromptFilterSensitiveWords         string
-	PromptFilterCustomPatterns         string
-	PromptFilterDisabledPatterns       string
-	PromptFilterReviewEnabled          bool
-	PromptFilterReviewAPIKey           string
-	PromptFilterReviewBaseURL          string
-	PromptFilterReviewModel            string
-	PromptFilterReviewTimeoutSeconds   int
-	PromptFilterReviewFailClosed       bool
-	ClientCompatMode                   string
-	CodexMinCLIVersion                 string
-	CodexUserAgentConfig               string
-	UsageLogMode                       string
-	UsageLogBatchSize                  int
-	UsageLogFlushIntervalSeconds       int
-	StreamFlushPolicy                  string
-	StreamFlushIntervalMS              int
-	FirstTokenMode                     string
-	FirstTokenTimeoutSeconds           int
-	BillingTierPolicy                  string
-	ImageStorageConfig                 string // JSON: {"backend":"s3","endpoint":"...","region":"...","bucket":"...","access_key":"...","secret_key":"...","prefix":"...","force_path_style":false}
-	ShowFullUsageNumbers               bool
-	PublicKeyUsagePageEnabled          bool
-	PublicImageStudioPageEnabled       bool
-	PublicAccountPortalPageEnabled     bool // 账号自助添加公开门户开关，默认 false
-	CodexForceWebsocket                bool // 强制 Codex 上游走 WebSocket（复用连接池），默认 false
-	CodexWSKeepaliveEnabled            bool // 启用上游 WS 空闲连接保活（仅 Ping，不发业务帧），默认 false
-	CodexWSKeepaliveIntervalSec        int  // WS 保活 Ping 间隔（秒），默认 60
-	CodexWSHideUpstreamErrors          bool // 隐藏上游 WS 原始错误，默认 true
-	CodexWSSilentRetryEnabled          bool // 首包前 WS 上游错误静默换号重试，默认 true
-	CodexWSSilentMaxRetries            int  // WS 静默换号最大重试次数，默认 2
-	CodexWSSizeRouterEnabled           bool // 1009 自学习体积路由：超大请求直接首发 HTTP，默认 true
-	CodexWSBusyAcquireMaxWaitSec       int  // busy session/容量等待的累计上限（秒），默认 30（issue #413）
-	CodexWSBusyOverflowEnabled         bool // busy session 溢出到同账号兄弟连接，默认 false（issue #413）
-	CodexWSBusyPatienceSec             int  // 触发溢出前的短等待（秒），默认 2（issue #413）
-	OverflowAutoCompactEnabled         bool // 上下文超窗时自动摘要旧轮次并重试一次（实验性，默认 false，issue #415）
-	FirstTokenExcludesWsAcquire        bool // 落库 first_token_ms 扣除 WS 取连耗时，默认 false（原始值 = first_token_ms + ws_acquire_ms）
-	CodexContinueThinkingEnabled       bool // 检测到上游截断思考时自动续想并折叠成单响应，默认 false
-	CodexContinueMaxRounds             int  // 单次请求最大续想轮数（含首轮），默认 8
-	AutoPause5hThreshold               float64
-	AutoPause7dThreshold               float64
-	AutoPause5hGuardBandPercent        float64
-	AutoPause5hGuardConcurrency        int
-	SmartPacingEnabled                 bool   // issue #312 智能配速总开关
-	SmartPacingMinConcurrency          int    // 配速并发下限
-	SmartPacingWindows                 string // "5h,7d" / "5h" / "7d"
-	IgnoreUsageLimitStatus             bool   // 用量窗口仅作参考，以 Responses 成功/usage_limit_reached 判定可用性
-	RetryIntervalMS                    int    // 重试间隔毫秒（0 = 立即重试，保持旧行为）
-	TransportRetryPolicy               string // 传输错误重试策略: rotate（换号，旧行为）/ sticky（同号延迟重试）
+	SiteName                            string
+	SiteLogo                            string
+	BackgroundConfig                    string // JSON: {"image":"...","opacity":18,"blur":0}
+	GrokConfig                          string // JSON: {"affinity_mode":"strict"}
+	MaxConcurrency                      int
+	GlobalRPM                           int
+	TestModel                           string
+	TestContent                         string
+	TestConcurrency                     int
+	ProxyURL                            string
+	PgMaxConns                          int
+	RedisPoolSize                       int
+	AutoCleanUnauthorized               bool
+	AutoCleanRateLimited                bool
+	AdminSecret                         string
+	AutoCleanFullUsage                  bool
+	AutoCleanError                      bool
+	AutoCleanExpired                    bool
+	LazyMode                            bool
+	ProxyPoolEnabled                    bool
+	FastSchedulerEnabled                bool
+	MaxRetries                          int
+	MaxRateLimitRetries                 int
+	AllowRemoteMigration                bool
+	ModelMapping                        string // JSON: {"anthropic_model": "codex_model", ...}
+	CodexModelMapping                   string // JSON: {"requested_codex_model": "upstream_codex_model", ...}
+	PayloadRules                        string // JSON: 请求体重写规则（default/override/append/filter 等规则组）
+	ReasoningEffortModels               string // JSON: [{"model":"gpt-5.5","effort":"xhigh"}, ...]
+	BackgroundRefreshIntervalMinutes    int
+	UsageProbeMaxAgeMinutes             int
+	UsageProbeConcurrency               int
+	UsageProbeResponsesFallbackEnabled  bool
+	RecoveryProbeIntervalMinutes        int
+	SchedulerMode                       string
+	AffinityMode                        string // session 粘性模式: bounded / off / strict
+	ResinURL                            string // Resin 代理池地址（含 Token），例如 http://127.0.0.1:2260/my-token
+	ResinPlatformName                   string // Resin 平台标识，例如 codex2api
+	PromptFilterEnabled                 bool
+	PromptFilterMode                    string
+	PromptFilterThreshold               int
+	PromptFilterStrictThreshold         int
+	PromptFilterStrictTerminalEnabled   bool
+	PromptFilterAdvancedConfig          string
+	PromptFilterLogMatches              bool
+	PromptFilterMaxTextLength           int
+	PromptFilterSensitiveWords          string
+	PromptFilterCustomPatterns          string
+	PromptFilterDisabledPatterns        string
+	PromptFilterReviewEnabled           bool
+	PromptFilterReviewAPIKey            string
+	PromptFilterReviewBaseURL           string
+	PromptFilterReviewModel             string
+	PromptFilterReviewTimeoutSeconds    int
+	PromptFilterReviewFailClosed        bool
+	ClientCompatMode                    string
+	CodexMinCLIVersion                  string
+	CodexUserAgentConfig                string
+	UsageLogMode                        string
+	UsageLogBatchSize                   int
+	UsageLogFlushIntervalSeconds        int
+	StreamFlushPolicy                   string
+	StreamFlushIntervalMS               int
+	FirstTokenMode                      string
+	FirstTokenTimeoutSeconds            int
+	BillingTierPolicy                   string
+	ImageStorageConfig                  string // JSON: {"backend":"s3","endpoint":"...","region":"...","bucket":"...","access_key":"...","secret_key":"...","prefix":"...","force_path_style":false}
+	ShowFullUsageNumbers                bool
+	PublicKeyUsagePageEnabled           bool
+	PublicImageStudioPageEnabled        bool
+	PublicAccountPortalPageEnabled      bool // 账号自助添加公开门户开关，默认 false
+	CodexForceWebsocket                 bool // 强制 Codex 上游走 WebSocket（复用连接池），默认 false
+	CodexWSKeepaliveEnabled             bool // 启用上游 WS 空闲连接保活（仅 Ping，不发业务帧），默认 false
+	CodexWSKeepaliveIntervalSec         int  // WS 保活 Ping 间隔（秒），默认 60
+	CodexWSHideUpstreamErrors           bool // 隐藏上游 WS 原始错误，默认 true
+	CodexWSSilentRetryEnabled           bool // 首包前 WS 上游错误静默换号重试，默认 true
+	CodexWSSilentMaxRetries             int  // WS 静默换号最大重试次数，默认 2
+	CodexWSSizeRouterEnabled            bool // 1009 自学习体积路由：超大请求直接首发 HTTP，默认 true
+	CodexWSBusyAcquireMaxWaitSec        int  // busy session/容量等待的累计上限（秒），默认 30（issue #413）
+	CodexWSBusyOverflowEnabled          bool // busy session 溢出到同账号兄弟连接，默认 false（issue #413）
+	CodexWSBusyPatienceSec              int  // 触发溢出前的短等待（秒），默认 2（issue #413）
+	OverflowAutoCompactEnabled          bool // 上下文超窗时自动摘要旧轮次并重试一次（实验性，默认 false，issue #415）
+	CodexPreflightSSEPassthroughEnabled bool // 前置元数据 SSE 事件立即透传下游（旧版兼容，默认 false，issue #425）
+	FirstTokenExcludesWsAcquire         bool // 落库 first_token_ms 扣除 WS 取连耗时，默认 false（原始值 = first_token_ms + ws_acquire_ms）
+	CodexContinueThinkingEnabled        bool // 检测到上游截断思考时自动续想并折叠成单响应，默认 false
+	CodexContinueMaxRounds              int  // 单次请求最大续想轮数（含首轮），默认 8
+	AutoPause5hThreshold                float64
+	AutoPause7dThreshold                float64
+	AutoPause5hGuardBandPercent         float64
+	AutoPause5hGuardConcurrency         int
+	SmartPacingEnabled                  bool   // issue #312 智能配速总开关
+	SmartPacingMinConcurrency           int    // 配速并发下限
+	SmartPacingWindows                  string // "5h,7d" / "5h" / "7d"
+	IgnoreUsageLimitStatus              bool   // 用量窗口仅作参考，以 Responses 成功/usage_limit_reached 判定可用性
+	RetryIntervalMS                     int    // 重试间隔毫秒（0 = 立即重试，保持旧行为）
+	TransportRetryPolicy                string // 传输错误重试策略: rotate（换号，旧行为）/ sticky（同号延迟重试）
 	// CodexSyncedCLIVersion 是从 openai/codex releases 同步到的最新 Codex CLI 版本缓存，
 	// 用于抬升出站 UA / manifest 的模拟版本（绝不低于内置常量），空表示尚未同步。
 	CodexSyncedCLIVersion string
@@ -1732,6 +1738,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 			       COALESCE(NULLIF(TRIM(billing_tier_policy), ''), 'actual'),
 			       COALESCE(image_storage_config, '{}'),
 		       COALESCE(background_config, '{}'),
+		       COALESCE(grok_config, '{}'),
 		       COALESCE(show_full_usage_numbers, false),
 		       COALESCE(public_key_usage_page_enabled, true),
 		       COALESCE(public_image_studio_page_enabled, true),
@@ -1768,7 +1775,8 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 			       COALESCE(codex_ws_busy_overflow_enabled, false),
 			       COALESCE(codex_ws_busy_patience_sec, 2),
 			       COALESCE(overflow_auto_compact_enabled, false),
-			       COALESCE(first_token_excludes_ws_acquire, false)
+			       COALESCE(first_token_excludes_ws_acquire, false),
+			       COALESCE(codex_preflight_sse_passthrough_enabled, false)
 			FROM system_settings WHERE id = 1
 		`).Scan(
 		&s.SiteName, &s.SiteLogo,
@@ -1792,6 +1800,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.BillingTierPolicy,
 		&s.ImageStorageConfig,
 		&s.BackgroundConfig,
+		&s.GrokConfig,
 		&s.ShowFullUsageNumbers,
 		&s.PublicKeyUsagePageEnabled,
 		&s.PublicImageStudioPageEnabled,
@@ -1829,6 +1838,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.CodexWSBusyPatienceSec,
 		&s.OverflowAutoCompactEnabled,
 		&s.FirstTokenExcludesWsAcquire,
+		&s.CodexPreflightSSEPassthroughEnabled,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1900,6 +1910,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				scheduler_mode,
 				affinity_mode,
 				background_config,
+				grok_config,
 				show_full_usage_numbers,
 				public_key_usage_page_enabled,
 				public_image_studio_page_enabled,
@@ -1938,9 +1949,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_ws_busy_overflow_enabled,
 					codex_ws_busy_patience_sec,
 					overflow_auto_compact_enabled,
-					first_token_excludes_ws_acquire
+					first_token_excludes_ws_acquire,
+					codex_preflight_sse_passthrough_enabled
 					)
-						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100)
+						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102)
 				ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -2003,6 +2015,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				scheduler_mode = EXCLUDED.scheduler_mode,
 				affinity_mode = EXCLUDED.affinity_mode,
 				background_config = EXCLUDED.background_config,
+				grok_config = EXCLUDED.grok_config,
 				show_full_usage_numbers = EXCLUDED.show_full_usage_numbers,
 				public_key_usage_page_enabled = EXCLUDED.public_key_usage_page_enabled,
 				public_image_studio_page_enabled = EXCLUDED.public_image_studio_page_enabled,
@@ -2038,7 +2051,8 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_ws_busy_overflow_enabled = EXCLUDED.codex_ws_busy_overflow_enabled,
 					codex_ws_busy_patience_sec = EXCLUDED.codex_ws_busy_patience_sec,
 					overflow_auto_compact_enabled = EXCLUDED.overflow_auto_compact_enabled,
-					first_token_excludes_ws_acquire = EXCLUDED.first_token_excludes_ws_acquire
+					first_token_excludes_ws_acquire = EXCLUDED.first_token_excludes_ws_acquire,
+					codex_preflight_sse_passthrough_enabled = EXCLUDED.codex_preflight_sse_passthrough_enabled
 			`, NormalizeSiteName(s.SiteName), strings.TrimSpace(s.SiteLogo),
 		s.MaxConcurrency, s.GlobalRPM, s.TestModel, testContent, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 		s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, s.AutoCleanFullUsage, s.ProxyPoolEnabled,
@@ -2052,7 +2066,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.PromptFilterReviewModel, s.PromptFilterReviewTimeoutSeconds, s.PromptFilterReviewFailClosed,
 		s.ClientCompatMode, s.CodexMinCLIVersion, codexUserAgentConfig, s.UsageLogMode, s.UsageLogBatchSize,
 		s.UsageLogFlushIntervalSeconds, s.StreamFlushPolicy, s.StreamFlushIntervalMS,
-		s.FirstTokenTimeoutSeconds, firstTokenMode, billingTierPolicy, s.ImageStorageConfig, s.SchedulerMode, normalizeAffinityMode(s.AffinityMode), s.BackgroundConfig, s.ShowFullUsageNumbers, s.PublicKeyUsagePageEnabled, s.PublicImageStudioPageEnabled, reasoningEffortModels,
+		s.FirstTokenTimeoutSeconds, firstTokenMode, billingTierPolicy, s.ImageStorageConfig, s.SchedulerMode, normalizeAffinityMode(s.AffinityMode), s.BackgroundConfig, normalizeGrokConfig(s.GrokConfig), s.ShowFullUsageNumbers, s.PublicKeyUsagePageEnabled, s.PublicImageStudioPageEnabled, reasoningEffortModels,
 		s.CodexForceWebsocket, s.CodexWSKeepaliveEnabled, normalizeCodexWSKeepaliveInterval(s.CodexWSKeepaliveIntervalSec),
 		s.CodexWSHideUpstreamErrors, s.CodexWSSilentRetryEnabled, normalizeCodexWSSilentMaxRetries(s.CodexWSSilentMaxRetries),
 		s.AutoPause5hThreshold, s.AutoPause7dThreshold, s.AutoPause5hGuardBandPercent, s.AutoPause5hGuardConcurrency,
@@ -2070,7 +2084,8 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.CodexWSBusyOverflowEnabled,
 		NormalizeCodexWSBusyPatienceSec(s.CodexWSBusyPatienceSec),
 		s.OverflowAutoCompactEnabled,
-		s.FirstTokenExcludesWsAcquire)
+		s.FirstTokenExcludesWsAcquire,
+		s.CodexPreflightSSEPassthroughEnabled)
 	return err
 }
 
@@ -2202,6 +2217,18 @@ func normalizeAffinityMode(mode string) string {
 	default:
 		return "bounded"
 	}
+}
+
+// normalizeGrokConfig 校验 grok_config JSON,非法或空则回落到默认 {}。
+func normalizeGrokConfig(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "{}"
+	}
+	if !json.Valid([]byte(raw)) {
+		return "{}"
+	}
+	return raw
 }
 
 // DeleteAPIKey 删除 API 密钥
@@ -2488,11 +2515,12 @@ type UsageLog struct {
 	ErrorMessage         string    `json:"error_message"`
 }
 
-// InsertUsageLog 将日志追加到内存缓冲（非阻塞）
+// InsertUsageLog 将用量事件追加到内存缓冲（非阻塞）。
 func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
-	if db == nil || log == nil || !db.shouldStoreUsageLog(log) {
+	if db == nil || log == nil {
 		return nil
 	}
+	storeUsageLog := db.shouldStoreUsageLog(log)
 
 	// 计算计费金额（基于 input/output tokens 和模型）
 	// 使用 EffectiveModel 作为计费模型（如果有映射则使用映射后的模型）
@@ -2522,9 +2550,13 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 
 	// 用户计费金额与账号计费金额相同（简化版，未来可支持倍率）
 	userBilled := accountBilled
+	if !storeUsageLog && (log.APIKeyID <= 0 || userBilled <= 0 || log.StatusCode == 499) {
+		return nil
+	}
 
 	db.logMu.Lock()
 	db.logBuf = append(db.logBuf, usageLogEntry{
+		StoreUsageLog:        storeUsageLog,
 		AccountID:            log.AccountID,
 		Channel:              log.Channel,
 		ClientIP:             log.ClientIP,
@@ -2726,9 +2758,33 @@ func (db *DB) flushLogs() {
 		return
 	}
 
-	if len(batch) > 10 {
-		log.Printf("批量写入 %d 条使用日志", len(batch))
+	if storedLogCount := countStoredUsageLogs(batch); storedLogCount > 10 {
+		log.Printf("批量写入 %d 条使用日志", storedLogCount)
 	}
+}
+
+func countStoredUsageLogs(batch []usageLogEntry) int {
+	count := 0
+	for _, entry := range batch {
+		if entry.StoreUsageLog {
+			count++
+		}
+	}
+	return count
+}
+
+func storedUsageLogs(batch []usageLogEntry) []usageLogEntry {
+	storedCount := countStoredUsageLogs(batch)
+	if storedCount == len(batch) {
+		return batch
+	}
+	stored := make([]usageLogEntry, 0, storedCount)
+	for _, entry := range batch {
+		if entry.StoreUsageLog {
+			stored = append(stored, entry)
+		}
+	}
+	return stored
 }
 
 func (db *DB) requeueUsageLogBatch(batch []usageLogEntry) {
@@ -2763,27 +2819,31 @@ func (db *DB) insertSQLiteUsageLogBatch(ctx context.Context, batch []usageLogEnt
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO usage_logs (account_id, channel, client_ip, endpoint, model, effective_model, prompt_tokens, completion_tokens, total_tokens, status_code, duration_ms,
-			  input_tokens, output_tokens, reasoning_tokens, first_token_ms, ws_acquire_ms, reasoning_effort, inbound_endpoint, upstream_endpoint, stream, compact, cached_tokens, service_tier,
-			  requested_service_tier, actual_service_tier, billing_service_tier,
-			  api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
-			  is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
-			  client_user_agent, upstream_user_agent, user_agent_overridden)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45)`)
-	if err != nil {
-		return fmt.Errorf("准备语句: %w", err)
-	}
-	defer stmt.Close()
+	// usage_log_mode 只过滤审计行；额度仍按完整 batch 在同一事务内更新。
+	logsToStore := storedUsageLogs(batch)
+	if len(logsToStore) > 0 {
+		stmt, err := tx.PrepareContext(ctx,
+			`INSERT INTO usage_logs (account_id, channel, client_ip, endpoint, model, effective_model, prompt_tokens, completion_tokens, total_tokens, status_code, duration_ms,
+				  input_tokens, output_tokens, reasoning_tokens, first_token_ms, ws_acquire_ms, reasoning_effort, inbound_endpoint, upstream_endpoint, stream, compact, cached_tokens, service_tier,
+				  requested_service_tier, actual_service_tier, billing_service_tier,
+				  api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
+				  is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
+				  client_user_agent, upstream_user_agent, user_agent_overridden)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45)`)
+		if err != nil {
+			return fmt.Errorf("准备语句: %w", err)
+		}
+		defer stmt.Close()
 
-	for _, e := range batch {
-		if _, err := stmt.ExecContext(ctx, e.AccountID, e.Channel, e.ClientIP, e.Endpoint, e.Model, e.EffectiveModel, e.PromptTokens, e.CompletionTokens, e.TotalTokens, e.StatusCode, e.DurationMs,
-			e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.FirstTokenMs, e.WsAcquireMs, e.ReasoningEffort, e.InboundEndpoint, e.UpstreamEndpoint, e.Stream, e.Compact, e.CachedTokens, e.ServiceTier,
-			e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
-			e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
-			e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
-			e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden); err != nil {
-			return fmt.Errorf("执行插入: %w", err)
+		for _, e := range logsToStore {
+			if _, err := stmt.ExecContext(ctx, e.AccountID, e.Channel, e.ClientIP, e.Endpoint, e.Model, e.EffectiveModel, e.PromptTokens, e.CompletionTokens, e.TotalTokens, e.StatusCode, e.DurationMs,
+				e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.FirstTokenMs, e.WsAcquireMs, e.ReasoningEffort, e.InboundEndpoint, e.UpstreamEndpoint, e.Stream, e.Compact, e.CachedTokens, e.ServiceTier,
+				e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
+				e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
+				e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
+				e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden); err != nil {
+				return fmt.Errorf("执行插入: %w", err)
+			}
 		}
 	}
 
@@ -2809,15 +2869,16 @@ func (db *DB) batchInsertLogs(ctx context.Context, batch []usageLogEntry) error 
 	}
 	defer tx.Rollback()
 
+	logsToStore := storedUsageLogs(batch)
 	const maxRowsPerBatch = 1500
 
 	// 分批处理
-	for start := 0; start < len(batch); start += maxRowsPerBatch {
+	for start := 0; start < len(logsToStore); start += maxRowsPerBatch {
 		end := start + maxRowsPerBatch
-		if end > len(batch) {
-			end = len(batch)
+		if end > len(logsToStore) {
+			end = len(logsToStore)
 		}
-		subBatch := batch[start:end]
+		subBatch := logsToStore[start:end]
 
 		if err := db.batchInsertLogsChunk(ctx, tx, subBatch); err != nil {
 			return err
