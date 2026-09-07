@@ -815,6 +815,83 @@ func TestApplyCodexRequestHeadersUsesCustomGeneratedUserAgentConfig(t *testing.T
 	}
 }
 
+func TestApplyCodexRequestHeadersGeneratedDesktopClientSendsMatchingOriginator(t *testing.T) {
+	// issue #653：强制模拟 ChatGPT 桌面端时，Originator 必须跟随生成的 UA 前缀，
+	// 而不是照旧发 codex-tui——真实客户端两者恒为同一标识。
+	prev := CurrentRuntimeSettings()
+	normalized, err := NormalizeCodexUserAgentConfigJSON(`{"client_name":"Codex Desktop","client_version":"0.153.3","os_name":"Windows","os_version":"10.0.26100","arch":"x86_64","terminal":"unknown"}`)
+	if err != nil {
+		t.Fatalf("NormalizeCodexUserAgentConfigJSON() error = %v", err)
+	}
+	ApplyRuntimeSettings(RuntimeSettings{
+		ClientCompatMode:     ClientCompatModeForce,
+		CodexUserAgentConfig: normalized,
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	downstreamHeaders := http.Header{
+		"User-Agent": []string{"codex-tui/0.153.3 (Linux Unknown; x86_64) xterm-256color (codex-tui; 0.153.3)"},
+		"Originator": []string{"codex-tui"},
+	}
+
+	applyCodexRequestHeaders(req, &auth.Account{DBID: 42}, "token-123", "", "api-key-1", nil, downstreamHeaders)
+
+	wantUA := "Codex Desktop/0.153.3 (Windows 10.0.26100; x86_64) unknown (Codex Desktop; 0.153.3)"
+	if got := req.Header.Get("User-Agent"); got != wantUA {
+		t.Fatalf("User-Agent = %q, want %q", got, wantUA)
+	}
+	if got := req.Header.Get("Originator"); got != "Codex Desktop" {
+		t.Fatalf("Originator = %q, want Codex Desktop to match generated User-Agent", got)
+	}
+	if got := req.Header.Get("Version"); got != "0.153.3" {
+		t.Fatalf("Version = %q, want 0.153.3", got)
+	}
+}
+
+func TestApplyCodexRequestHeadersRawUserAgentOriginatorFollowsOfficialPrefix(t *testing.T) {
+	cases := []struct {
+		name           string
+		rawUserAgent   string
+		wantOriginator string
+	}{
+		{"desktop raw override", "Codex Desktop/0.153.3 (Mac OS 26.4.0; arm64) dumb (codex_exec; 0.153.3)", "Codex Desktop"},
+		{"unofficial raw override keeps default", "my-router", Originator},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := CurrentRuntimeSettings()
+			normalized, err := NormalizeCodexUserAgentConfigJSON(`{"raw_user_agent":"` + tc.rawUserAgent + `"}`)
+			if err != nil {
+				t.Fatalf("NormalizeCodexUserAgentConfigJSON() error = %v", err)
+			}
+			ApplyRuntimeSettings(RuntimeSettings{
+				ClientCompatMode:     ClientCompatModeForce,
+				CodexUserAgentConfig: normalized,
+			})
+			t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+			req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
+			if err != nil {
+				t.Fatalf("http.NewRequest() error = %v", err)
+			}
+			downstreamHeaders := http.Header{"Originator": []string{"codex-tui"}}
+
+			applyCodexRequestHeaders(req, &auth.Account{DBID: 42}, "token-123", "", "api-key-1", nil, downstreamHeaders)
+
+			if got := req.Header.Get("User-Agent"); got != tc.rawUserAgent {
+				t.Fatalf("User-Agent = %q, want %q", got, tc.rawUserAgent)
+			}
+			if got := req.Header.Get("Originator"); got != tc.wantOriginator {
+				t.Fatalf("Originator = %q, want %q", got, tc.wantOriginator)
+			}
+		})
+	}
+}
+
 func TestApplyCodexRequestHeadersRawUserAgentWithoutVersionOmitsVersionHeader(t *testing.T) {
 	prev := CurrentRuntimeSettings()
 	normalized, err := NormalizeCodexUserAgentConfigJSON(`{"raw_user_agent":"my-router"}`)

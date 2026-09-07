@@ -4112,7 +4112,7 @@
     "codexUserAgentRaw": "Raw User-Agent Override",
     "codexUserAgentRawDesc": "Optional exact header value. Leave blank to build from the fields below. Version segments are rebuilt to the current effective Codex CLI version on egress.",
     "codexUAClientName": "Client Name",
-    "codexUAClientNameDesc": "Client token before the slash and in the trailing marker.",
+    "codexUAClientNameDesc": "Client name before the slash, in the trailing marker, and sent as the Originator header. Spaces are allowed, e.g. Codex Desktop for the ChatGPT desktop app.",
     "codexUAClientVersion": "Client Version",
     "codexUAClientVersionDesc": "Version emitted in the generated UA. In auto mode, values below the minimum CLI version are raised to that threshold.",
     "codexUAOSName": "Operating System / Distro",

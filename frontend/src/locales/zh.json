@@ -4112,7 +4112,7 @@
     "codexUserAgentRaw": "原始 User-Agent 覆盖",
     "codexUserAgentRawDesc": "可选的完整 header 值。留空时使用下面的元素拼接。出站时版本段会自动重建为当前生效的 Codex CLI 版本。",
     "codexUAClientName": "客户端名称",
-    "codexUAClientNameDesc": "斜杠前的客户端名，同时用于末尾标记。",
+    "codexUAClientNameDesc": "斜杠前的客户端名，同时用于末尾标记与出站 Originator 头。可含空格，例如 ChatGPT 桌面端的 Codex Desktop。",
     "codexUAClientVersion": "客户端版本",
     "codexUAClientVersionDesc": "生成 UA 中发送的客户端版本。auto 模式下低于最低 CLI 版本时会提升到该阈值。",
     "codexUAOSName": "操作系统名称 / 发行版",

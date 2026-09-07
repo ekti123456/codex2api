@@ -18,6 +18,10 @@ import (
 // 示例：
 //   codex-tui/0.153.3 (Linux Unknown; x86_64) xterm-256color (codex-tui; 0.153.3)
 //   codex-tui/0.144.0-alpha.10 (Mac OS 13.7.8; arm64) xterm-256color (codex-tui; 0.144.0-alpha.10)
+//   Codex Desktop/0.153.3 (Windows 10.0.26100; x86_64) unknown (Codex Desktop; 26.901.41123)
+//
+// originator 可以含空格（ChatGPT 桌面端就是 "Codex Desktop"），且真实客户端的
+// UA 前缀与 Originator 头恒为同一标识。
 
 // ClientProfile 表示一个模拟客户端的完整身份
 type ClientProfile struct {
@@ -175,7 +179,7 @@ func NormalizeCodexUserAgentConfigJSON(raw string) (string, error) {
 func normalizeCodexUserAgentConfig(cfg CodexUserAgentConfig) CodexUserAgentConfig {
 	return CodexUserAgentConfig{
 		RawUserAgent:  strings.TrimSpace(cfg.RawUserAgent),
-		ClientName:    strings.TrimSpace(cfg.ClientName),
+		ClientName:    normalizeCodexUserAgentClientName(cfg.ClientName),
 		ClientVersion: normalizeCodexClientVersionText(cfg.ClientVersion),
 		OSName:        strings.TrimSpace(cfg.OSName),
 		OSVersion:     strings.TrimSpace(cfg.OSVersion),
@@ -193,8 +197,10 @@ func validateCodexUserAgentConfig(cfg CodexUserAgentConfig) error {
 	if cfg.ClientVersion != "" && !validCodexClientVersionString(cfg.ClientVersion) {
 		return errors.New("codex User-Agent client_version must be a semantic version like 0.153.3 or 0.144.0-alpha.10")
 	}
+	if cfg.ClientName != "" && !validCodexUserAgentClientName(cfg.ClientName) {
+		return errors.New("codex User-Agent client_name contains invalid characters")
+	}
 	tokenFields := map[string]string{
-		"client_name":    cfg.ClientName,
 		"client_version": cfg.ClientVersion,
 		"arch":           cfg.Arch,
 		"terminal":       cfg.Terminal,
@@ -242,6 +248,45 @@ func validCodexUserAgentPlatformPart(value string) bool {
 		return false
 	}
 	return !strings.ContainsAny(value, "();")
+}
+
+// validCodexUserAgentClientName 校验 UA 前缀里的客户端名。与 arch/terminal 不同，
+// 它允许空格：ChatGPT 桌面端的 originator 就是 "Codex Desktop"（issue #653）。
+// 仍然拒绝会破坏 "{name}/{version} (...)" 形状的括号、分号与控制字符。
+func validCodexUserAgentClientName(value string) bool {
+	if !validHTTPHeaderValue(value) {
+		return false
+	}
+	return !strings.ContainsAny(value, "\t();")
+}
+
+// normalizeCodexUserAgentClientName 去掉首尾空白并把内部连续空白折叠成单个空格，
+// 避免拼出 "Codex  Desktop/..." 这种真实客户端不会产生的双空格。
+func normalizeCodexUserAgentClientName(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+// CodexOriginatorForGeneratedUserAgent 返回与网关自行生成的 User-Agent 相匹配的
+// Originator 头。真实 Codex 客户端的 UA 前缀与 Originator 恒为同一标识（源码
+// codex-rs default_client.rs），模拟 "Codex Desktop" 之类客户端时两者必须一致，
+// 否则上游看到的是 UA 说桌面端、Originator 说 codex-tui 的自相矛盾指纹。
+// 前缀不是已知官方标识（例如自定义路由名）时回退到默认 Originator。
+func CodexOriginatorForGeneratedUserAgent(userAgent string) string {
+	name := codexUserAgentClientName(userAgent)
+	if name != "" && IsCodexOfficialClientByHeaders("", name) {
+		return name
+	}
+	return Originator
+}
+
+// codexUserAgentClientName 取 UA 首个 "/" 之前的客户端名；没有 "/" 视为无法识别。
+func codexUserAgentClientName(userAgent string) string {
+	userAgent = strings.TrimSpace(userAgent)
+	idx := strings.IndexByte(userAgent, '/')
+	if idx <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(userAgent[:idx])
 }
 
 func isEmptyCodexUserAgentConfig(cfg CodexUserAgentConfig) bool {
