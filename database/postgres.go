@@ -355,6 +355,7 @@ type usageLogEntry struct {
 	ObservedAt               time.Time
 	SessionUsagePeriodID     string
 	SessionUsageStartedAt    time.Time
+	SessionUsageIdleSeconds  int64
 	SessionWindowExpiresAt   time.Time
 	CacheWrite5mTokens       int
 	CacheWrite1hTokens       int
@@ -479,6 +480,9 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	}
 	if err := db.ensureAccountSessionObservationsTable(ctx); err != nil {
 		return nil, fmt.Errorf("创建账号会话观测表失败: %w", err)
+	}
+	if err := db.ensureSessionCooldownTables(ctx); err != nil {
+		return nil, fmt.Errorf("创建窗口创建间隔表失败: %w", err)
 	}
 	if err := db.ensurePromptWindowOperationsTables(ctx); err != nil {
 		return nil, fmt.Errorf("创建会话窗口操作表失败: %w", err)
@@ -4339,6 +4343,7 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 		ObservedAt:               log.ObservedAt,
 		SessionUsagePeriodID:     log.SessionUsagePeriodID,
 		SessionUsageStartedAt:    log.SessionUsageStartedAt,
+		SessionUsageIdleSeconds:  log.SessionUsageIdleSeconds,
 		SessionWindowExpiresAt:   log.SessionWindowExpiresAt,
 		CacheWrite5mTokens:       log.CacheWrite5mTokens,
 		CacheWrite1hTokens:       log.CacheWrite1hTokens,
@@ -4415,6 +4420,7 @@ type UsageLogInput struct {
 	ObservedAt               time.Time
 	SessionUsagePeriodID     string
 	SessionUsageStartedAt    time.Time
+	SessionUsageIdleSeconds  int64
 	SessionWindowExpiresAt   time.Time
 	CacheWrite5mTokens       int
 	CacheWrite1hTokens       int

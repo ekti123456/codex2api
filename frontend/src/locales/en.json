@@ -2307,6 +2307,26 @@
     "channelAll": "All"
   },
   "promptFilter": {
+    "creationCooldown": {
+      "title": "Adaptive window creation interval",
+      "off": "Off",
+      "observe": "Observe only",
+      "enforce": "Enforce",
+      "description": "Independent of the window count limit. Applies only to verified NewAPI users on accounts with session capacity enabled. Frequent creation and short recent usage trigger a minimum interval for new root windows.",
+      "frequencyWindow": "Frequency lookback (minutes)",
+      "freeCreations": "Initial creations allowed in lookback",
+      "historyDays": "Usage history (days)",
+      "minSamples": "Minimum eligible periods",
+      "maxSamples": "Latest periods to average",
+      "maxInterval": "Maximum interval (minutes)",
+      "tierHint": "Select the highest satisfied inclusive average-duration lower bound. Zero interval adds no cooldown. Keep a zero-bound tier and unique lower bounds.",
+      "lowerBound": "Average duration ≥ (minutes)",
+      "interval": "Minimum creation interval (minutes)",
+      "addTier": "Add tier",
+      "removeTier": "Remove tier",
+      "reset": "Restore default parameters",
+      "protectionHint": "Defaults: check the third creation after two successful root windows within 30 minutes. Count spacing from the previous successful window's creation, not extra waiting on each request. In-flight creations reserve temporarily; failures release them and retries do not extend cooldown. Require 10 eligible periods in 7 days; average the latest 20. Active and entirely failed periods are excluded. Existing conversations and related requests bypass cooldown. The user's unlimited-window override exempts this policy too. Observe-mode matches appear in server logs."
+    },
     "title": "Prompt Filter",
     "description": "Manage local prompt risk rules and review upstream cyber_policy hits.",
     "views": {

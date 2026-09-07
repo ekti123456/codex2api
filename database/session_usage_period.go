@@ -12,11 +12,13 @@ func (db *DB) applyAccountSessionUsagePeriodsWithExec(ctx context.Context, exece
 		periodID  string
 	}
 	type usagePeriod struct {
-		sessionHash string
-		platform    string
-		userID      string
-		startedAt   time.Time
-		endedAt     time.Time
+		sessionHash   string
+		platform      string
+		userID        string
+		startedAt     time.Time
+		endedAt       time.Time
+		eligibleAfter int64
+		success       bool
 	}
 	periods := make(map[periodKey]usagePeriod)
 	for _, entry := range batch {
@@ -38,6 +40,10 @@ func (db *DB) applyAccountSessionUsagePeriodsWithExec(ctx context.Context, exece
 			period.platform = strings.TrimSpace(entry.NewAPIPlatform)
 			period.userID = strings.TrimSpace(entry.NewAPIUserID)
 		}
+		if entry.SessionUsageIdleSeconds > 0 {
+			period.eligibleAfter = max(period.eligibleAfter, entry.ObservedAt.Add(time.Duration(entry.SessionUsageIdleSeconds)*time.Second).UnixMilli())
+			period.success = period.success || (entry.StatusCode >= 200 && entry.StatusCode < 300 && entry.ErrorMessage == "")
+		}
 		periods[key] = period
 	}
 	for key, period := range periods {
@@ -57,6 +63,17 @@ func (db *DB) applyAccountSessionUsagePeriodsWithExec(ctx context.Context, exece
 			key.accountID, key.periodID, period.sessionHash, period.platform, period.userID, startedArg, endedArg)
 		if err != nil {
 			return err
+		}
+		if period.eligibleAfter > 0 {
+			if period.success {
+				_, err = execer.ExecContext(ctx, `INSERT INTO account_session_usage_successes(account_id,period_id,eligible_after_ms) VALUES($1,$2,$3)
+					ON CONFLICT(account_id,period_id) DO UPDATE SET eligible_after_ms=CASE WHEN excluded.eligible_after_ms > account_session_usage_successes.eligible_after_ms THEN excluded.eligible_after_ms ELSE account_session_usage_successes.eligible_after_ms END`, key.accountID, key.periodID, period.eligibleAfter)
+			} else {
+				_, err = execer.ExecContext(ctx, `UPDATE account_session_usage_successes SET eligible_after_ms=CASE WHEN eligible_after_ms<$3 THEN $3 ELSE eligible_after_ms END WHERE account_id=$1 AND period_id=$2`, key.accountID, key.periodID, period.eligibleAfter)
+			}
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

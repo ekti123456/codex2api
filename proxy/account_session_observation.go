@@ -55,6 +55,12 @@ func (h *Handler) populateAccountSessionObservation(c *gin.Context, input *datab
 		if period, valid := raw.(auth.AccountSessionUsagePeriod); valid && period.AccountID == input.AccountID {
 			input.SessionUsagePeriodID = period.ID
 			input.SessionUsageStartedAt = period.StartedAt
+			if h.store != nil {
+				if account := h.store.FindByID(input.AccountID); account != nil {
+					_, _, idleTTL := account.SessionCapacityConfig()
+					input.SessionUsageIdleSeconds = int64(idleTTL / time.Second)
+				}
+			}
 		}
 	}
 

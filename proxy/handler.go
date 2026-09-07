@@ -1812,6 +1812,9 @@ func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInp
 	populateWsAcquireFromRequest(c, input)
 	populateCompactUsageMetaFromRequest(c, input)
 	h.populateAccountSessionObservation(c, input)
+	if receipt := cooldownReceipt(c); receipt != nil && input.StatusCode >= 200 && input.StatusCode < 300 && input.ErrorMessage == "" && input.SessionHash == receipt.Root && cache.PromptSessionLimitSubject(input.NewAPIPlatform, input.NewAPIUserID) == receipt.Subject {
+		receipt.Successful = true
+	}
 	markCyberPolicyUsageKind(input)
 	h.logUsage(input)
 }
@@ -4000,6 +4003,7 @@ func firstGJSONInt(body []byte, paths ...string) int64 {
 
 // Responses 处理 /v1/responses 请求（原生透传，增强输入验证）
 func (h *Handler) Responses(c *gin.Context) {
+	defer h.finishSessionCooldown(c)
 	// 1. 读取请求体
 	handlerStart := time.Now()
 	rawBody, err := readRawRequestBody(c)
@@ -6126,6 +6130,7 @@ func (h *Handler) Responses(c *gin.Context) {
 
 // ResponsesCompact 处理 /v1/responses/compact 请求（非流式压缩接口，透传到上游 /responses/compact）
 func (h *Handler) ResponsesCompact(c *gin.Context) {
+	defer h.finishSessionCooldown(c)
 	received := time.Now()
 	// 1. 读取请求体
 	rawBody, err := readRawRequestBody(c)
@@ -7065,6 +7070,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 }
 
 func (h *Handler) ChatCompletions(c *gin.Context) {
+	defer h.finishSessionCooldown(c)
 	// 1. 读取请求体
 	rawBody, err := readRawRequestBody(c)
 	if err != nil {

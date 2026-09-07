@@ -2307,6 +2307,26 @@
     "channelAll": "全部"
   },
   "promptFilter": {
+    "creationCooldown": {
+      "title": "用户新建窗口动态间隔",
+      "off": "关闭",
+      "observe": "仅观察",
+      "enforce": "正式限制",
+      "description": "与窗口数量限制独立。仅对已验证的 NewAPI 用户和启用账号窗口控制的账号生效；近期创建频繁且平均使用时长偏短时，限制下一次新建根窗口。",
+      "frequencyWindow": "频率统计范围（分钟）",
+      "freeCreations": "范围内允许先创建的窗口数",
+      "historyDays": "使用时长统计范围（天）",
+      "minSamples": "最少有效周期数",
+      "maxSamples": "最多取最近周期数",
+      "maxInterval": "创建间隔上限（分钟）",
+      "tierHint": "按平均用时匹配最大的已满足下限；下限包含边界，间隔 0 表示不增加 CD。必须保留下限为 0 的档位，下限不能重复。",
+      "lowerBound": "平均用时 ≥（分钟）",
+      "interval": "最小创建间隔（分钟）",
+      "addTier": "新增档位",
+      "removeTier": "删除档位",
+      "reset": "恢复默认参数",
+      "protectionHint": "默认过去 30 分钟已成功新建 2 个根窗口后，第 3 个开始检查。间隔从上次成功窗口的创建时刻计算，不是每次额外等待；在途创建暂时预占，失败释放，重试不延长 CD。最近 7 天至少 10 个有效周期，最多取最近 20 个；正在占用和纯失败周期不参与。已有会话及关联请求不受 CD 限制；用户窗口“不限制”覆盖同时豁免此功能。观察命中仅记后台日志。"
+    },
     "title": "Prompt 检查",
     "description": "管理本地 Prompt 风险规则，并查看上游 cyber_policy 触发记录。",
     "views": {

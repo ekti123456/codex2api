@@ -13,6 +13,24 @@ type AccountSessionUsagePeriod struct {
 	StartedAt time.Time
 }
 
+func (s *Store) ActiveAccountUsagePeriods(accountID int64, now time.Time) map[string]bool {
+	active := make(map[string]bool)
+	account := s.FindByID(accountID)
+	if account == nil {
+		return active
+	}
+	s.ensureAccountSessionsLoaded(account, now)
+	_, _, idleTTL := account.SessionCapacityConfig()
+	s.accountSessionMu.Lock()
+	defer s.accountSessionMu.Unlock()
+	for _, state := range s.accountSessions[accountID] {
+		if state != nil && state.lastSeen.Add(idleTTL).After(now) {
+			active[state.usagePeriodID] = true
+		}
+	}
+	return active
+}
+
 func (s *Store) AccountSessionUsagePeriod(accountID int64, sessionKey string, now time.Time) AccountSessionUsagePeriod {
 	if s == nil || accountID <= 0 || isSessionAccountingBypassKey(sessionKey) || isProcessLocalSessionAffinityKey(sessionKey) {
 		return AccountSessionUsagePeriod{}

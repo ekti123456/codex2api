@@ -429,6 +429,7 @@ func (h *Handler) translateAnthropicMessagesToCodexOnce(state *anthropicCodexTra
 
 // Messages 处理 /v1/messages 请求（Anthropic Messages API → Codex Responses）
 func (h *Handler) Messages(c *gin.Context) {
+	defer h.finishSessionCooldown(c)
 	// 1. 读取请求体
 	rawBody, err := readRawRequestBody(c)
 	if err != nil {

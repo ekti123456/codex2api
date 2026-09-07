@@ -281,6 +281,26 @@
     "claudeMaxToolSchemaBytesDesc": "0 表示不設閘道 Schema 上限；請求體仍受系統大小與上游限制。"
   },
   "promptFilter": {
+    "creationCooldown": {
+      "title": "使用者新建視窗動態間隔",
+      "off": "關閉",
+      "observe": "僅觀察",
+      "enforce": "正式限制",
+      "description": "與視窗數量限制獨立。僅對已驗證的 NewAPI 使用者和啟用帳號視窗控制的帳號生效；近期建立頻繁且平均使用時間偏短時，限制下一次新建根視窗。",
+      "frequencyWindow": "頻率統計範圍（分鐘）",
+      "freeCreations": "範圍內允許先建立的視窗數",
+      "historyDays": "使用時間統計範圍（天）",
+      "minSamples": "最少有效週期數",
+      "maxSamples": "最多取最近週期數",
+      "maxInterval": "建立間隔上限（分鐘）",
+      "tierHint": "按平均使用時間匹配最大的已滿足下限；下限包含邊界，間隔 0 表示不增加 CD。必須保留下限為 0 的檔位，下限不能重複。",
+      "lowerBound": "平均使用時間 ≥（分鐘）",
+      "interval": "最小建立間隔（分鐘）",
+      "addTier": "新增檔位",
+      "removeTier": "刪除檔位",
+      "reset": "恢復預設參數",
+      "protectionHint": "預設過去 30 分鐘已成功新建 2 個根視窗後，第 3 個開始檢查。間隔從上次成功視窗的建立時刻計算；處理中的建立暫時預占，失敗釋放，重試不延長 CD。最近 7 天至少 10 個有效週期，最多取最近 20 個；仍在占用和純失敗週期不參與。既有會話及關聯請求不受 CD 限制；使用者視窗「不限制」設定同時豁免此功能。觀察命中僅記後台日誌。"
+    },
     "views": {
       "profiles": "風險畫像",
       "intelligence": "CY 學習審核"
