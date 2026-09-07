@@ -3845,6 +3845,60 @@ export interface ObservedInstructionsSample {
   observed_at: string
 }
 
+// Codex User-Agent 形态目录(设置页搭配选择)与出站身份预览。
+export interface CodexUserAgentCatalogOption {
+  value: string
+  weight: number
+}
+
+export interface CodexUserAgentCatalogPlatform {
+  os_name: string
+  os_version: string
+  arch: string
+  weight: number
+}
+
+export interface CodexUserAgentCatalogVersionPair {
+  cli_version: string
+  app_version: string
+  weight: number
+}
+
+export interface CodexUserAgentCatalogKind {
+  kind: string
+  client_name: string
+  app_follows_cli: boolean
+  default_app_name: string
+  default_platform: CodexUserAgentCatalogPlatform
+  default_terminal: string
+  app_names: CodexUserAgentCatalogOption[] | null
+  terminals: CodexUserAgentCatalogOption[] | null
+  platforms: CodexUserAgentCatalogPlatform[] | null
+  version_pairs: CodexUserAgentCatalogVersionPair[] | null
+}
+
+export interface CodexUserAgentCatalog {
+  kinds: CodexUserAgentCatalogKind[]
+  default_pool_mix: Record<string, number>
+}
+
+export interface CodexUserAgentPersona {
+  label?: string
+  account_id?: number
+  user_agent: string
+  originator: string
+  version: string
+}
+
+export interface CodexUserAgentPreview {
+  mode: string
+  kind?: string
+  persona?: CodexUserAgentPersona
+  samples?: CodexUserAgentPersona[]
+  warnings?: string[]
+  normalized: string
+}
+
 export interface ObservedInstructionsResponse {
   samples: ObservedInstructionsSample[]
 }

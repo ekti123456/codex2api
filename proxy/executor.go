@@ -1054,12 +1054,12 @@ func generatedCodexClientHeaders(account *auth.Account, settings RuntimeSettings
 	if settings.ClientCompatMode == ClientCompatModeAuto {
 		versionFloor = settings.CodexMinCLIVersion
 	}
-	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, versionFloor); ok {
-		return userAgent, version
-	}
 	accountID := int64(0)
 	if account != nil {
 		accountID = account.ID()
+	}
+	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, accountID, versionFloor); ok {
+		return userAgent, version
 	}
 	profile := ProfileForAccount(accountID)
 	userAgent := strings.TrimSpace(profile.UserAgent)
@@ -1123,7 +1123,11 @@ func resolveCodexOutboundClientHeaders(account *auth.Account, apiKey string, dev
 	if settings.ClientCompatMode == ClientCompatModeAuto {
 		versionFloor = settings.CodexMinCLIVersion
 	}
-	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, versionFloor); ok {
+	configAccountID := int64(0)
+	if account != nil {
+		configAccountID = account.ID()
+	}
+	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, configAccountID, versionFloor); ok {
 		return userAgent, version, true
 	}
 	effectiveVersion := effectiveLatestCodexCLIVersion()
@@ -1194,7 +1198,11 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 	if version != "" {
 		req.Header.Set("Version", version)
 	}
-	if originator := strings.TrimSpace(downstreamHeaders.Get("Originator")); !usedGeneratedHeaders && originator != "" && IsCodexOfficialClientByHeaders("", originator) {
+	// Originator 必须与出站 UA 的客户端前缀一致：网关自行生成 UA 时跟随生成结果
+	// （模拟 "Codex Desktop" 就发 "Codex Desktop"），透传官方客户端时沿用下游值。
+	if usedGeneratedHeaders {
+		req.Header.Set("Originator", CodexOriginatorForGeneratedUserAgent(userAgent))
+	} else if originator := strings.TrimSpace(downstreamHeaders.Get("Originator")); originator != "" && IsCodexOfficialClientByHeaders("", originator) {
 		req.Header.Set("Originator", originator)
 	} else {
 		req.Header.Set("Originator", Originator)
