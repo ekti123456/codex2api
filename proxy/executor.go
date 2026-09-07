@@ -1054,12 +1054,12 @@ func generatedCodexClientHeaders(account *auth.Account, settings RuntimeSettings
 	if settings.ClientCompatMode == ClientCompatModeAuto {
 		versionFloor = settings.CodexMinCLIVersion
 	}
-	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, versionFloor); ok {
-		return userAgent, version
-	}
 	accountID := int64(0)
 	if account != nil {
 		accountID = account.ID()
+	}
+	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, accountID, versionFloor); ok {
+		return userAgent, version
 	}
 	profile := ProfileForAccount(accountID)
 	userAgent := strings.TrimSpace(profile.UserAgent)
@@ -1123,7 +1123,11 @@ func resolveCodexOutboundClientHeaders(account *auth.Account, apiKey string, dev
 	if settings.ClientCompatMode == ClientCompatModeAuto {
 		versionFloor = settings.CodexMinCLIVersion
 	}
-	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, versionFloor); ok {
+	configAccountID := int64(0)
+	if account != nil {
+		configAccountID = account.ID()
+	}
+	if userAgent, version, ok := codexUserAgentFromConfig(settings.CodexUserAgentConfig, configAccountID, versionFloor); ok {
 		return userAgent, version, true
 	}
 	effectiveVersion := effectiveLatestCodexCLIVersion()

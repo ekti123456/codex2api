@@ -48,6 +48,15 @@ type CodexUserAgentConfig struct {
 	OSVersion     string `json:"os_version,omitempty"`
 	Arch          string `json:"arch,omitempty"`
 	Terminal      string `json:"terminal,omitempty"`
+	// ClientKind 是客户端形态预设(见 codex_ua_catalog.go);空则按 client_name 推断。
+	ClientKind string `json:"client_kind,omitempty"`
+	// AppName / AppVersion 是末尾标记 "(app名; app版本)";留空按形态自动推导,
+	// 桌面端与 VS Code 插件的构建号会按 CLI 版本从目录配对。
+	AppName    string `json:"app_name,omitempty"`
+	AppVersion string `json:"app_version,omitempty"`
+	// Mode 为 "pool" 时忽略单画像字段,按 PoolMix 配比为每个账号确定性抽取目录画像。
+	Mode    string         `json:"mode,omitempty"`
+	PoolMix map[string]int `json:"pool_mix,omitempty"`
 }
 
 var codexOfficialClientUserAgentPrefixes = []string{
@@ -177,6 +186,21 @@ func NormalizeCodexUserAgentConfigJSON(raw string) (string, error) {
 }
 
 func normalizeCodexUserAgentConfig(cfg CodexUserAgentConfig) CodexUserAgentConfig {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if mode == CodexUserAgentModeSingle {
+		mode = ""
+	}
+	var poolMix map[string]int
+	for k, v := range cfg.PoolMix {
+		k = strings.ToLower(strings.TrimSpace(k))
+		if k == "" {
+			continue
+		}
+		if poolMix == nil {
+			poolMix = map[string]int{}
+		}
+		poolMix[k] = v
+	}
 	return CodexUserAgentConfig{
 		RawUserAgent:  strings.TrimSpace(cfg.RawUserAgent),
 		ClientName:    normalizeCodexUserAgentClientName(cfg.ClientName),
@@ -185,6 +209,11 @@ func normalizeCodexUserAgentConfig(cfg CodexUserAgentConfig) CodexUserAgentConfi
 		OSVersion:     strings.TrimSpace(cfg.OSVersion),
 		Arch:          strings.TrimSpace(cfg.Arch),
 		Terminal:      strings.TrimSpace(cfg.Terminal),
+		ClientKind:    strings.ToLower(strings.TrimSpace(cfg.ClientKind)),
+		AppName:       normalizeCodexUserAgentClientName(cfg.AppName),
+		AppVersion:    strings.TrimSpace(cfg.AppVersion),
+		Mode:          mode,
+		PoolMix:       poolMix,
 	}
 }
 
@@ -200,8 +229,29 @@ func validateCodexUserAgentConfig(cfg CodexUserAgentConfig) error {
 	if cfg.ClientName != "" && !validCodexUserAgentClientName(cfg.ClientName) {
 		return errors.New("codex User-Agent client_name contains invalid characters")
 	}
+	if cfg.AppName != "" && !validCodexUserAgentClientName(cfg.AppName) {
+		return errors.New("codex User-Agent app_name contains invalid characters")
+	}
+	if _, ok := normalizeCodexClientKind(cfg.ClientKind); !ok {
+		return errors.New("codex User-Agent client_kind must be one of codex-tui, codex-desktop, codex-vscode, codex-exec, custom")
+	}
+	if cfg.Mode != "" && cfg.Mode != CodexUserAgentModePool {
+		return errors.New("codex User-Agent mode must be single or pool")
+	}
+	for kind, weight := range cfg.PoolMix {
+		if k, ok := normalizeCodexClientKind(kind); !ok || k == "" || k == CodexClientKindCustom {
+			return fmt.Errorf("codex User-Agent pool_mix has unknown client kind %q", kind)
+		}
+		if weight < 0 {
+			return fmt.Errorf("codex User-Agent pool_mix weight for %s must not be negative", kind)
+		}
+	}
+	if cfg.Mode == CodexUserAgentModePool && len(codexPoolMix(cfg)) == 0 {
+		return errors.New("codex User-Agent pool_mix needs at least one positive weight")
+	}
 	tokenFields := map[string]string{
 		"client_version": cfg.ClientVersion,
+		"app_version":    cfg.AppVersion,
 		"arch":           cfg.Arch,
 		"terminal":       cfg.Terminal,
 	}
@@ -296,7 +346,12 @@ func isEmptyCodexUserAgentConfig(cfg CodexUserAgentConfig) bool {
 		cfg.OSName == "" &&
 		cfg.OSVersion == "" &&
 		cfg.Arch == "" &&
-		cfg.Terminal == ""
+		cfg.Terminal == "" &&
+		cfg.ClientKind == "" &&
+		cfg.AppName == "" &&
+		cfg.AppVersion == "" &&
+		cfg.Mode == "" &&
+		len(cfg.PoolMix) == 0
 }
 
 func codexUserAgentConfigFromJSON(raw string) CodexUserAgentConfig {
@@ -320,10 +375,15 @@ func validCodexClientVersionString(value string) bool {
 	return ok
 }
 
-func codexUserAgentFromConfig(raw, versionFloor string) (userAgent, version string, ok bool) {
+// codexUserAgentFromConfig 按全局 UA 配置生成出站身份。accountID 只在号池模式下参与
+// 画像抽取(同一账号恒得同一画像)。
+func codexUserAgentFromConfig(raw string, accountID int64, versionFloor string) (userAgent, version string, ok bool) {
 	cfg := codexUserAgentConfigFromJSON(raw)
 	if isEmptyCodexUserAgentConfig(cfg) {
 		return "", "", false
+	}
+	if cfg.Mode == CodexUserAgentModePool {
+		return codexPoolPersona(cfg, accountID, versionFloor)
 	}
 	if cfg.RawUserAgent != "" {
 		// raw UA 只贡献指纹形状；版本段可解析时抬升到当前生效的最新版
@@ -335,13 +395,42 @@ func codexUserAgentFromConfig(raw, versionFloor string) (userAgent, version stri
 		}
 		return cfg.RawUserAgent, codexVersionFromUserAgent(cfg.RawUserAgent, strings.TrimSpace(cfg.ClientVersion)), true
 	}
-	clientName := firstNonEmptyString(cfg.ClientName, latestCodexClientName)
-	clientVersion := effectiveCodexClientVersion(firstNonEmptyString(cfg.ClientVersion, effectiveLatestCodexCLIVersion()), versionFloor)
-	osName := firstNonEmptyString(cfg.OSName, defaultCodexUserAgentOSName)
-	osVersion := firstNonEmptyString(cfg.OSVersion, defaultCodexUserAgentOSVersion)
-	arch := firstNonEmptyString(cfg.Arch, defaultCodexUserAgentArch)
-	terminal := firstNonEmptyString(cfg.Terminal, defaultCodexUserAgentTerminal)
-	return formatCodexUserAgent(clientName, clientVersion, osName, osVersion, arch, terminal), clientVersion, true
+	return buildCodexStructuredUserAgent(cfg, versionFloor)
+}
+
+// buildCodexStructuredUserAgent 按形态预设填补留空字段并拼出 UA:客户端名、末尾标记名、
+// 平台与终端取形态默认值,CLI 版本与构建号走目录配对(见 resolveCodexVersionPair)。
+// 未指定形态且客户端名认不出时按 custom 处理,末尾标记复用客户端名与 CLI 版本。
+func buildCodexStructuredUserAgent(cfg CodexUserAgentConfig, versionFloor string) (userAgent, version string, ok bool) {
+	kind := effectiveCodexClientKind(cfg)
+	spec, hasSpec := codexUAKindSpecFor(kind)
+	clientName := strings.TrimSpace(cfg.ClientName)
+	platform := codexUAPlatform{OSName: defaultCodexUserAgentOSName, OSVersion: defaultCodexUserAgentOSVersion, Arch: defaultCodexUserAgentArch}
+	terminal := defaultCodexUserAgentTerminal
+	appName := ""
+	if hasSpec {
+		clientName = firstNonEmptyString(clientName, spec.ClientName)
+		platform = spec.DefaultPlatform
+		terminal = spec.DefaultTerminal
+		if spec.AppFollowsCLI {
+			appName = clientName
+		} else if len(spec.AppNames) > 0 {
+			appName = spec.AppNames[0].Value
+		}
+	} else {
+		clientName = firstNonEmptyString(clientName, latestCodexClientName)
+		appName = clientName
+	}
+	cliVersion, appVersion := resolveCodexVersionPair(spec, cfg.ClientVersion, cfg.AppVersion, versionFloor)
+	if hasSpec && spec.AppFollowsCLI && cfg.AppVersion != "" {
+		appVersion = cfg.AppVersion
+	}
+	appName = firstNonEmptyString(cfg.AppName, appName)
+	osName := firstNonEmptyString(cfg.OSName, platform.OSName)
+	osVersion := firstNonEmptyString(cfg.OSVersion, platform.OSVersion)
+	arch := firstNonEmptyString(cfg.Arch, platform.Arch)
+	terminal = firstNonEmptyString(cfg.Terminal, terminal)
+	return formatCodexUserAgentWithApp(clientName, cliVersion, osName, osVersion, arch, terminal, appName, appVersion), cliVersion, true
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -361,8 +450,15 @@ func formatCodexUserAgent(clientName, clientVersion, osName, osVersion, arch, te
 	osVersion = firstNonEmptyString(osVersion, defaultCodexUserAgentOSVersion)
 	arch = firstNonEmptyString(arch, defaultCodexUserAgentArch)
 	terminal = firstNonEmptyString(terminal, defaultCodexUserAgentTerminal)
+	return formatCodexUserAgentWithApp(clientName, clientVersion, osName, osVersion, arch, terminal, clientName, clientVersion)
+}
+
+// formatCodexUserAgentWithApp 拼出完整形状,末尾标记可与前缀不同(桌面端 / VS Code 插件)。
+func formatCodexUserAgentWithApp(clientName, clientVersion, osName, osVersion, arch, terminal, appName, appVersion string) string {
+	appName = firstNonEmptyString(appName, clientName)
+	appVersion = firstNonEmptyString(appVersion, clientVersion)
 	platform := strings.TrimSpace(osName + " " + osVersion)
-	return fmt.Sprintf("%s/%s (%s; %s) %s (%s; %s)", clientName, clientVersion, platform, arch, terminal, clientName, clientVersion)
+	return fmt.Sprintf("%s/%s (%s; %s) %s (%s; %s)", clientName, clientVersion, platform, arch, terminal, appName, appVersion)
 }
 
 func effectiveCodexClientVersion(version, versionFloor string) string {
