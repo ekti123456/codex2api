@@ -22,3 +22,18 @@ test('account table uses the server summary before account rows and user details
     assert.ok(messages.promptFilter.risk.accountAverageHint)
   }
 })
+
+test('account session cards put cumulative user duration after the name and before related requests', () => {
+  const source = readFileSync(new URL('../pages/Accounts.tsx', import.meta.url), 'utf8')
+  const card = source.slice(source.indexOf('function AccountSessionCapacityBadge'), source.indexOf('function splitFilesIntoBatches'))
+  assert.ok(card.indexOf('{ownerName}') < card.indexOf('accounts.sessionCapacityUserAverage'))
+  assert.ok(card.indexOf('accounts.sessionCapacityUserAverage') < card.indexOf('accounts.sessionCapacityRelatedCount'))
+  assert.match(card, /session\.owner\?\.platform && session\.owner\?\.user_id/)
+  assert.match(card, /formatSessionUsageDuration\(session\.user_session_usage\?\.average_duration_seconds\)/)
+  for (const locale of ['zh', 'zh-TW', 'en']) {
+    const messages = JSON.parse(readFileSync(new URL(`../locales/${locale}.json`, import.meta.url), 'utf8'))
+    for (const key of ['sessionCapacityUserAverage', 'sessionCapacityUserAverageHint', 'sessionCapacityUserAverageMissing']) {
+      assert.ok(messages.accounts[key], `${locale}: ${key}`)
+    }
+  }
+})

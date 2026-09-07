@@ -12,6 +12,61 @@ type SessionUsageStats struct {
 	AverageDurationSeconds *float64 `json:"average_duration_seconds"`
 }
 
+type SessionUsageUser struct {
+	Platform string
+	UserID   string
+}
+
+func (db *DB) GetNewAPIUsersSessionUsage(ctx context.Context, users []SessionUsageUser) (map[SessionUsageUser]*SessionUsageStats, error) {
+	result := make(map[SessionUsageUser]*SessionUsageStats)
+	if db == nil {
+		return result, nil
+	}
+	unique := make([]SessionUsageUser, 0, len(users))
+	for _, user := range users {
+		user.Platform, user.UserID = strings.TrimSpace(user.Platform), strings.TrimSpace(user.UserID)
+		if user.Platform == "" || user.UserID == "" {
+			continue
+		}
+		if _, exists := result[user]; !exists {
+			result[user] = &SessionUsageStats{}
+			unique = append(unique, user)
+		}
+	}
+	for start := 0; start < len(unique); start += 200 {
+		batch := unique[start:min(start+200, len(unique))]
+		values := make([]string, 0, len(batch))
+		args := make([]any, 0, len(batch)*2)
+		for _, user := range batch {
+			values = append(values, "($"+strconv.Itoa(len(args)+1)+",$"+strconv.Itoa(len(args)+2)+")")
+			args = append(args, user.Platform, user.UserID)
+		}
+		rows, err := db.conn.QueryContext(ctx, `WITH requested(platform,user_id) AS (VALUES `+strings.Join(values, ",")+`)
+			SELECT requested.platform, requested.user_id, COUNT(o.period_id), AVG(`+db.sessionObservationDurationSQL()+`)
+			FROM requested LEFT JOIN account_session_usage_periods o
+			ON o.newapi_platform=requested.platform AND o.newapi_user_id=requested.user_id
+			GROUP BY requested.platform, requested.user_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var user SessionUsageUser
+			stats := &SessionUsageStats{}
+			if err := rows.Scan(&user.Platform, &user.UserID, &stats.WindowCount, &stats.AverageDurationSeconds); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			result[user] = stats
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
 type AccountSessionSummary struct {
 	AccountCount           int        `json:"account_count"`
 	AverageWindows24h      float64    `json:"average_windows_24h"`

@@ -67,6 +67,7 @@ import type {
 } from "../types";
 import { getErrorMessage } from "../utils/error";
 import { formatRelativeTime, formatBeijingTime } from "../utils/time";
+import { formatSessionUsageDuration } from "../lib/sessionUsageStats";
 import { buildBatchMetadataUpdate } from "../lib/accountBatchUpdate";
 import {
   collectAccountOperationResult,
@@ -436,13 +437,25 @@ function AccountSessionCapacityBadge({ account }: { account: AccountRow }) {
                 className="rounded-xl border border-border bg-card p-4 shadow-sm"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-violet-500/12 text-xs font-bold tabular-nums text-violet-700 dark:bg-violet-400/15 dark:text-violet-300">
                       {index + 1}
                     </span>
-                    <span className="truncate text-sm font-bold text-violet-700 dark:text-violet-300">
+                    <span className="max-w-full truncate text-sm font-bold text-violet-700 dark:text-violet-300">
                       {ownerName}
                     </span>
+                    {session.owner?.platform && session.owner?.user_id ? (
+                      <span
+                        className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground"
+                        title={session.user_session_usage?.average_duration_seconds != null
+                          ? t("accounts.sessionCapacityUserAverageHint", { count: session.user_session_usage.window_count })
+                          : t("accounts.sessionCapacityUserAverageMissing")}
+                      >
+                        {t("accounts.sessionCapacityUserAverage", {
+                          duration: formatSessionUsageDuration(session.user_session_usage?.average_duration_seconds),
+                        })}
+                      </span>
+                    ) : null}
                     {(session.related_request_count ?? 0) > 0 ? (
                       <span className="shrink-0 rounded-md bg-cyan-500/12 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-cyan-700 ring-1 ring-inset ring-cyan-500/20 dark:bg-cyan-400/15 dark:text-cyan-300 dark:ring-cyan-400/20">
                         {t("accounts.sessionCapacityRelatedCount", {

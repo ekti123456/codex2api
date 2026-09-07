@@ -439,6 +439,7 @@ export interface AccountSessionSnapshot {
   expires_at: ISODateString
   remaining_seconds: number
   owner?: AccountSessionOwner
+  user_session_usage?: SessionUsageStats
   related_request_count?: number
   related_sources?: AccountSessionRelatedSource[]
 }

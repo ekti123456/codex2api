@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -77,5 +78,44 @@ func TestSessionUsagePeriodsRemainSeparateAndSummaryIgnoresPagination(test *test
 	restored, err := db.GetNewAPIUserSessionUsage(ctx, "gateway-a", "7")
 	if err != nil || restored.WindowCount != 2 || restored.AverageDurationSeconds == nil || math.Abs(*restored.AverageDurationSeconds-120) > .001 {
 		test.Fatalf("restored=%+v err=%v", restored, err)
+	}
+}
+
+func TestUserSessionUsageBatchMatchesSingleLookupAndIsolatesPlatforms(test *testing.T) {
+	db := newPromptPolicySQLiteTestDB(test)
+	now := time.Now().UTC().Truncate(time.Second)
+	entries := []usageLogEntry{
+		{AccountID: 1, SessionHash: "root-a", NewAPIPlatform: "a", NewAPIUserID: "7", SessionUsagePeriodID: "period-a", SessionUsageStartedAt: now.Add(-time.Minute), ObservedAt: now},
+		{AccountID: 2, SessionHash: "root-b", NewAPIPlatform: "a", NewAPIUserID: "7", SessionUsagePeriodID: "period-b", SessionUsageStartedAt: now.Add(-3 * time.Minute), ObservedAt: now},
+		{AccountID: 1, SessionHash: "root-c", NewAPIPlatform: "b", NewAPIUserID: "7", SessionUsagePeriodID: "period-c", SessionUsageStartedAt: now.Add(-10 * time.Minute), ObservedAt: now},
+		{AccountID: 1, SessionHash: "root-zero", NewAPIPlatform: "a", NewAPIUserID: "zero", SessionUsagePeriodID: "period-zero", SessionUsageStartedAt: now, ObservedAt: now},
+	}
+	if err := db.applyAccountSessionUsagePeriodsWithExec(test.Context(), db.conn, entries); err != nil {
+		test.Fatal(err)
+	}
+	users := []SessionUsageUser{{Platform: "a", UserID: "7"}, {Platform: "a", UserID: "7"}, {Platform: "b", UserID: "7"}, {Platform: "a", UserID: "zero"}, {UserID: "7"}}
+	for index := 0; index < 201; index++ {
+		users = append(users, SessionUsageUser{Platform: "a", UserID: fmt.Sprintf("missing-%d", index)})
+	}
+	stats, err := db.GetNewAPIUsersSessionUsage(test.Context(), users)
+	if err != nil {
+		test.Fatal(err)
+	}
+	for _, user := range []SessionUsageUser{{Platform: "a", UserID: "7"}, {Platform: "b", UserID: "7"}, {Platform: "a", UserID: "zero"}} {
+		single, err := db.GetNewAPIUserSessionUsage(test.Context(), user.Platform, user.UserID)
+		if err != nil || stats[user] == nil || stats[user].AverageDurationSeconds == nil || single.AverageDurationSeconds == nil || stats[user].WindowCount != single.WindowCount || math.Abs(*stats[user].AverageDurationSeconds-*single.AverageDurationSeconds) > .001 {
+			test.Fatalf("user=%+v batch=%+v single=%+v err=%v", user, stats[user], single, err)
+		}
+	}
+	first := stats[SessionUsageUser{Platform: "a", UserID: "7"}]
+	if first.WindowCount != 2 || math.Abs(*first.AverageDurationSeconds-120) > .001 {
+		test.Fatalf("user average was account-limited or duplicated: %+v", first)
+	}
+	missing := stats[SessionUsageUser{Platform: "a", UserID: "missing-200"}]
+	if missing == nil || missing.WindowCount != 0 || missing.AverageDurationSeconds != nil {
+		test.Fatalf("missing data or batch boundary: %+v", missing)
+	}
+	if _, exists := stats[SessionUsageUser{UserID: "7"}]; exists {
+		test.Fatal("accepted a user without a platform")
 	}
 }

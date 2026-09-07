@@ -1,11 +1,15 @@
 package admin
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/codex2api/auth"
+	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,15 +20,35 @@ type accountLiveItem struct {
 	SessionCapacityMax     int64 `json:"session_capacity_max"`
 }
 
-// GetAccountSessions lazily exposes active session slots for one account. It
-// reads only the runtime registry and is intentionally separate from list polling.
+type accountSessionResponse struct {
+	auth.AccountSessionSnapshot
+	UserSessionUsage *database.SessionUsageStats `json:"user_session_usage,omitempty"`
+}
+
+// GetAccountSessions lazily exposes active session slots for one account.
 func (h *Handler) GetAccountSessions(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 || h.store.FindByID(id) == nil {
 		writeError(c, http.StatusNotFound, "账号不存在")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"sessions": h.store.AccountSessionSnapshots(id, time.Now())})
+	snapshots := h.store.AccountSessionSnapshots(id, time.Now())
+	users := make([]database.SessionUsageUser, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		users = append(users, database.SessionUsageUser{Platform: snapshot.Owner.Platform, UserID: snapshot.Owner.UserID})
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	stats, err := h.db.GetNewAPIUsersSessionUsage(ctx, users)
+	if err != nil {
+		log.Printf("读取账号窗口用户平均用时失败: account_id=%d err=%v", id, err)
+	}
+	sessions := make([]accountSessionResponse, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		user := database.SessionUsageUser{Platform: strings.TrimSpace(snapshot.Owner.Platform), UserID: strings.TrimSpace(snapshot.Owner.UserID)}
+		sessions = append(sessions, accountSessionResponse{AccountSessionSnapshot: snapshot, UserSessionUsage: stats[user]})
+	}
+	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
 }
 
 // DeleteAccountSessions releases either one named session or every session of
