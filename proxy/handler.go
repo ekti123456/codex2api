@@ -8729,6 +8729,10 @@ func (h *Handler) supportedModelIDs(ctx context.Context) []string {
 
 // downstreamAuthorizationHeader is shared by authentication and per-key memory
 // namespaces so supported header forms cannot collapse into an anonymous key.
+//
+// 接受的凭据形态:Authorization: Bearer、x-api-key / anthropic-auth-token
+// (Anthropic 系客户端)、x-goog-api-key(google-genai SDK、ADK 与聚合网关的
+// Gemini 渠道打 /v1beta 时的默认头)。不接受 ?key= 查询串:密钥会进 URL 与访问日志。
 func downstreamAuthorizationHeader(req *http.Request) string {
 	if req == nil {
 		return ""
@@ -8741,7 +8745,7 @@ func downstreamAuthorizationHeader(req *http.Request) string {
 			return "Bearer " + key
 		}
 	}
-	for _, name := range []string{"x-api-key", "anthropic-auth-token"} {
+	for _, name := range []string{"x-api-key", "anthropic-auth-token", "x-goog-api-key"} {
 		if value := strings.TrimSpace(req.Header.Get(name)); value != "" {
 			return "Bearer " + value
 		}
