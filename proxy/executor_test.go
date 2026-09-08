@@ -1192,6 +1192,12 @@ func TestApplyOpenAIResponsesRequestHeadersSetsCodexUserAgent(t *testing.T) {
 	if got := req.Header.Get("Version"); got != latestCodexCLIVersion {
 		t.Fatalf("Version = %q, want %q", got, latestCodexCLIVersion)
 	}
+	if got := req.Header.Get("Originator"); got != Originator {
+		t.Fatalf("Originator = %q, want %q", got, Originator)
+	}
+	if got := req.Header.Get("X-Codex-App-Version"); got != latestCodexCLIVersion {
+		t.Fatalf("X-Codex-App-Version = %q, want %q", got, latestCodexCLIVersion)
+	}
 	if got := req.Header.Get("Authorization"); got != "Bearer relay-token" {
 		t.Fatalf("Authorization = %q", got)
 	}
@@ -1200,6 +1206,99 @@ func TestApplyOpenAIResponsesRequestHeadersSetsCodexUserAgent(t *testing.T) {
 	}
 	if got := req.Header.Get("Idempotency-Key"); got != "idem-123" {
 		t.Fatalf("Idempotency-Key = %q", got)
+	}
+}
+
+func TestApplyOpenAIResponsesRequestHeadersPassthroughAutoPreservesOfficialIdentity(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://relay.example/v1/responses", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	downstreamUA := "codex-tui/0.150.0 (Mac OS 15.5.0; arm64) xterm-256color (codex-tui; 0.150.0)"
+	headers := http.Header{
+		"User-Agent":            []string{downstreamUA},
+		"Originator":            []string{"codex-tui"},
+		"Version":               []string{"0.150.0"},
+		"Session-Id":            []string{"sess-123"},
+		"Thread-Id":             []string{"thread-456"},
+		"X-Codex-Turn-State":    []string{"t-state"},
+		"X-Codex-Beta-Features": []string{"remote_compaction_v2"},
+	}
+	account := &auth.Account{DBID: 42, CodexPassthroughMode: auth.CodexPassthroughModeAuto}
+
+	applyOpenAIResponsesRequestHeaders(req, account, "relay-token", headers)
+
+	if got := req.Header.Get("User-Agent"); got != downstreamUA {
+		t.Fatalf("User-Agent = %q, want downstream official UA %q", got, downstreamUA)
+	}
+	if got := req.Header.Get("Version"); got != "0.150.0" {
+		t.Fatalf("Version = %q, want 0.150.0", got)
+	}
+	if got := req.Header.Get("Originator"); got != "codex-tui" {
+		t.Fatalf("Originator = %q, want codex-tui", got)
+	}
+	if got := req.Header.Get("Session-Id"); got != "sess-123" {
+		t.Fatalf("Session-Id = %q, want sess-123", got)
+	}
+	if got := req.Header.Get("Thread-Id"); got != "thread-456" {
+		t.Fatalf("Thread-Id = %q, want thread-456", got)
+	}
+	if got := req.Header.Get("X-Codex-Turn-State"); got != "t-state" {
+		t.Fatalf("X-Codex-Turn-State = %q, want t-state", got)
+	}
+	if got := req.Header.Get("X-Codex-Beta-Features"); got != "remote_compaction_v2" {
+		t.Fatalf("X-Codex-Beta-Features = %q, want remote_compaction_v2", got)
+	}
+}
+
+func TestApplyOpenAIResponsesRequestHeadersPassthroughAlwaysForwardsAnyDownstream(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://relay.example/v1/responses", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	headers := http.Header{
+		"User-Agent": []string{"claude-cli/2.0.0"},
+		"Session-Id": []string{"sess-xyz"},
+	}
+	account := &auth.Account{DBID: 42, CodexPassthroughMode: auth.CodexPassthroughModeAlways}
+
+	applyOpenAIResponsesRequestHeaders(req, account, "relay-token", headers)
+
+	if got := req.Header.Get("User-Agent"); got != "claude-cli/2.0.0" {
+		t.Fatalf("User-Agent = %q, want downstream claude-cli/2.0.0", got)
+	}
+	if got := req.Header.Get("Session-Id"); got != "sess-xyz" {
+		t.Fatalf("Session-Id = %q, want sess-xyz", got)
+	}
+}
+
+func TestApplyOpenAIResponsesRequestHeadersPassthroughOffKeepsGeneratedIdentity(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://relay.example/v1/responses", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	headers := http.Header{
+		"User-Agent":            []string{"codex-tui/0.150.0 (Mac OS 15.5.0; arm64) xterm-256color (codex-tui; 0.150.0)"},
+		"Originator":            []string{"codex-tui"},
+		"Session-Id":            []string{"sess-123"},
+		"Thread-Id":             []string{"thread-456"},
+		"X-Codex-Turn-State":    []string{"t-state"},
+		"X-Codex-Beta-Features": []string{"remote_compaction_v2"},
+	}
+	account := &auth.Account{DBID: 42, CodexPassthroughMode: auth.CodexPassthroughModeOff}
+
+	applyOpenAIResponsesRequestHeaders(req, account, "relay-token", headers)
+
+	// off 保持旧行为：UA 随官方客户端透传（resolveCodexOutboundClientHeaders 的
+	// 官方 UA 分支），但 Originator 与会话/x-codex-* 头不转发。
+	if got := req.Header.Get("Originator"); got != Originator {
+		t.Fatalf("Originator = %q, want default %q", got, Originator)
+	}
+	if got := req.Header.Get("Session-Id"); got != "" {
+		t.Fatalf("Session-Id = %q, want dropped in off mode", got)
+	}
+	if got := req.Header.Get("X-Codex-Turn-State"); got != "" {
+		t.Fatalf("X-Codex-Turn-State = %q, want dropped in off mode", got)
 	}
 }
 
@@ -1507,6 +1606,72 @@ func TestExecuteOpenAIResponsesRequestDoesNotRetryUnrelatedForbidden(t *testing.
 	mu.Unlock()
 	if gotCount != 1 {
 		t.Fatalf("upstream requests = %d, want 1", gotCount)
+	}
+}
+
+func TestExecuteOpenAIResponsesRequestRetriesForbiddenErrorOfficialClients(t *testing.T) {
+	var mu sync.Mutex
+	requestCount := 0
+	installationIDs := make([]string, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readUpstreamRequestBody(r)
+		_ = r.Body.Close()
+		installationID := strings.TrimSpace(gjson.GetBytes(body, "client_metadata.x-codex-installation-id").String())
+
+		mu.Lock()
+		requestCount++
+		installationIDs = append(installationIDs, installationID)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		if installationID == "" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"message":"This account only allows Codex official clients","type":"forbidden_error"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"resp_test"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	account := &auth.Account{
+		DBID:         42004,
+		UpstreamType: auth.UpstreamOpenAIResponses,
+		BaseURL:      server.URL,
+		APIKey:       "relay-token",
+	}
+	headers := http.Header{
+		"Authorization": []string{"Bearer downstream-api-key"},
+		"User-Agent":    []string{"curl/8.0"},
+	}
+	body := []byte(`{"model":"gpt-5.5","input":"hello"}`)
+
+	resp, err := ExecuteOpenAIResponsesRequest(context.Background(), account, body, "", headers)
+	if err != nil {
+		t.Fatalf("first ExecuteOpenAIResponsesRequest() error = %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first response status = %d, want 200 after metadata retry", resp.StatusCode)
+	}
+
+	resp, err = ExecuteOpenAIResponsesRequest(context.Background(), account, body, "", headers)
+	if err != nil {
+		t.Fatalf("second ExecuteOpenAIResponsesRequest() error = %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second response status = %d, want 200 from cached requirement", resp.StatusCode)
+	}
+
+	mu.Lock()
+	gotCount := requestCount
+	gotIDs := append([]string(nil), installationIDs...)
+	mu.Unlock()
+	if gotCount != 3 {
+		t.Fatalf("upstream requests = %d, want initial rejection + retry + cached request", gotCount)
+	}
+	if len(gotIDs) != 3 || gotIDs[0] != "" || gotIDs[1] == "" || gotIDs[2] != gotIDs[1] {
+		t.Fatalf("installation IDs = %#v, want empty then one stable generated ID", gotIDs)
 	}
 }
 
