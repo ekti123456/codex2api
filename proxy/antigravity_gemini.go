@@ -148,6 +148,7 @@ func geminiNativeToAntigravityEnvelope(rawBody []byte, project, model string) ([
 	antigravityRewriteNativeGeminiFunctionNames(request, nameMap)
 	wireModel := antigravityGeminiResolvedModel(model, nil)
 	antigravityApplyNativeGeminiThinkingConfig(request, model, wireModel)
+	antigravityNormalizeNativeGeminiResponseSchema(request)
 	antigravitySanitizeNativeGeminiThoughtSignatures(request, wireModel)
 	contents, _ := request["contents"].([]any)
 	request["sessionId"] = antigravitySessionID(nil, contents)
@@ -188,6 +189,52 @@ func antigravityApplyNativeGeminiThinkingConfig(request map[string]any, publicMo
 			"thinkingBudget":  budget,
 		}
 	}
+}
+
+// antigravityNormalizeNativeGeminiResponseSchema 把 generationConfig.responseJsonSchema
+// (及 snake_case 的 response_json_schema)归一成 responseSchema。Antigravity 后端不认
+// 前者,原样透传时结构化输出会静默不生效。responseJsonSchema 是标准 JSON Schema,
+// 可能带 $defs/$ref 与 responseSchema(OpenAPI 子集)不认的关键字,搬过去时套用与
+// Responses→Antigravity 相同的清洗;客户端已显式给了 responseSchema 则以它为准,
+// 只删掉过时键。
+func antigravityNormalizeNativeGeminiResponseSchema(request map[string]any) {
+	for _, container := range []string{"generationConfig", "generation_config"} {
+		genConfig, ok := request[container].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"responseJsonSchema", "response_json_schema"} {
+			schema, exists := genConfig[key]
+			if !exists {
+				continue
+			}
+			delete(genConfig, key)
+			if _, has := genConfig["responseSchema"]; has || schema == nil {
+				continue
+			}
+			genConfig["responseSchema"] = antigravityResponseSchemaFromJSONSchema(schema)
+		}
+	}
+}
+
+func antigravityResponseSchemaFromJSONSchema(schema any) any {
+	root, ok := schema.(map[string]any)
+	if !ok {
+		return schema
+	}
+	definitions := map[string]any{}
+	for _, key := range []string{"$defs", "definitions"} {
+		if defs, defsOK := root[key].(map[string]any); defsOK {
+			for name, definition := range defs {
+				definitions[name] = definition
+			}
+		}
+	}
+	cleaned, cleanedOK := antigravityCleanGeminiSchema(root, definitions, map[string]bool{}, 0).(map[string]any)
+	if !cleanedOK || len(cleaned) == 0 {
+		return schema
+	}
+	return cleaned
 }
 
 const antigravityGeminiSkipThoughtSignature = "skip_thought_signature_validator"
