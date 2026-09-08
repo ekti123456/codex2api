@@ -1598,6 +1598,7 @@ type accountResponse struct {
 	Models                        []string                    `json:"models,omitempty"`
 	ModelMapping                  string                      `json:"model_mapping,omitempty"`
 	CodexClientMetadataMode       string                      `json:"codex_client_metadata_mode,omitempty"`
+	CodexPassthroughMode          string                      `json:"codex_passthrough_mode,omitempty"`
 	CodexFingerprintMode          string                      `json:"codex_fingerprint_mode,omitempty"`
 	ClaudeFingerprintMode         string                      `json:"claude_fingerprint_mode,omitempty"`
 	ClaudeUserAgent               string                      `json:"claude_user_agent,omitempty"`
@@ -3998,6 +3999,7 @@ type addOpenAIResponsesAccountReq struct {
 	Models                  []string          `json:"models"`
 	ModelMapping            string            `json:"model_mapping"`
 	CodexClientMetadataMode *string           `json:"codex_client_metadata_mode"`
+	CodexPassthroughMode    *string           `json:"codex_passthrough_mode"`
 	ProxyURL                string            `json:"proxy_url"`
 	CustomHeaders           map[string]string `json:"custom_headers"`
 }
@@ -4070,6 +4072,14 @@ func (h *Handler) AddOpenAIResponsesAccount(c *gin.Context) {
 		}
 		codexClientMetadataMode = auth.NormalizeCodexClientMetadataMode(*req.CodexClientMetadataMode)
 	}
+	codexPassthroughMode := auth.CodexPassthroughModeOff
+	if req.CodexPassthroughMode != nil {
+		if !auth.IsValidCodexPassthroughMode(*req.CodexPassthroughMode) {
+			writeError(c, http.StatusBadRequest, "codex_passthrough_mode 必须是 off、auto 或 always")
+			return
+		}
+		codexPassthroughMode = auth.NormalizeCodexPassthroughMode(*req.CodexPassthroughMode)
+	}
 	for _, model := range models {
 		if err := security.ValidateModelName(model); err != nil {
 			writeError(c, http.StatusBadRequest, fmt.Sprintf("模型名称无效: %s", model))
@@ -4102,6 +4112,7 @@ func (h *Handler) AddOpenAIResponsesAccount(c *gin.Context) {
 		"models":                                 models,
 		"model_mapping":                          modelMapping,
 		"codex_client_metadata_mode":             codexClientMetadataMode,
+		"codex_passthrough_mode":                 codexPassthroughMode,
 		"plan_type":                              "api",
 		"email":                                  baseURL,
 	}
@@ -4125,6 +4136,7 @@ func (h *Handler) AddOpenAIResponsesAccount(c *gin.Context) {
 		Models:                  models,
 		ModelMapping:            modelMapping,
 		CodexClientMetadataMode: codexClientMetadataMode,
+		CodexPassthroughMode:    codexPassthroughMode,
 		CustomHeaders:           customHeaders,
 		Email:                   baseURL,
 		PlanType:                "api",
@@ -4280,6 +4292,14 @@ func (h *Handler) UpdateOpenAIResponsesAccount(c *gin.Context) {
 		}
 		codexClientMetadataMode = auth.NormalizeCodexClientMetadataMode(*req.CodexClientMetadataMode)
 	}
+	codexPassthroughMode := auth.NormalizeCodexPassthroughMode(row.GetCredential("codex_passthrough_mode"))
+	if req.CodexPassthroughMode != nil {
+		if !auth.IsValidCodexPassthroughMode(*req.CodexPassthroughMode) {
+			writeError(c, http.StatusBadRequest, "codex_passthrough_mode 必须是 off、auto 或 always")
+			return
+		}
+		codexPassthroughMode = auth.NormalizeCodexPassthroughMode(*req.CodexPassthroughMode)
+	}
 	for _, model := range models {
 		if err := security.ValidateModelName(model); err != nil {
 			writeError(c, http.StatusBadRequest, fmt.Sprintf("模型名称无效: %s", model))
@@ -4302,6 +4322,7 @@ func (h *Handler) UpdateOpenAIResponsesAccount(c *gin.Context) {
 		"models":                                 models,
 		"model_mapping":                          modelMapping,
 		"codex_client_metadata_mode":             codexClientMetadataMode,
+		"codex_passthrough_mode":                 codexPassthroughMode,
 		"plan_type":                              "api",
 		"email":                                  baseURL,
 		"custom_headers":                         cloneCustomHeaders(customHeaders),
@@ -4323,7 +4344,7 @@ func (h *Handler) UpdateOpenAIResponsesAccount(c *gin.Context) {
 		return
 	}
 	if h.store != nil {
-		h.store.ApplyOpenAIResponsesConfig(id, baseURL, req.APIKey, models, modelMapping, codexClientMetadataMode, req.ProxyURL)
+		h.store.ApplyOpenAIResponsesConfig(id, baseURL, req.APIKey, models, modelMapping, codexClientMetadataMode, codexPassthroughMode, req.ProxyURL)
 		h.store.ApplyAccountCustomHeaders(id, customHeaders)
 	}
 	h.db.InsertAccountEventAsync(id, "updated", "manual_openai_responses")
