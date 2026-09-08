@@ -921,6 +921,9 @@ func convertAnthropicTools(tools []anthropicTool) []any {
 		item := map[string]any{
 			"type": "function",
 			"name": t.Name,
+			// Anthropic 工具没有 strict 概念，input_schema 常带可选属性；Responses
+			// 默认 strict=true 会按严格模式校验 schema 而 400，显式关掉。
+			"strict": false,
 		}
 		if t.Description != "" {
 			item["description"] = t.Description
