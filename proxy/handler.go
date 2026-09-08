@@ -2997,6 +2997,13 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		h.Responses(c)
 	})
 	codexDirect.GET("/:call_id", h.LiveSideband)
+
+	// Native Gemini API (Antigravity OAuth accounts only).
+	v1beta := r.Group("/v1beta")
+	v1beta.Use(auth)
+	v1beta.GET("/models", h.GeminiListModels)
+	v1beta.GET("/models/*action", h.GeminiGetModel)
+	v1beta.POST("/models/*action", h.GeminiModelsAction)
 }
 
 // APIKeyAuthMiddleware exposes the standard /v1 API key authentication middleware
