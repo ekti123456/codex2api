@@ -2487,6 +2487,8 @@ export interface PromptRiskProfileDetailResponse {
 
 export interface PromptRiskSessionWindow {
   session_hash: string
+  expanded?: boolean
+  multiplier?: number
   created_at?: ISODateString
   expires_at: ISODateString
   remaining_seconds: number

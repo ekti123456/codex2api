@@ -4383,6 +4383,9 @@ function PromptRiskSessionWindows({ windows, manualLocks, onLock, onUnlock, busy
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0 text-xs font-semibold text-violet-700 dark:text-violet-300">#{index + 1} · <span className="font-mono" title={session.session_hash}>{session.session_hash.slice(0, 16)}</span></div>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {session.expanded !== undefined ? <Badge variant="outline" className={session.expanded ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'text-muted-foreground'} title={t('promptFilter.risk.sessionLimit.tariffHint')}>
+                {t(session.expanded ? 'promptFilter.risk.sessionLimit.expandedWindow' : 'promptFilter.risk.sessionLimit.standardWindow')} · ×{session.multiplier ?? 1}
+              </Badge> : null}
               {manualLock ? <Badge variant="destructive" title={t('promptFilter.risk.sessionLimit.manualLockUntil', { time: formatBeijingTime(manualLock.expires_at) })}>{t('promptFilter.risk.sessionLimit.manuallyLocked')}</Badge> : null}
               <div className="rounded-full bg-violet-500/10 px-2.5 py-1 font-mono text-xs font-semibold tabular-nums text-violet-700 dark:text-violet-300">{formatPromptSessionWindowCountdown(session.expires_at, now)}</div>
               <Button size="sm" variant={manualLock ? 'outline' : 'destructive'} disabled={busy} onClick={() => void (manualLock ? onUnlock(session.session_hash) : onLock(session))}>

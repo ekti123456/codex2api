@@ -73,6 +73,8 @@ type promptRiskSessionLimitUpdateRequest struct {
 
 type promptRiskSessionWindowResponse struct {
 	SessionHash      string     `json:"session_hash"`
+	Expanded         bool       `json:"expanded"`
+	Multiplier       float64    `json:"multiplier"`
 	CreatedAt        *time.Time `json:"created_at,omitempty"`
 	ExpiresAt        time.Time  `json:"expires_at"`
 	RemainingSeconds int64      `json:"remaining_seconds"`
@@ -278,8 +280,12 @@ func (h *Handler) promptRiskSessionWindows(ctx context.Context, profile *databas
 		remaining := int64((expiresAt.Sub(now) + time.Second - 1) / time.Second)
 		item := promptRiskSessionWindowResponse{
 			SessionHash: sessionHash, ExpiresAt: expiresAt.UTC(), RemainingSeconds: remaining,
+			Expanded: detail.Expanded, Multiplier: 1,
 			AccountID: detail.AccountID, Model: strings.TrimSpace(detail.Model), ReasoningEffort: strings.TrimSpace(detail.ReasoningEffort),
 			ClientUserAgent: strings.TrimSpace(detail.ClientUserAgent), PromptPreview: strings.TrimSpace(detail.PromptPreview),
+		}
+		if detail.Multiplier >= 1 {
+			item.Multiplier = detail.Multiplier
 		}
 		if !detail.CreatedAt.IsZero() {
 			createdAt := detail.CreatedAt.UTC()
