@@ -19,6 +19,7 @@ export interface BuildBatchMetadataUpdateOptions {
   updateSessionCapacity?: boolean;
   sessionCapacityEnabled?: boolean;
   sessionCapacityMax?: number;
+  sessionCapacityReserved?: number;
   sessionCapacityIdleTTLSeconds?: number;
 }
 
@@ -41,6 +42,7 @@ export function buildBatchMetadataUpdate({
   updateSessionCapacity,
   sessionCapacityEnabled,
   sessionCapacityMax,
+  sessionCapacityReserved,
   sessionCapacityIdleTTLSeconds,
 }: BuildBatchMetadataUpdateOptions): BatchUpdateAccountsRequest {
   const payload: BatchUpdateAccountsRequest = { ids: [...ids] };
@@ -56,6 +58,7 @@ export function buildBatchMetadataUpdate({
   if (updateSessionCapacity) {
     payload.session_capacity_enabled = sessionCapacityEnabled ?? false;
     payload.session_capacity_max = sessionCapacityMax ?? 5;
+    if (sessionCapacityReserved !== undefined) payload.session_capacity_reserved = sessionCapacityReserved;
     payload.session_capacity_idle_ttl_seconds =
       sessionCapacityIdleTTLSeconds ?? 3600;
   }

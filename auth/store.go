@@ -144,6 +144,7 @@ type Account struct {
 	// remain bound to this official Codex account. It is disabled by default.
 	SessionCapacityEnabled        bool
 	SessionCapacityMax            int64
+	SessionCapacityReserved       int64
 	SessionCapacityIdleTTLSeconds int64
 	// Codex Agent Identity（auth_mode=agentIdentity）：不存 AT/RT，每次上游请求用
 	// agent_private_key(Ed25519, PKCS#8 base64) 动态签名。AgentTaskID 由 task 注册获得，
@@ -5198,6 +5199,7 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 	codexFingerprintMode := NormalizeCodexFingerprintMode(row.GetCredential(CodexFingerprintModeCredentialKey))
 	claudeFingerprintMode := NormalizeClaudeFingerprintMode(row.GetCredential(ClaudeFingerprintModeCredentialKey))
 	sessionCapacityMax, _ := row.GetCredentialInt64(SessionCapacityMaxCredentialKey)
+	sessionCapacityReserved, _ := row.GetCredentialInt64(SessionCapacityReservedCredentialKey)
 	sessionCapacityIdleTTLSeconds, _ := row.GetCredentialInt64(SessionCapacityIdleTTLSecondsKey)
 	var claudeClientPlatformOverride, claudeVersionPolicyOverride, claudeClientVersionOverride string
 	if strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamClaude) {
@@ -5253,6 +5255,7 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		claudeSessionWindow:           claudeSessionWindowForRow(upstreamType, s.ClaudeSessionWindowLimit()),
 		SessionCapacityEnabled:        row.GetCredentialBool(SessionCapacityEnabledCredentialKey),
 		SessionCapacityMax:            normalizeSessionCapacityMax(sessionCapacityMax),
+		SessionCapacityReserved:       max(0, min(normalizeSessionCapacityMax(sessionCapacityMax), sessionCapacityReserved)),
 		SessionCapacityIdleTTLSeconds: normalizeSessionCapacityIdleTTLSeconds(sessionCapacityIdleTTLSeconds),
 	}
 	if strings.EqualFold(strings.TrimSpace(upstreamType), UpstreamClaude) {
@@ -6711,7 +6714,7 @@ func (s *Store) admitSelectedAccountSession(account *Account, key string, now ti
 	if account == nil {
 		return false
 	}
-	if s.AdmitAccountSession(account, key, now) {
+	if s.AdmitAccountSession(account, key, now, traces...) {
 		return true
 	}
 	selectionTrace(traces).Reject("session_capacity_exhausted")
@@ -7855,7 +7858,7 @@ func (s *Store) waitForSessionAvailableWithFilter(ctx context.Context, key strin
 			if filter != nil && !filter(account) {
 				return false
 			}
-			admitted := s.CanAdmitAccountSession(account, key, time.Now())
+			admitted := s.CanAdmitAccountSession(account, key, time.Now(), traces...)
 			if !admitted {
 				selectionTrace(traces).Reject("session_capacity_exhausted")
 			}

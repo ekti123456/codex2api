@@ -105,6 +105,14 @@ func accountBillingWindowDriftTolerance(duration time.Duration) time.Duration {
 	return tolerance
 }
 
+func (window AccountBillingWindow) driftTolerance() time.Duration {
+	tolerance := accountBillingWindowDriftTolerance(window.Duration)
+	if window.Kind == AccountBillingWindowLong && tolerance > accountBillingWindowResetTolerance {
+		return accountBillingWindowResetTolerance
+	}
+	return tolerance
+}
+
 func legacyAccountBillingWindowDriftTolerance(duration time.Duration) time.Duration {
 	tolerance := accountBillingWindowDriftTolerance(duration)
 	if tolerance > maxLegacyAccountBillingWindowDrift {
@@ -250,6 +258,7 @@ type accountBillingWindowStateExecer interface {
 const keepAccountBillingWindowStateSQL = `usage_account_billing_window_states.window_seconds = excluded.window_seconds
 	AND excluded.anchor_start <= usage_account_billing_window_states.anchor_start +
 		(CASE
+			WHEN excluded.window_kind = 'long' AND excluded.window_seconds / 4 > 300 THEN 300
 			WHEN excluded.window_seconds / 4 > 86400 THEN 86400
 			ELSE excluded.window_seconds / 4
 		END) * 1000000000`
@@ -395,7 +404,7 @@ func resolveAccountBillingWindows(windows []AccountBillingWindow, states map[Acc
 			// come from an old process or stale runtime snapshot and must not
 			// rewind a newer billing generation. A far-forward value is a rollover.
 			sameDuration := state.WindowSeconds == int64(window.Duration/time.Second) &&
-				window.Start.Sub(anchor) <= accountBillingWindowDriftTolerance(window.Duration)
+				window.Start.Sub(anchor) <= window.driftTolerance()
 			resetDelta := window.Start.Add(window.Duration).Sub(anchor.Add(stateDuration))
 			sameResetWithoutShrink := stateDuration >= window.Duration &&
 				resetDelta >= -accountBillingWindowResetTolerance && resetDelta <= accountBillingWindowResetTolerance
@@ -414,7 +423,7 @@ func resolveAccountBillingWindows(windows []AccountBillingWindow, states map[Acc
 
 // archiveAccountBillingWindowsWithExec archives each explicitly typed active
 // quota window. A matching v2 state keeps its first anchor, so relative reset
-// headers may drift across minutes or hours without changing the live filter or
+// headers may drift within the window-specific tolerance without changing the live filter or
 // archive identity. A different reset generation replaces only that kind;
 // same-boundary duration corrections keep the already archived cost.
 func (db *DB) archiveAccountBillingWindowsWithExec(ctx context.Context, tx *sql.Tx, input []AccountBillingWindow) error {

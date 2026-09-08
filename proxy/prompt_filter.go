@@ -72,9 +72,14 @@ func (h *Handler) inspectPromptFilterOpenAIWithBlockWriter(c *gin.Context, rawBo
 	if h.rejectRequiredNewAPIIdentity(c, cfg.Advanced.NewAPI, signedBody) {
 		return true
 	}
+	if apiErr := h.requestWindowGrantError(c); apiErr != nil {
+		api.SendErrorWithStatus(c, apiErr, http.StatusBadRequest)
+		return true
+	}
 	if h.rejectLockedPromptConversation(c, cfg, signedBody, rawBody, endpoint, model) {
 		return true
 	}
+	h.recordUsageAuthorization(c, "audit")
 	if passiveInternalRequestAuthorized(c) {
 		// Field-classified internal turns contain transcript or original
 		// user text by design. Do not recursively filter it as a fresh user prompt.
@@ -157,9 +162,14 @@ func (h *Handler) inspectPromptFilterAnthropic(c *gin.Context, rawBody []byte, e
 		sendAnthropicError(c, http.StatusUnauthorized, "authentication_error", apiErr.Message)
 		return true
 	}
+	if apiErr := h.requestWindowGrantError(c); apiErr != nil {
+		sendAnthropicError(c, http.StatusBadRequest, "invalid_request_error", apiErr.Message)
+		return true
+	}
 	if h.rejectLockedPromptConversation(c, cfg, signedBody, rawBody, endpoint, model) {
 		return true
 	}
+	h.recordUsageAuthorization(c, "audit")
 	if passiveInternalRequestAuthorized(c) {
 		return false
 	}

@@ -1437,10 +1437,11 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 			identity.unlinkedFallbackOnly = true
 		} else {
 			rootKey := sessionAffinityKey(identity.affinityID, requestAPIKeyID(c))
-			_, found := h.store.AccountSessionAccountID(rootKey, time.Now())
+			rootAccountID, found := h.store.AccountSessionAccountID(rootKey, time.Now())
 			if !found {
-				_, found = h.store.SessionAffinityAccountID(rootKey)
+				rootAccountID, found = h.store.SessionAffinityAccountID(rootKey)
 			}
+			recordUsageRootAccount(c, rootAccountID, found)
 			if !found {
 				identity.unlinkedFallbackOnly = true
 			}
@@ -1450,6 +1451,7 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	if identity.unlinkedFallbackOnly {
 		identity.affinityID = ""
 	}
+	h.captureUsageRequestResolution(c, body, identity, rootIdentity, policyContext, status)
 	return identity
 }
 

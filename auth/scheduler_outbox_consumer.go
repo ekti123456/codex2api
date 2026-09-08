@@ -462,9 +462,11 @@ func (s *Store) applyPersistentAccountSnapshot(dst, src *Account, enabled bool) 
 
 	sessionCapacityEnabled, _, _ := src.SessionCapacityConfig()
 	sessionCapacityMax := normalizeSessionCapacityMax(src.SessionCapacityMax)
+	sessionCapacityReserved := src.SessionCapacityLimits().Reserved
 	sessionCapacityIdleTTLSeconds := normalizeSessionCapacityIdleTTLSeconds(src.SessionCapacityIdleTTLSeconds)
 	dst.mu.RLock()
 	sessionCapacityChanged := dst.SessionCapacityEnabled != sessionCapacityEnabled ||
+		dst.SessionCapacityReserved != sessionCapacityReserved ||
 		normalizeSessionCapacityMax(dst.SessionCapacityMax) != sessionCapacityMax ||
 		normalizeSessionCapacityIdleTTLSeconds(dst.SessionCapacityIdleTTLSeconds) != sessionCapacityIdleTTLSeconds
 	dst.mu.RUnlock()
@@ -473,7 +475,7 @@ func (s *Store) applyPersistentAccountSnapshot(dst, src *Account, enabled bool) 
 		// Apply this while dst still has its old provider/configuration. In
 		// particular, disabling capacity while changing to a relay account must
 		// hydrate the old persisted windows before clearing their reverse keys.
-		sessionCapacityApplied = s.ApplyAccountSessionCapacity(dst.DBID, sessionCapacityEnabled, sessionCapacityMax, sessionCapacityIdleTTLSeconds)
+		sessionCapacityApplied = s.ApplyAccountSessionCapacity(dst.DBID, sessionCapacityEnabled, sessionCapacityMax, sessionCapacityIdleTTLSeconds, sessionCapacityReserved)
 	}
 
 	dst.mu.Lock()
@@ -485,6 +487,7 @@ func (s *Store) applyPersistentAccountSnapshot(dst, src *Account, enabled bool) 
 		// Store. Production reloads always take the Apply path above.
 		dst.SessionCapacityEnabled = sessionCapacityEnabled
 		dst.SessionCapacityMax = sessionCapacityMax
+		dst.SessionCapacityReserved = sessionCapacityReserved
 		dst.SessionCapacityIdleTTLSeconds = sessionCapacityIdleTTLSeconds
 	}
 	// Routing sub-pools only need invalidation when membership-relevant fields

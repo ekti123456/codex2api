@@ -1119,6 +1119,8 @@ export const api = {
       { signal: params.signal },
     )
   },
+  getUsageRequestDiagnostics: (id: number, signal?: AbortSignal) =>
+    request<import('./lib/usageRequestDiagnostics').UsageRequestDiagnosticDetail>(`/usage/logs/${id}/diagnostics`, { signal }),
   getUsageLogs: (params: { start?: string; end?: string; limit?: number } = {}) => {
     const searchParams = new URLSearchParams()
     if (params.start && params.end) {

@@ -50,6 +50,9 @@ func selectionTraceForRequest(ctx *gin.Context) *auth.SelectionTrace {
 
 func beginDispatchSelection(ctx *gin.Context) {
 	trace := &auth.SelectionTrace{}
+	if grant := windowGrantForRequest(ctx); grant != nil {
+		trace.SetExpandedWindow(grant.Grant.Expanded)
+	}
 	ctx.Request = ctx.Request.WithContext(auth.WithSelectionTrace(ctx.Request.Context(), trace))
 }
 

@@ -17,11 +17,30 @@ type SelectionDiagnostic struct {
 }
 
 type SelectionTrace struct {
-	mu          sync.Mutex
-	reasons     map[string]struct{}
-	rootAccount int64
-	suspended   int
-	frozen      bool
+	mu             sync.Mutex
+	reasons        map[string]struct{}
+	rootAccount    int64
+	suspended      int
+	frozen         bool
+	expandedWindow bool
+}
+
+func (trace *SelectionTrace) SetExpandedWindow(allowed bool) {
+	if trace == nil {
+		return
+	}
+	trace.mu.Lock()
+	trace.expandedWindow = allowed
+	trace.mu.Unlock()
+}
+
+func (trace *SelectionTrace) ExpandedWindow() bool {
+	if trace == nil {
+		return false
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	return trace.expandedWindow
 }
 
 type selectionTraceContextKey struct{}

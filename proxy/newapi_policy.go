@@ -61,6 +61,7 @@ type newAPIOriginalAuditMeta struct {
 }
 
 type newAPIPolicyMeta struct {
+	WindowGrant      string `json:"window_grant,omitempty"`
 	PlatformID       string `json:"platform_id,omitempty"`
 	UserName         string `json:"user_name,omitempty"`
 	UserEmail        string `json:"user_email,omitempty"`
@@ -379,7 +380,7 @@ func (h *Handler) verifyNewAPIPolicyContext(c *gin.Context, cfg promptfilter.New
 		c.Set(newAPIPolicyMetaContextKey, policyContext)
 		return policyContext, true
 	}
-	if encoded == "" || signature == "" || len(encoded) > 4096 {
+	if encoded == "" || signature == "" || len(encoded) > 8192 {
 		if bound {
 			return verifiedNewAPIPolicyContext{}, false
 		}
@@ -399,7 +400,7 @@ func (h *Handler) verifyNewAPIPolicyContext(c *gin.Context, cfg promptfilter.New
 		return policyContext, true
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil || len(payload) > 3072 || json.Unmarshal(payload, &policyContext.Meta) != nil {
+	if err != nil || len(payload) > 6144 || json.Unmarshal(payload, &policyContext.Meta) != nil || (len(payload) > 3072 && policyContext.Meta.WindowGrant == "") {
 		if bound {
 			return verifiedNewAPIPolicyContext{}, false
 		}
@@ -463,6 +464,9 @@ func normalizeVerifiedNewAPIOriginalAuditMeta(meta newAPIOriginalAuditMeta) (new
 
 func normalizeVerifiedNewAPIPolicyMeta(meta *newAPIPolicyMeta) bool {
 	if meta == nil {
+		return false
+	}
+	if len(meta.WindowGrant) > 4096 {
 		return false
 	}
 	if strings.TrimSpace(meta.PlatformID) != "" {

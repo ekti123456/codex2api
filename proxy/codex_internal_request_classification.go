@@ -104,6 +104,9 @@ func resetCodexInternalRequestClassificationFrame(c *gin.Context) {
 		return
 	}
 	setLocalSessionAccountingBypass(c, false)
+	c.Set(windowGrantContextKey, nil)
+	c.Set("window_grant_confirmed", false)
+	c.Set(usageRequestDiagnosticsContextKey, nil)
 	c.Set(relatedSessionObservationContextKey, nil)
 	c.Set(passiveInternalAuthorizationContextKey, nil)
 	cacheTrustedRequestedModel(c, "")

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/codex2api/database"
 	"github.com/google/uuid"
 )
 
@@ -18,7 +19,7 @@ const (
 	SessionCapacityMaxCredentialKey     = "session_capacity_max"
 	SessionCapacityIdleTTLSecondsKey    = "session_capacity_idle_ttl_seconds"
 
-	DefaultSessionCapacityMax            = int64(5)
+	DefaultSessionCapacityMax            = database.DefaultAccountSessionCapacity
 	DefaultSessionCapacityIdleTTLSeconds = int64(3600)
 	MinSessionCapacityIdleTTLSeconds     = int64(60)
 	MaxSessionCapacityIdleTTLSeconds     = int64(30 * 24 * 60 * 60)
@@ -130,6 +131,7 @@ type AccountSessionOwner struct {
 // conversation. SessionID contains the downstream affinity identity, never a
 // bearer credential.
 type AccountSessionSnapshot struct {
+	Reserved            bool                          `json:"reserved,omitempty"`
 	SessionID           string                        `json:"session_id"`
 	LastSeen            time.Time                     `json:"last_seen"`
 	ExpiresAt           time.Time                     `json:"expires_at"`
@@ -147,6 +149,7 @@ type AccountSessionRelatedSource struct {
 }
 
 type accountSessionState struct {
+	reserved              bool
 	sessionID             string
 	usagePeriodID         string
 	usageStartedAt        time.Time
@@ -160,6 +163,7 @@ type accountSessionState struct {
 }
 
 type persistedAccountSessionState struct {
+	Reserved            bool                          `json:"reserved,omitempty"`
 	SessionID           string                        `json:"session_id"`
 	UsagePeriodID       string                        `json:"usage_period_id,omitempty"`
 	UsageStartedAt      time.Time                     `json:"usage_started_at,omitempty"`
@@ -208,15 +212,8 @@ func normalizeSessionCapacityIdleTTLSeconds(value int64) int64 {
 }
 
 func (a *Account) SessionCapacityConfig() (enabled bool, limit int64, idleTTL time.Duration) {
-	if a == nil || a.IsRelayStyle() {
-		return false, 0, 0
-	}
-	a.mu.RLock()
-	enabled = a.SessionCapacityEnabled
-	limit = normalizeSessionCapacityMax(a.SessionCapacityMax)
-	idleSeconds := normalizeSessionCapacityIdleTTLSeconds(a.SessionCapacityIdleTTLSeconds)
-	a.mu.RUnlock()
-	return enabled, limit, time.Duration(idleSeconds) * time.Second
+	limits := a.SessionCapacityLimits()
+	return limits.Enabled, limits.Total, limits.IdleTTL
 }
 
 func (s *Store) ensureAccountSessionsLoaded(account *Account, now time.Time) {
@@ -268,6 +265,7 @@ func (s *Store) ensureAccountSessionsLoaded(account *Account, now time.Time) {
 				continue
 			}
 			state := &accountSessionState{
+				reserved:            item.Reserved,
 				sessionID:           sessionID,
 				usagePeriodID:       item.UsagePeriodID,
 				usageStartedAt:      item.UsageStartedAt,
@@ -373,6 +371,7 @@ func (s *Store) persistAccountSessions(accountID int64, now time.Time, reconcile
 			}
 		}
 		collection.Sessions = append(collection.Sessions, persistedAccountSessionState{
+			Reserved:  state.reserved,
 			SessionID: state.sessionID, LastSeen: state.lastSeen, Owner: state.owner,
 			UsagePeriodID: state.usagePeriodID, UsageStartedAt: state.usageStartedAt,
 			RelatedRequestCount: state.relatedRequestCount, RelatedSources: relatedSources,
@@ -457,21 +456,25 @@ func (s *Store) deletePersistedAccountSession(accountID int64, sessionID string)
 	s.persistAccountSessions(accountID, time.Now(), sessionID)
 }
 
-func (s *Store) purgeExpiredAccountSessionsLocked(accountID int64, idleTTL time.Duration, now time.Time) {
+func (s *Store) purgeExpiredAccountSessionsLocked(accountID int64, idleTTL time.Duration, now time.Time) int64 {
 	bySession := s.accountSessions[accountID]
+	reserved := int64(0)
 	for key, state := range bySession {
 		if state == nil || !state.lastSeen.Add(idleTTL).After(now) {
 			delete(bySession, key)
+		} else if state.reserved {
+			reserved++
 		}
 	}
 	if len(bySession) == 0 {
 		delete(s.accountSessions, accountID)
 	}
+	return reserved
 }
 
 // AdmitAccountSession atomically reuses or creates an idle-expiring session
 // slot for an account. Disabled and relay accounts are intentionally no-ops.
-func (s *Store) AdmitAccountSession(account *Account, sessionKey string, now time.Time) bool {
+func (s *Store) AdmitAccountSession(account *Account, sessionKey string, now time.Time, traces ...*SelectionTrace) bool {
 	if s == nil || account == nil {
 		return false
 	}
@@ -482,8 +485,8 @@ func (s *Store) AdmitAccountSession(account *Account, sessionKey string, now tim
 	if _, related := RelatedSessionRootKey(sessionKey); related {
 		return true
 	}
-	enabled, limit, idleTTL := account.SessionCapacityConfig()
-	if !enabled || sessionKey == "" {
+	limits := account.SessionCapacityLimits()
+	if !limits.Enabled || sessionKey == "" {
 		return true
 	}
 	if now.IsZero() {
@@ -495,33 +498,41 @@ func (s *Store) AdmitAccountSession(account *Account, sessionKey string, now tim
 	if s.accountSessions == nil {
 		s.accountSessions = make(map[int64]map[string]*accountSessionState)
 	}
-	s.purgeExpiredAccountSessionsLocked(account.DBID, idleTTL, now)
+	reservedCount := s.purgeExpiredAccountSessionsLocked(account.DBID, limits.IdleTTL, now)
 	bySession := s.accountSessions[account.DBID]
 	if bySession == nil {
 		bySession = make(map[string]*accountSessionState)
 		s.accountSessions[account.DBID] = bySession
 	}
 	if state := bySession[sessionKey]; state != nil {
+		if state.reserved && !selectionTrace(traces).ExpandedWindow() && selectionTrace(traces) != nil {
+			if int64(len(bySession))-reservedCount >= limits.Total-limits.Reserved {
+				s.accountSessionMu.Unlock()
+				return false
+			}
+			state.reserved = false
+		}
 		state.lastSeen = now
 		s.accountSessionMu.Unlock()
 		return true
 	}
-	if int64(len(bySession)) >= limit {
+	reserved, allowed := accountSessionSlotAvailable(int64(len(bySession)), reservedCount, limits, selectionTrace(traces).ExpandedWindow())
+	if !allowed {
 		s.accountSessionMu.Unlock()
 		return false
 	}
-	bySession[sessionKey] = &accountSessionState{sessionID: sessionKey, lastSeen: now, usagePeriodID: uuid.NewString(), usageStartedAt: now}
+	bySession[sessionKey] = &accountSessionState{sessionID: sessionKey, lastSeen: now, usagePeriodID: uuid.NewString(), usageStartedAt: now, reserved: reserved}
 	s.accountSessionMu.Unlock()
 	return true
 }
 
-func (s *Store) CanAdmitAccountSession(account *Account, sessionKey string, now time.Time) bool {
+func (s *Store) CanAdmitAccountSession(account *Account, sessionKey string, now time.Time, traces ...*SelectionTrace) bool {
 	if s == nil || account == nil {
 		return false
 	}
 	sessionKey = strings.TrimSpace(sessionKey)
-	enabled, limit, idleTTL := account.SessionCapacityConfig()
-	if !enabled || sessionKey == "" || isProcessLocalSessionAffinityKey(sessionKey) || isSessionAccountingBypassKey(sessionKey) {
+	limits := account.SessionCapacityLimits()
+	if !limits.Enabled || sessionKey == "" || isProcessLocalSessionAffinityKey(sessionKey) || isSessionAccountingBypassKey(sessionKey) {
 		return true
 	}
 	if _, related := RelatedSessionRootKey(sessionKey); related {
@@ -533,12 +544,16 @@ func (s *Store) CanAdmitAccountSession(account *Account, sessionKey string, now 
 	s.ensureAccountSessionsLoaded(account, now)
 	s.accountSessionMu.Lock()
 	defer s.accountSessionMu.Unlock()
-	s.purgeExpiredAccountSessionsLocked(account.DBID, idleTTL, now)
+	reservedCount := s.purgeExpiredAccountSessionsLocked(account.DBID, limits.IdleTTL, now)
 	bySession := s.accountSessions[account.DBID]
 	if bySession[sessionKey] != nil {
+		if bySession[sessionKey].reserved && !selectionTrace(traces).ExpandedWindow() && selectionTrace(traces) != nil {
+			return int64(len(bySession))-reservedCount < limits.Total-limits.Reserved
+		}
 		return true
 	}
-	return int64(len(bySession)) < limit
+	_, allowed := accountSessionSlotAvailable(int64(len(bySession)), reservedCount, limits, selectionTrace(traces).ExpandedWindow())
+	return allowed
 }
 
 // HasSessionCapacityExhaustionWithDispatch reports capacity exhaustion only
@@ -861,6 +876,7 @@ func (s *Store) AccountSessionSnapshots(accountID int64, now time.Time) []Accoun
 			return left < right
 		})
 		items = append(items, AccountSessionSnapshot{
+			Reserved:  state.reserved,
 			SessionID: state.sessionID, LastSeen: state.lastSeen, ExpiresAt: expiresAt,
 			RemainingSeconds: remaining, Owner: state.owner,
 			RelatedRequestCount: state.relatedRequestCount, RelatedSources: relatedSources,
@@ -948,7 +964,7 @@ func (s *Store) accountWindowCountsForScheduling(accounts []*Account, now time.T
 	return counts
 }
 
-func (s *Store) ApplyAccountSessionCapacity(dbID int64, enabled bool, limit, idleTTLSeconds int64) bool {
+func (s *Store) ApplyAccountSessionCapacity(dbID int64, enabled bool, limit, idleTTLSeconds int64, reserved ...int64) bool {
 	if s == nil || dbID <= 0 {
 		return false
 	}
@@ -965,6 +981,9 @@ func (s *Store) ApplyAccountSessionCapacity(dbID int64, enabled bool, limit, idl
 	account.mu.Lock()
 	account.SessionCapacityEnabled = enabled
 	account.SessionCapacityMax = normalizeSessionCapacityMax(limit)
+	if len(reserved) > 0 {
+		account.SessionCapacityReserved = max(0, min(account.SessionCapacityMax, reserved[0]))
+	}
 	account.SessionCapacityIdleTTLSeconds = normalizeSessionCapacityIdleTTLSeconds(idleTTLSeconds)
 	account.mu.Unlock()
 	if !enabled {

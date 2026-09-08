@@ -1162,6 +1162,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/usage/api-keys", h.GetAPIKeyTokenStats)
 	api.GET("/usage/api-keys/:id/accounts", h.GetAPIKeyAccountStats)
 	api.GET("/usage/logs", h.GetUsageLogs)
+	api.GET("/usage/logs/:id/diagnostics", h.GetUsageRequestDiagnostics)
 	api.GET("/usage/logs/error-summary", h.GetUsageLogsErrorSummary)
 	api.GET("/usage/chart-data", h.GetChartData)
 	api.DELETE("/usage/logs", h.ClearUsageLogs)
@@ -1558,125 +1559,127 @@ type accountResponse struct {
 	CreditSkipUsageWindow bool   `json:"credit_skip_usage_window"`
 	// UsingCredits 是与 Status 并列的独立信号：用量窗口已打满但积分顶着，
 	// 状态仍是 active（可调度），前端据此在状态徽章旁并列一个「使用积分」徽章。
-	UsingCredits                  bool                        `json:"using_credits,omitempty"`
-	SkipWarmTier                  bool                        `json:"skip_warm_tier"`
-	AccountType                   string                      `json:"account_type,omitempty"`
-	AccessTokenType               string                      `json:"access_token_type,omitempty"`
-	OpenAIResponsesAPI            bool                        `json:"openai_responses_api,omitempty"`
-	GrokAPI                       bool                        `json:"grok_api,omitempty"`
-	AntigravityAPI                bool                        `json:"antigravity_api,omitempty"`
-	ClaudeAPI                     bool                        `json:"claude_api,omitempty"`
-	AntigravityAuthKind           string                      `json:"antigravity_auth_kind,omitempty"`
-	AgentIdentity                 bool                        `json:"agent_identity,omitempty"`
-	GrokAuthKind                  string                      `json:"grok_auth_kind,omitempty"`
-	GrokPlan                      *auth.GrokPlan              `json:"grok_plan,omitempty"`
-	GrokBilling                   json.RawMessage             `json:"grok_billing,omitempty"`
-	GrokRateLimit                 *auth.GrokRateLimitSnapshot `json:"grok_rate_limit,omitempty"`
-	GrokFreeQuota                 *auth.GrokFreeQuotaSnapshot `json:"grok_free_quota,omitempty"`
-	AvatarURL                     string                      `json:"avatar_url,omitempty"`
-	VerifiedEmail                 bool                        `json:"verified_email,omitempty"`
-	ProjectID                     string                      `json:"project_id,omitempty"`
-	AntigravityQuota              json.RawMessage             `json:"antigravity_quota,omitempty"`
-	AntigravityPermissions        json.RawMessage             `json:"antigravity_permissions,omitempty"`
-	AntigravitySyncWarning        string                      `json:"antigravity_sync_warning,omitempty"`
-	BaseURL                       string                      `json:"base_url,omitempty"`
-	BalanceQueryURL               string                      `json:"balance_query_url,omitempty"`
-	Models                        []string                    `json:"models,omitempty"`
-	ModelMapping                  string                      `json:"model_mapping,omitempty"`
-	CodexClientMetadataMode       string                      `json:"codex_client_metadata_mode,omitempty"`
-	CodexFingerprintMode          string                      `json:"codex_fingerprint_mode,omitempty"`
-	CodexInstallationID           string                      `json:"codex_installation_id,omitempty"`
-	ClaudeFingerprintMode         string                      `json:"claude_fingerprint_mode,omitempty"`
-	ClaudeUserAgent               string                      `json:"claude_user_agent,omitempty"`
-	ClaudeClientPlatform          string                      `json:"claude_client_platform,omitempty"`
-	ClaudeVersionPolicy           string                      `json:"claude_version_policy,omitempty"`
-	ClaudeClientVersion           string                      `json:"claude_client_version,omitempty"`
-	ClaudeClientPlatformOverride  string                      `json:"claude_client_platform_override,omitempty"`
-	ClaudeVersionPolicyOverride   string                      `json:"claude_version_policy_override,omitempty"`
-	ClaudeClientVersionOverride   string                      `json:"claude_client_version_override,omitempty"`
-	Timezone                      string                      `json:"timezone,omitempty"`
-	CustomHeaders                 map[string]string           `json:"custom_headers,omitempty"`
-	HealthTier                    string                      `json:"health_tier"`
-	SchedulerScore                float64                     `json:"scheduler_score"`
-	DispatchScore                 float64                     `json:"dispatch_score"`
-	ScoreBiasOverride             *int64                      `json:"score_bias_override"`
-	ScoreBiasEffective            int64                       `json:"score_bias_effective"`
-	BaseConcurrencyOverride       *int64                      `json:"base_concurrency_override"`
-	BaseConcurrencyEffective      int64                       `json:"base_concurrency_effective"`
-	ConcurrencyCap                int64                       `json:"dynamic_concurrency_limit"`
-	ProxyURL                      string                      `json:"proxy_url"`
-	CreatedAt                     string                      `json:"created_at"`
-	UpdatedAt                     string                      `json:"updated_at"`
-	CodexUsageUpdatedAt           string                      `json:"codex_usage_updated_at,omitempty"`
-	Codex5HUsageUpdatedAt         string                      `json:"codex_5h_usage_updated_at,omitempty"`
-	ClaudeUsageProbeAt            string                      `json:"claude_usage_probe_at,omitempty"`
-	ClaudeUsageProbeError         string                      `json:"claude_usage_probe_error,omitempty"`
-	ClaudeUsageWindows            []auth.ClaudeUsageWindow    `json:"claude_usage_windows,omitempty"`
-	ClaudeUsageWindowsProbed      bool                        `json:"claude_usage_windows_probed,omitempty"` // 已跑过 OAuth usage 采样(前端据此只回填从未采样的旧行)
-	ActiveRequests                int64                       `json:"active_requests"`
-	OccupiedRequests              int64                       `json:"occupied_requests"`
-	SessionSlotBufferEnabled      bool                        `json:"session_slot_buffer_enabled"`
-	SessionCapacityEnabled        bool                        `json:"session_capacity_enabled,omitempty"`
-	SessionCapacityMax            int64                       `json:"session_capacity_max,omitempty"`
-	SessionCapacityIdleTTLSeconds int64                       `json:"session_capacity_idle_ttl_seconds,omitempty"`
-	SessionCapacityCurrent        int64                       `json:"session_capacity_current,omitempty"`
-	TotalRequests                 int64                       `json:"total_requests"`
-	LastUsedAt                    string                      `json:"last_used_at"`
-	SuccessRequests               int64                       `json:"success_requests"`
-	ErrorRequests                 int64                       `json:"error_requests"`
-	RetryErrorRequests            int64                       `json:"retry_error_requests"`
-	RateLimitAttempts             int64                       `json:"rate_limit_attempts"`
-	ErrorStatusCounts             map[string]int64            `json:"error_status_counts,omitempty"`
-	SuccessModelCounts            map[string]int64            `json:"success_model_counts,omitempty"`
-	UsagePercent7d                *float64                    `json:"usage_percent_7d"`
-	UsagePercent5h                *float64                    `json:"usage_percent_5h"`
-	UsagePercentSpark             *float64                    `json:"usage_percent_spark"`
-	RateLimitResetCredits         *int                        `json:"rate_limit_reset_credits"`
-	ApplicableResetCredits        *int                        `json:"applicable_reset_credits"`
-	CreditsBalance                *string                     `json:"credits_balance"`
-	CreditsHasCredits             *bool                       `json:"credits_has_credits"`
-	CreditsUnlimited              *bool                       `json:"credits_unlimited"`
-	CreditsOverageLimitReached    *bool                       `json:"credits_overage_limit_reached"`
-	AutoPause5hThreshold          *float64                    `json:"auto_pause_5h_threshold"`
-	AutoPause7dThreshold          *float64                    `json:"auto_pause_7d_threshold"`
-	AutoPause5hDisabled           bool                        `json:"auto_pause_5h_disabled"`
-	AutoPause7dDisabled           bool                        `json:"auto_pause_7d_disabled"`
-	UsageLimitOverride            *bool                       `json:"ignore_usage_limit_status_override"`
-	UsageLimitEffective           bool                        `json:"ignore_usage_limit_status_effective"`
-	DispatchCountLimit            *int64                      `json:"dispatch_count_limit"`
-	DispatchCountUsed             int64                       `json:"dispatch_count_used,omitempty"`
-	DispatchCountResetAt          string                      `json:"dispatch_count_reset_at,omitempty"`
-	DispatchCountLimited          bool                        `json:"dispatch_count_limited,omitempty"`
-	SchedulerPriority             *int64                      `json:"scheduler_priority"`
-	Usage5hDetail                 *accountUsageWindow         `json:"usage_5h_detail,omitempty"`
-	Usage7dDetail                 *accountUsageWindow         `json:"usage_7d_detail,omitempty"`
-	Reset5hAt                     string                      `json:"reset_5h_at,omitempty"`
-	Reset7dAt                     string                      `json:"reset_7d_at,omitempty"`
-	ResetSparkAt                  string                      `json:"reset_spark_at,omitempty"`
-	Window7dKind                  string                      `json:"usage_window_7d_kind,omitempty"`    // "monthly"(team 月窗)/"weekly"/""；供前端标「30天」而非误标「7天」
-	Window7dSeconds               *int64                      `json:"usage_window_7d_seconds,omitempty"` // 长窗口真实周期秒数
-	Billed5h                      *float64                    `json:"billed_5h"`
-	Billed7d                      *float64                    `json:"billed_7d"`
-	ScoreBreakdown                schedulerBreakdownResponse  `json:"scheduler_breakdown"`
-	LastUnauthorizedAt            string                      `json:"last_unauthorized_at,omitempty"`
-	LastRateLimitedAt             string                      `json:"last_rate_limited_at,omitempty"`
-	LastTimeoutAt                 string                      `json:"last_timeout_at,omitempty"`
-	LastServerErrorAt             string                      `json:"last_server_error_at,omitempty"`
-	CooldownReason                string                      `json:"cooldown_reason,omitempty"`
-	CooldownUntil                 string                      `json:"cooldown_until,omitempty"`
-	ModelCooldowns                []modelCooldownResponse     `json:"model_cooldowns,omitempty"`
-	ModelCooldownModeOverride     *string                     `json:"model_cooldown_mode_override"`
-	ModelCooldownSecondsOverride  *int                        `json:"model_cooldown_seconds_override"`
-	ModelCooldownBackoffOverride  *bool                       `json:"model_cooldown_backoff_override"`
-	ModelCooldownModeEffective    string                      `json:"model_cooldown_mode_effective"`
-	ModelCooldownSecondsEffective int                         `json:"model_cooldown_seconds_effective"`
-	ModelCooldownBackoffEffective bool                        `json:"model_cooldown_backoff_effective"`
-	Enabled                       bool                        `json:"enabled"`
-	Locked                        bool                        `json:"locked"`
-	AllowedAPIKeyIDs              []int64                     `json:"allowed_api_key_ids"`
-	Tags                          []string                    `json:"tags"`
-	GroupIDs                      []int64                     `json:"group_ids"`
-	Note                          string                      `json:"note"`
+	UsingCredits                   bool                        `json:"using_credits,omitempty"`
+	SkipWarmTier                   bool                        `json:"skip_warm_tier"`
+	AccountType                    string                      `json:"account_type,omitempty"`
+	AccessTokenType                string                      `json:"access_token_type,omitempty"`
+	OpenAIResponsesAPI             bool                        `json:"openai_responses_api,omitempty"`
+	GrokAPI                        bool                        `json:"grok_api,omitempty"`
+	AntigravityAPI                 bool                        `json:"antigravity_api,omitempty"`
+	ClaudeAPI                      bool                        `json:"claude_api,omitempty"`
+	AntigravityAuthKind            string                      `json:"antigravity_auth_kind,omitempty"`
+	AgentIdentity                  bool                        `json:"agent_identity,omitempty"`
+	GrokAuthKind                   string                      `json:"grok_auth_kind,omitempty"`
+	GrokPlan                       *auth.GrokPlan              `json:"grok_plan,omitempty"`
+	GrokBilling                    json.RawMessage             `json:"grok_billing,omitempty"`
+	GrokRateLimit                  *auth.GrokRateLimitSnapshot `json:"grok_rate_limit,omitempty"`
+	GrokFreeQuota                  *auth.GrokFreeQuotaSnapshot `json:"grok_free_quota,omitempty"`
+	AvatarURL                      string                      `json:"avatar_url,omitempty"`
+	VerifiedEmail                  bool                        `json:"verified_email,omitempty"`
+	ProjectID                      string                      `json:"project_id,omitempty"`
+	AntigravityQuota               json.RawMessage             `json:"antigravity_quota,omitempty"`
+	AntigravityPermissions         json.RawMessage             `json:"antigravity_permissions,omitempty"`
+	AntigravitySyncWarning         string                      `json:"antigravity_sync_warning,omitempty"`
+	BaseURL                        string                      `json:"base_url,omitempty"`
+	BalanceQueryURL                string                      `json:"balance_query_url,omitempty"`
+	Models                         []string                    `json:"models,omitempty"`
+	ModelMapping                   string                      `json:"model_mapping,omitempty"`
+	CodexClientMetadataMode        string                      `json:"codex_client_metadata_mode,omitempty"`
+	CodexFingerprintMode           string                      `json:"codex_fingerprint_mode,omitempty"`
+	CodexInstallationID            string                      `json:"codex_installation_id,omitempty"`
+	ClaudeFingerprintMode          string                      `json:"claude_fingerprint_mode,omitempty"`
+	ClaudeUserAgent                string                      `json:"claude_user_agent,omitempty"`
+	ClaudeClientPlatform           string                      `json:"claude_client_platform,omitempty"`
+	ClaudeVersionPolicy            string                      `json:"claude_version_policy,omitempty"`
+	ClaudeClientVersion            string                      `json:"claude_client_version,omitempty"`
+	ClaudeClientPlatformOverride   string                      `json:"claude_client_platform_override,omitempty"`
+	ClaudeVersionPolicyOverride    string                      `json:"claude_version_policy_override,omitempty"`
+	ClaudeClientVersionOverride    string                      `json:"claude_client_version_override,omitempty"`
+	Timezone                       string                      `json:"timezone,omitempty"`
+	CustomHeaders                  map[string]string           `json:"custom_headers,omitempty"`
+	HealthTier                     string                      `json:"health_tier"`
+	SchedulerScore                 float64                     `json:"scheduler_score"`
+	DispatchScore                  float64                     `json:"dispatch_score"`
+	ScoreBiasOverride              *int64                      `json:"score_bias_override"`
+	ScoreBiasEffective             int64                       `json:"score_bias_effective"`
+	BaseConcurrencyOverride        *int64                      `json:"base_concurrency_override"`
+	BaseConcurrencyEffective       int64                       `json:"base_concurrency_effective"`
+	ConcurrencyCap                 int64                       `json:"dynamic_concurrency_limit"`
+	ProxyURL                       string                      `json:"proxy_url"`
+	CreatedAt                      string                      `json:"created_at"`
+	UpdatedAt                      string                      `json:"updated_at"`
+	CodexUsageUpdatedAt            string                      `json:"codex_usage_updated_at,omitempty"`
+	Codex5HUsageUpdatedAt          string                      `json:"codex_5h_usage_updated_at,omitempty"`
+	ClaudeUsageProbeAt             string                      `json:"claude_usage_probe_at,omitempty"`
+	ClaudeUsageProbeError          string                      `json:"claude_usage_probe_error,omitempty"`
+	ClaudeUsageWindows             []auth.ClaudeUsageWindow    `json:"claude_usage_windows,omitempty"`
+	ClaudeUsageWindowsProbed       bool                        `json:"claude_usage_windows_probed,omitempty"` // 已跑过 OAuth usage 采样(前端据此只回填从未采样的旧行)
+	ActiveRequests                 int64                       `json:"active_requests"`
+	OccupiedRequests               int64                       `json:"occupied_requests"`
+	SessionSlotBufferEnabled       bool                        `json:"session_slot_buffer_enabled"`
+	SessionCapacityEnabled         bool                        `json:"session_capacity_enabled,omitempty"`
+	SessionCapacityMax             int64                       `json:"session_capacity_max,omitempty"`
+	SessionCapacityIdleTTLSeconds  int64                       `json:"session_capacity_idle_ttl_seconds,omitempty"`
+	SessionCapacityCurrent         int64                       `json:"session_capacity_current,omitempty"`
+	SessionCapacityReserved        int64                       `json:"session_capacity_reserved,omitempty"`
+	SessionCapacityReservedCurrent int64                       `json:"session_capacity_reserved_current,omitempty"`
+	TotalRequests                  int64                       `json:"total_requests"`
+	LastUsedAt                     string                      `json:"last_used_at"`
+	SuccessRequests                int64                       `json:"success_requests"`
+	ErrorRequests                  int64                       `json:"error_requests"`
+	RetryErrorRequests             int64                       `json:"retry_error_requests"`
+	RateLimitAttempts              int64                       `json:"rate_limit_attempts"`
+	ErrorStatusCounts              map[string]int64            `json:"error_status_counts,omitempty"`
+	SuccessModelCounts             map[string]int64            `json:"success_model_counts,omitempty"`
+	UsagePercent7d                 *float64                    `json:"usage_percent_7d"`
+	UsagePercent5h                 *float64                    `json:"usage_percent_5h"`
+	UsagePercentSpark              *float64                    `json:"usage_percent_spark"`
+	RateLimitResetCredits          *int                        `json:"rate_limit_reset_credits"`
+	ApplicableResetCredits         *int                        `json:"applicable_reset_credits"`
+	CreditsBalance                 *string                     `json:"credits_balance"`
+	CreditsHasCredits              *bool                       `json:"credits_has_credits"`
+	CreditsUnlimited               *bool                       `json:"credits_unlimited"`
+	CreditsOverageLimitReached     *bool                       `json:"credits_overage_limit_reached"`
+	AutoPause5hThreshold           *float64                    `json:"auto_pause_5h_threshold"`
+	AutoPause7dThreshold           *float64                    `json:"auto_pause_7d_threshold"`
+	AutoPause5hDisabled            bool                        `json:"auto_pause_5h_disabled"`
+	AutoPause7dDisabled            bool                        `json:"auto_pause_7d_disabled"`
+	UsageLimitOverride             *bool                       `json:"ignore_usage_limit_status_override"`
+	UsageLimitEffective            bool                        `json:"ignore_usage_limit_status_effective"`
+	DispatchCountLimit             *int64                      `json:"dispatch_count_limit"`
+	DispatchCountUsed              int64                       `json:"dispatch_count_used,omitempty"`
+	DispatchCountResetAt           string                      `json:"dispatch_count_reset_at,omitempty"`
+	DispatchCountLimited           bool                        `json:"dispatch_count_limited,omitempty"`
+	SchedulerPriority              *int64                      `json:"scheduler_priority"`
+	Usage5hDetail                  *accountUsageWindow         `json:"usage_5h_detail,omitempty"`
+	Usage7dDetail                  *accountUsageWindow         `json:"usage_7d_detail,omitempty"`
+	Reset5hAt                      string                      `json:"reset_5h_at,omitempty"`
+	Reset7dAt                      string                      `json:"reset_7d_at,omitempty"`
+	ResetSparkAt                   string                      `json:"reset_spark_at,omitempty"`
+	Window7dKind                   string                      `json:"usage_window_7d_kind,omitempty"`    // "monthly"(team 月窗)/"weekly"/""；供前端标「30天」而非误标「7天」
+	Window7dSeconds                *int64                      `json:"usage_window_7d_seconds,omitempty"` // 长窗口真实周期秒数
+	Billed5h                       *float64                    `json:"billed_5h"`
+	Billed7d                       *float64                    `json:"billed_7d"`
+	ScoreBreakdown                 schedulerBreakdownResponse  `json:"scheduler_breakdown"`
+	LastUnauthorizedAt             string                      `json:"last_unauthorized_at,omitempty"`
+	LastRateLimitedAt              string                      `json:"last_rate_limited_at,omitempty"`
+	LastTimeoutAt                  string                      `json:"last_timeout_at,omitempty"`
+	LastServerErrorAt              string                      `json:"last_server_error_at,omitempty"`
+	CooldownReason                 string                      `json:"cooldown_reason,omitempty"`
+	CooldownUntil                  string                      `json:"cooldown_until,omitempty"`
+	ModelCooldowns                 []modelCooldownResponse     `json:"model_cooldowns,omitempty"`
+	ModelCooldownModeOverride      *string                     `json:"model_cooldown_mode_override"`
+	ModelCooldownSecondsOverride   *int                        `json:"model_cooldown_seconds_override"`
+	ModelCooldownBackoffOverride   *bool                       `json:"model_cooldown_backoff_override"`
+	ModelCooldownModeEffective     string                      `json:"model_cooldown_mode_effective"`
+	ModelCooldownSecondsEffective  int                         `json:"model_cooldown_seconds_effective"`
+	ModelCooldownBackoffEffective  bool                        `json:"model_cooldown_backoff_effective"`
+	Enabled                        bool                        `json:"enabled"`
+	Locked                         bool                        `json:"locked"`
+	AllowedAPIKeyIDs               []int64                     `json:"allowed_api_key_ids"`
+	Tags                           []string                    `json:"tags"`
+	GroupIDs                       []int64                     `json:"group_ids"`
+	Note                           string                      `json:"note"`
 	// 图片配额信息
 	ImageQuotaRemaining *int   `json:"image_quota_remaining,omitempty"`
 	ImageQuotaTotal     *int   `json:"image_quota_total,omitempty"`
@@ -2036,6 +2039,7 @@ type updateAccountSchedulerReq struct {
 	ClaudeFingerprintMode   json.RawMessage `json:"claude_fingerprint_mode"`
 	SessionCapacityEnabled  json.RawMessage `json:"session_capacity_enabled"`
 	SessionCapacityMax      json.RawMessage `json:"session_capacity_max"`
+	SessionCapacityReserved json.RawMessage `json:"session_capacity_reserved"`
 	SessionCapacityIdleTTL  json.RawMessage `json:"session_capacity_idle_ttl_seconds"`
 	ClaudeClientPlatform    json.RawMessage `json:"claude_client_platform"`
 	ClaudeVersionPolicy     json.RawMessage `json:"claude_version_policy"`
@@ -2063,6 +2067,7 @@ type accountSchedulerUpdate struct {
 	ClaudeFingerprintMode   database.OptionalString
 	SessionCapacityEnabled  database.OptionalBool
 	SessionCapacityMax      database.OptionalNullInt64
+	SessionCapacityReserved database.OptionalNullInt64
 	SessionCapacityIdleTTL  database.OptionalNullInt64
 	ClaudeClientPlatform    database.OptionalString
 	ClaudeVersionPolicy     database.OptionalString
@@ -2189,7 +2194,27 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	if err != nil {
 		return accountSchedulerUpdate{}, err
 	}
+	sessionCapacityReserved, err := parseOptionalIntegerField(req.SessionCapacityReserved, "session_capacity_reserved", 0, 100000)
+	if err != nil {
+		return accountSchedulerUpdate{}, err
+	}
+	if sessionCapacityReserved.Set && sessionCapacityReserved.Value.Valid && sessionCapacityMax.Set {
+		maximum := auth.DefaultSessionCapacityMax
+		if sessionCapacityMax.Value.Valid {
+			maximum = sessionCapacityMax.Value.Int64
+		}
+		if sessionCapacityReserved.Value.Int64 > maximum {
+			return accountSchedulerUpdate{}, fmt.Errorf("session_capacity_reserved cannot exceed session_capacity_max")
+		}
+	}
 	credentialUpdates := make(map[string]interface{})
+	if sessionCapacityReserved.Set {
+		reserved := int64(0)
+		if sessionCapacityReserved.Value.Valid {
+			reserved = sessionCapacityReserved.Value.Int64
+		}
+		credentialUpdates[auth.SessionCapacityReservedCredentialKey] = reserved
+	}
 	if customHeaders.Set {
 		credentialUpdates["custom_headers"] = cloneCustomHeaders(customHeaders.Values)
 	}
@@ -2289,6 +2314,7 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 		Timezone:                timezoneField,
 		SessionCapacityEnabled:  sessionCapacityEnabled,
 		SessionCapacityMax:      sessionCapacityMax,
+		SessionCapacityReserved: sessionCapacityReserved,
 		SessionCapacityIdleTTL:  sessionCapacityIdleTTL,
 		CredentialUpdates:       credentialUpdates,
 	}, nil
@@ -2370,6 +2396,7 @@ func (u accountSchedulerUpdate) hasChanges() bool {
 		u.Timezone.Set ||
 		u.SessionCapacityEnabled.Set ||
 		u.SessionCapacityMax.Set ||
+		u.SessionCapacityReserved.Set ||
 		u.SessionCapacityIdleTTL.Set
 }
 
@@ -2575,6 +2602,10 @@ func (h *Handler) UpdateAccountScheduler(c *gin.Context) {
 	}
 
 	if err := h.db.UpdateAccountSchedulerMetadata(ctx, id, update.ScoreBiasOverride, update.BaseConcurrencyOverride, update.SkipWarmTier, update.AllowedAPIKeyIDs, database.OptionalStringSlice{Set: update.Tags.Set, Values: update.Tags.Values}, update.GroupIDs, update.ProxyURL, update.CredentialUpdates); err != nil {
+		if errors.Is(err, database.ErrInvalidSessionReserve) {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
@@ -2675,10 +2706,17 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 	if update.CodexFingerprintMode.Set {
 		h.store.ApplyAccountCodexFingerprintMode(id, update.CodexFingerprintMode.Value)
 	}
-	if update.SessionCapacityEnabled.Set || update.SessionCapacityMax.Set || update.SessionCapacityIdleTTL.Set {
+	if update.SessionCapacityEnabled.Set || update.SessionCapacityMax.Set || update.SessionCapacityIdleTTL.Set || update.SessionCapacityReserved.Set {
 		account := h.store.FindByID(id)
 		if account != nil {
 			enabled, limit, idleTTL := account.SessionCapacityConfig()
+			reserved := account.SessionCapacityLimits().Reserved
+			if update.SessionCapacityReserved.Set {
+				reserved = 0
+				if update.SessionCapacityReserved.Value.Valid {
+					reserved = update.SessionCapacityReserved.Value.Int64
+				}
+			}
 			if update.SessionCapacityEnabled.Set {
 				enabled = update.SessionCapacityEnabled.Value
 			}
@@ -2696,7 +2734,7 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 					idleTTL = time.Duration(auth.DefaultSessionCapacityIdleTTLSeconds) * time.Second
 				}
 			}
-			h.store.ApplyAccountSessionCapacity(id, enabled, limit, int64(idleTTL/time.Second))
+			h.store.ApplyAccountSessionCapacity(id, enabled, limit, int64(idleTTL/time.Second), reserved)
 		}
 	}
 }
@@ -6745,6 +6783,10 @@ func (h *Handler) BatchUpdateAccounts(c *gin.Context) {
 		CredentialUpdates:       schedulerUpdate.CredentialUpdates,
 	})
 	if err != nil {
+		if errors.Is(err, database.ErrInvalidSessionReserve) {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(c, http.StatusInternalServerError, "批量更新账号失败: "+err.Error())
 		return
 	}

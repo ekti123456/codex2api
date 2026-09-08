@@ -120,6 +120,10 @@
     "sessionCapacityMaxRange": "請輸入 1–100000",
     "sessionCapacityIdleRange": "請輸入 1–43200 分鐘",
     "sessionCapacityBadge": "會話 {{current}}/{{maximum}}",
+    "sessionCapacityReservedBadge": "保留 {{current}}/{{maximum}}",
+    "sessionCapacityReservedLabel": "擴容專屬保留視窗",
+    "sessionCapacityReservedHint": "從總容量中預留，僅允許已確認加價的擴容視窗使用；0 表示不預留。",
+    "sessionCapacityReservedRange": "保留視窗須為 0 到總會話容量之間的整數",
     "sessionCapacityTooltipTitle": "目前活躍會話 {{current}}/{{maximum}}",
     "sessionCapacityAccount": "上游帳號",
     "sessionCapacitySessionId": "會話 ID",
@@ -1252,6 +1256,22 @@
     }
   },
   "usage": {
+    "diagnostics": {
+      "column": "請求類型",
+      "title": "請求診斷",
+      "open": "查看請求類型、根會話與帳號選擇依據",
+      "missing": "未提供 / 未記錄",
+      "unavailable": "此日誌沒有診斷快照，不依歷史結果推測請求類型。",
+      "hint": "記錄實際決策時的快照。欄位缺失不代表已豁免；指紋不代表官方用戶端身分。UUID 保留，其他自訂身分以 hash: 摘要顯示。候選排除原因屬於本輪選號過程，不一定全部針對最終帳號。時間欄位為 UTC。",
+      "changed": "分類發生變化：身分解析、內容審核或調度階段的被動判定不一致，請核對各階段快照。",
+      "truncated": "診斷達到大小或巢狀上限，已省略部分入口欄位，保留決策資訊。",
+      "copy": "複製脫敏診斷",
+      "copied": "已複製脫敏診斷",
+      "copyFailed": "複製失敗，請手動選取診斷內容",
+      "retry": "重新載入",
+      "types": { "user": "使用者主請求", "related_internal": "關聯被動", "independent_internal": "獨立背景", "related_unclassified": "關聯請求（未判被動）", "compaction": "壓縮請求", "gateway_internal": "閘道內部", "unknown": "未識別", "not_recorded": "未記錄" },
+      "sections": { "request": "請求資訊", "resolved": "實際解析結果", "audit": "內容審核階段", "dispatch": "模型調度階段", "windows": "視窗處理結果", "routing": "帳號選擇結果", "recent": "無根最近帳號回溯", "incoming": "入口欄位（按來源區分）" }
+    },
     "searchLogs": "搜尋錯誤、模型、端點、帳號、NewAPI 使用者、IP、用戶端 UA 或 API Key…",
     "tableCached": "快取",
     "cacheReadTooltip": "讀取快取：{{tokens}}",

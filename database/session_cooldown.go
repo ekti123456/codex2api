@@ -15,12 +15,30 @@ type SessionCooldownRoot struct {
 }
 
 type SessionCooldownState struct {
-	Roots map[string]*SessionCooldownRoot `json:"roots"`
+	AverageSeconds float64                         `json:"average_seconds,omitempty"`
+	Samples        int                             `json:"samples,omitempty"`
+	EvaluatedAt    time.Time                       `json:"evaluated_at,omitempty"`
+	Roots          map[string]*SessionCooldownRoot `json:"roots"`
+}
+
+func (db *DB) ReadSessionCooldown(ctx context.Context, subject string) (SessionCooldownState, error) {
+	var raw string
+	state := SessionCooldownState{Roots: make(map[string]*SessionCooldownRoot)}
+	err := db.conn.QueryRowContext(ctx, `SELECT state FROM prompt_session_cooldowns WHERE subject=$1`, subject).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	err = json.Unmarshal([]byte(raw), &state)
+	return state, err
 }
 
 func (db *DB) ensureSessionCooldownTables(ctx context.Context) error {
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS prompt_session_cooldowns (subject VARCHAR(255) PRIMARY KEY, state TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS prompt_user_window_grants (subject VARCHAR(255) PRIMARY KEY, state TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS account_session_usage_successes (
 			account_id BIGINT NOT NULL, period_id VARCHAR(64) NOT NULL,
 			eligible_after_ms BIGINT NOT NULL, PRIMARY KEY(account_id, period_id))`,

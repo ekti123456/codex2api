@@ -1398,6 +1398,10 @@
     "sessionCapacityMaxLabel": "最大活跃会话数",
     "sessionCapacityIdleLabel": "空闲释放时间（分钟）",
     "sessionCapacityBadge": "会话 {{current}}/{{maximum}}",
+    "sessionCapacityReservedBadge": "保留 {{current}}/{{maximum}}",
+    "sessionCapacityReservedLabel": "扩容专属保留窗口",
+    "sessionCapacityReservedHint": "从总容量中预留，仅允许已确认加价的扩容窗口使用；0 表示不预留。",
+    "sessionCapacityReservedRange": "保留窗口须为 0 到总会话容量之间的整数",
     "sessionCapacityTooltipTitle": "当前活跃会话 {{current}}/{{maximum}}",
     "sessionCapacityAccount": "上游账号",
     "sessionCapacitySessionId": "会话 ID",
@@ -2106,6 +2110,22 @@
     "reason7dUrgency": "7d 快重置"
   },
   "usage": {
+    "diagnostics": {
+      "column": "请求类型",
+      "title": "请求诊断",
+      "open": "查看请求类型、根会话和选号依据",
+      "missing": "未提供 / 未记录",
+      "unavailable": "该日志没有诊断快照，不根据历史结果推测请求类型。",
+      "hint": "记录实际决策时的快照。字段缺失不代表已豁免；指纹不代表官方客户端身份。UUID 保留，其他自定义身份以 hash: 摘要显示。候选排除原因属于本轮选号过程，不一定全部针对最终账号。时间字段为 UTC。",
+      "changed": "分类发生变化：身份解析、内容审核或调度阶段的被动判定不一致，请核对各阶段快照。",
+      "truncated": "诊断达到大小或嵌套上限，已省略部分入口字段，保留决策信息。",
+      "copy": "复制脱敏诊断",
+      "copied": "已复制脱敏诊断",
+      "copyFailed": "复制失败，请手动选择诊断内容",
+      "retry": "重新加载",
+      "types": { "user": "用户主请求", "related_internal": "关联被动", "independent_internal": "独立后台", "related_unclassified": "关联请求（未判被动）", "compaction": "压缩请求", "gateway_internal": "网关内部", "unknown": "未识别", "not_recorded": "未记录" },
+      "sections": { "request": "请求信息", "resolved": "实际解析结果", "audit": "内容审核阶段", "dispatch": "模型调度阶段", "windows": "窗口处理结果", "routing": "账号选择结果", "recent": "无根最近账号回溯", "incoming": "入口字段（按来源分开）" }
+    },
     "title": "使用统计",
     "description": "请求日志与性能指标",
     "loadingTitle": "正在加载使用统计",

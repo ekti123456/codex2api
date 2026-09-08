@@ -14,10 +14,12 @@ import (
 )
 
 type accountLiveItem struct {
-	ActiveRequests         int64 `json:"active_requests"`
-	OccupiedRequests       int64 `json:"occupied_requests"`
-	SessionCapacityCurrent int64 `json:"session_capacity_current"`
-	SessionCapacityMax     int64 `json:"session_capacity_max"`
+	ActiveRequests                 int64 `json:"active_requests"`
+	OccupiedRequests               int64 `json:"occupied_requests"`
+	SessionCapacityCurrent         int64 `json:"session_capacity_current"`
+	SessionCapacityMax             int64 `json:"session_capacity_max"`
+	SessionCapacityReserved        int64 `json:"session_capacity_reserved"`
+	SessionCapacityReservedCurrent int64 `json:"session_capacity_reserved_current"`
 }
 
 type accountSessionResponse struct {
@@ -98,14 +100,17 @@ func (h *Handler) GetAccountLiveState(c *gin.Context) {
 		}
 		capacityEnabled, capacityMax, _ := account.SessionCapacityConfig()
 		capacityCurrent := int64(0)
+		reservedCurrent := int64(0)
 		if capacityEnabled {
-			capacityCurrent = h.store.AccountSessionCount(id, now)
+			capacityCurrent, reservedCurrent = h.store.AccountSessionSlotCounts(id, now)
 		}
 		live[id] = accountLiveItem{
-			ActiveRequests:         account.GetActiveRequests(),
-			OccupiedRequests:       account.GetOccupiedRequests(),
-			SessionCapacityCurrent: capacityCurrent,
-			SessionCapacityMax:     capacityMax,
+			ActiveRequests:                 account.GetActiveRequests(),
+			OccupiedRequests:               account.GetOccupiedRequests(),
+			SessionCapacityCurrent:         capacityCurrent,
+			SessionCapacityMax:             capacityMax,
+			SessionCapacityReserved:        account.SessionCapacityLimits().Reserved,
+			SessionCapacityReservedCurrent: reservedCurrent,
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{

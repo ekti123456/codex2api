@@ -345,6 +345,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		return newResponsesWSCloseError(websocket.ClosePolicyViolation, apiErr.Message, apiErr)
 	}
 	h.bindCodexEnvironment(c, rawBody, time.Now())
+	captureUsageRequestIngress(c, rawBody)
 	if h != nil && h.store != nil {
 		cfg := h.promptFilterConfigForRequest(c)
 		if cfg.Advanced.NewAPI.Enabled && strings.TrimSpace(c.GetHeader("X-NewAPI-Signature")) != "" {
@@ -426,9 +427,11 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	apiKeyID := requestAPIKeyID(c)
 	affinityKey := capacityAwareSessionAffinityKey(sessionIdentity, apiKeyID)
 	priorSessionAccountID, _ := h.store.AccountSessionAccountID(affinityKey, time.Now())
+	recordUsageRootAccount(c, priorSessionAccountID, priorSessionAccountID > 0)
 	hasPreviousResponse := strings.TrimSpace(gjson.GetBytes(rawBody, "previous_response_id").String()) != ""
 	turnContinuation := codexWSTurnContinuationToken(rawBody) != ""
-	_, turnHasBinding := h.store.SessionAffinityAccountID(affinityKey)
+	boundAccountID, turnHasBinding := h.store.SessionAffinityAccountID(affinityKey)
+	recordUsageRootAccount(c, boundAccountID, turnHasBinding)
 	respCacheOwner := responseCacheOwner(apiKeyID)
 	var previousResponseAffinity responseAccountAffinity
 	var previousResponseAffinityFound bool
@@ -600,6 +603,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	var affinityGuard auth.SessionAffinityGuard
 	for attempt := 0; ; attempt++ {
 		selectionTraceForRequest(c).Reset()
+		beginUsageSelectionAttempt(c, attempt+1)
 		if c.Request.Context().Err() != nil {
 			return errResponsesWSClientGone
 		}
@@ -1714,6 +1718,10 @@ func (h *Handler) inspectPromptFilterOpenAIForWebSocket(c *gin.Context, conn *we
 		return false, false
 	}
 	cfg := h.promptFilterConfigForRequest(c)
+	if apiErr := h.requestWindowGrantError(c); apiErr != nil {
+		_ = writeResponsesWSError(conn, apiErr)
+		return true, false
+	}
 	if apiErr := h.promptManualWindowLockError(c, cfg, rawBody, nil); apiErr != nil {
 		_ = writeResponsesWSError(conn, apiErr)
 		return true, false
@@ -1738,6 +1746,7 @@ func (h *Handler) inspectPromptFilterOpenAIForWebSocket(c *gin.Context, conn *we
 		_ = writeResponsesWSError(conn, promptCyberRestrictionAPIError(restriction, nil))
 		return true, false
 	}
+	h.recordUsageAuthorization(c, "audit")
 	if passiveInternalRequestAuthorized(c) {
 		return false, false
 	}

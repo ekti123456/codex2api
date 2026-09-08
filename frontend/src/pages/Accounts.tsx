@@ -84,6 +84,7 @@ import {
   isLargePoolSortDisabled,
   resolveDisabledAccountSorts,
 } from "../lib/accountListSort";
+import { updateAccountBillingWindowBoundaries, type AccountBillingWindowBoundaries } from "../lib/accountBillingWindowRefresh";
 import {
   formatLongUsageWindowLabel,
   getAccountStatusBadgeStatus,
@@ -323,6 +324,8 @@ function AccountSessionCapacityBadge({ account }: { account: AccountRow }) {
   const sessionLoadPending = useRef(false);
   const current = Math.max(0, account.session_capacity_current ?? 0);
   const maximum = Math.max(1, account.session_capacity_max ?? 5);
+  const reserved = Math.max(0, Math.min(maximum, account.session_capacity_reserved ?? 0));
+  const reservedCurrent = Math.max(0, account.session_capacity_reserved_current ?? 0);
   const load = useCallback((showLoading = true) => {
     if (sessionLoadPending.current) return;
     sessionLoadPending.current = true;
@@ -363,7 +366,16 @@ function AccountSessionCapacityBadge({ account }: { account: AccountRow }) {
         className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-violet-700 ring-1 ring-inset ring-violet-500/20 transition-colors hover:bg-violet-100 dark:bg-violet-950 dark:text-violet-300 dark:ring-violet-400/20 dark:hover:bg-violet-900"
       >
         <Layers className="size-3" />
-        {t("accounts.sessionCapacityBadge", { current, maximum })}
+        {t("accounts.sessionCapacityBadge", {
+          current: Math.max(0, current - reservedCurrent),
+          maximum: maximum - reserved,
+        })}
+        {(reserved > 0 || reservedCurrent > 0) && (
+          <span>· {t("accounts.sessionCapacityReservedBadge", {
+            current: reservedCurrent,
+            maximum: reserved,
+          })}</span>
+        )}
       </button>
       <Modal
         show={open}
@@ -2040,6 +2052,7 @@ export default function Accounts() {
     useState<CodexFingerprintMode>("off");
   const [editSessionCapacityEnabled, setEditSessionCapacityEnabled] = useState(false);
   const [editSessionCapacityMax, setEditSessionCapacityMax] = useState("5");
+  const [editSessionCapacityReserved, setEditSessionCapacityReserved] = useState("0");
   const [editSessionCapacityIdleMinutes, setEditSessionCapacityIdleMinutes] = useState("60");
   // 代理池条目：账号表单里"从代理池选择"下拉的数据源。加载失败静默留空
   // （选择器为空时自动隐藏，不影响手动填代理）。
@@ -2310,6 +2323,7 @@ export default function Accounts() {
     useState(false);
   const [batchSessionCapacityMaxInput, setBatchSessionCapacityMaxInput] =
     useState("5");
+  const [batchSessionCapacityReservedInput, setBatchSessionCapacityReservedInput] = useState("0");
   const [
     batchSessionCapacityIdleMinutesInput,
     setBatchSessionCapacityIdleMinutesInput,
@@ -2992,6 +3006,12 @@ export default function Accounts() {
   // 用量弹窗里手动刷新官方统计后 bump 一次,强制重拉本页 stats——
   // 否则官方成本胶囊要等翻页/改筛选才出现,看起来像刷新没生效。
   const [pageStatsReloadToken, setPageStatsReloadToken] = useState(0);
+  const billingWindowBoundariesRef = useRef<AccountBillingWindowBoundaries>(new Map());
+  useEffect(() => {
+    const result = updateAccountBillingWindowBoundaries(data.accounts, billingWindowBoundariesRef.current);
+    billingWindowBoundariesRef.current = result.boundaries;
+    if (result.changed) setPageStatsReloadToken((token) => token + 1);
+  }, [data.accounts]);
   const handleOfficialUsageRefreshed = useCallback(
     (patch?: { accountId: number; officialUsd: number | null }) => {
       if (patch) {
@@ -5100,6 +5120,7 @@ export default function Accounts() {
     try {
       await api.resetCredits(account.id);
       showToast(t("accounts.resetCreditsSuccess"));
+      setPageStatsReloadToken((token) => token + 1);
       void reload();
     } catch (error) {
       showToast(getErrorMessage(error), "error");
@@ -5149,6 +5170,7 @@ export default function Accounts() {
     setBatchUpdateSessionCapacity(false);
     setBatchSessionCapacityEnabled(false);
     setBatchSessionCapacityMaxInput("5");
+    setBatchSessionCapacityReservedInput("0");
     setBatchSessionCapacityIdleMinutesInput("60");
     setShowBatchMetaEditor(true);
   };
@@ -5172,6 +5194,7 @@ export default function Accounts() {
     setBatchUpdateSessionCapacity(false);
     setBatchSessionCapacityEnabled(false);
     setBatchSessionCapacityMaxInput("5");
+    setBatchSessionCapacityReservedInput("0");
     setBatchSessionCapacityIdleMinutesInput("60");
     setShowBatchMetaEditor(true);
   };
@@ -5524,6 +5547,9 @@ export default function Accounts() {
   const batchSessionCapacityIdleMinutesValue = parseIntegerInput(
     batchSessionCapacityIdleMinutesInput.trim(),
   );
+  const batchSessionCapacityReservedValue = parseIntegerInput(batchSessionCapacityReservedInput.trim());
+  const batchSessionCapacityReservedInvalid = batchUpdateSessionCapacity && batchSessionCapacityEnabled &&
+    (batchSessionCapacityReservedValue === null || batchSessionCapacityReservedValue < 0 || batchSessionCapacityReservedValue > (batchSessionCapacityMaxValue ?? 5));
   const batchSessionCapacityMaxInvalid =
     batchUpdateSessionCapacity &&
     batchSessionCapacityEnabled &&
@@ -5550,6 +5576,7 @@ export default function Accounts() {
     batchBaseConcurrencyInvalid ||
     batchSchedulerPriorityInvalid ||
     batchSessionCapacityMaxInvalid ||
+    batchSessionCapacityReservedInvalid ||
     batchSessionCapacityIdleInvalid;
 
   const handleBatchSaveMeta = async () => {
@@ -5583,6 +5610,7 @@ export default function Accounts() {
           updateSessionCapacity: batchUpdateSessionCapacity,
           sessionCapacityEnabled: batchSessionCapacityEnabled,
           sessionCapacityMax: batchSessionCapacityMaxValue ?? 5,
+          sessionCapacityReserved: batchSessionCapacityReservedValue ?? 0,
           sessionCapacityIdleTTLSeconds:
             (batchSessionCapacityIdleMinutesValue ?? 60) * 60,
         }),
@@ -5833,6 +5861,7 @@ export default function Accounts() {
     setEditCodexFingerprintMode(account.codex_fingerprint_mode ?? "off");
     setEditSessionCapacityEnabled(account.session_capacity_enabled ?? false);
     setEditSessionCapacityMax(String(account.session_capacity_max ?? 5));
+    setEditSessionCapacityReserved(String(account.session_capacity_reserved ?? 0));
     setEditSessionCapacityIdleMinutes(String(Math.max(1, Math.round((account.session_capacity_idle_ttl_seconds ?? 3600) / 60))));
     setEditTags(account.tags ?? []);
     setEditGroupIds(account.group_ids ?? []);
@@ -6001,6 +6030,11 @@ export default function Accounts() {
   const handleSaveScheduler = async () => {
     if (!editingAccount) return;
     const parsedSessionCapacityMax = Number.parseInt(editSessionCapacityMax, 10);
+    const parsedSessionCapacityReserved = Number(editSessionCapacityReserved);
+    if (!Number.isInteger(parsedSessionCapacityReserved) || parsedSessionCapacityReserved < 0 || parsedSessionCapacityReserved > parsedSessionCapacityMax) {
+      showToast(t("accounts.sessionCapacityReservedRange"), "error");
+      return;
+    }
     const parsedSessionCapacityIdleMinutes = Number.parseInt(editSessionCapacityIdleMinutes, 10);
     if (
       scoreInputInvalid ||
@@ -6055,6 +6089,7 @@ export default function Accounts() {
           ? {
               codex_fingerprint_mode: editCodexFingerprintMode,
               session_capacity_enabled: editSessionCapacityEnabled,
+              session_capacity_reserved: parsedSessionCapacityReserved,
               session_capacity_max: Number.isFinite(parsedSessionCapacityMax) ? parsedSessionCapacityMax : 5,
               session_capacity_idle_ttl_seconds: (Number.isFinite(parsedSessionCapacityIdleMinutes) ? parsedSessionCapacityIdleMinutes : 60) * 60,
             }
@@ -10038,6 +10073,12 @@ export default function Accounts() {
                                 />
                               </label>
                               <label className="space-y-1.5 text-xs text-muted-foreground">
+                                <span>{t("accounts.sessionCapacityReservedLabel")}</span>
+                                <Input type="number" min={0} max={Number(editSessionCapacityMax) || 5} disabled={!editSessionCapacityEnabled}
+                                  value={editSessionCapacityReserved} onChange={(event) => setEditSessionCapacityReserved(event.target.value)} />
+                                <span className="block">{t("accounts.sessionCapacityReservedHint")}</span>
+                              </label>
+                              <label className="space-y-1.5 text-xs text-muted-foreground">
                                 <span>{t("accounts.sessionCapacityIdleLabel")}</span>
                                 <Input
                                   type="number"
@@ -10851,6 +10892,15 @@ export default function Accounts() {
                               {t("accounts.sessionCapacityMaxRange")}
                             </span>
                           ) : null}
+                        </label>
+                        <label className="space-y-1.5 text-xs text-muted-foreground">
+                          <span>{t("accounts.sessionCapacityReservedLabel")}</span>
+                          <Input inputMode="numeric" value={batchSessionCapacityReservedInput}
+                            onChange={(event) => setBatchSessionCapacityReservedInput(event.target.value)}
+                            disabled={!batchUpdateSessionCapacity || !batchSessionCapacityEnabled} />
+                          <span className={batchSessionCapacityReservedInvalid ? "block text-red-500" : "block"}>
+                            {t(batchSessionCapacityReservedInvalid ? "accounts.sessionCapacityReservedRange" : "accounts.sessionCapacityReservedHint")}
+                          </span>
                         </label>
                         <label className="space-y-1.5 text-xs text-muted-foreground">
                           <span>{t("accounts.sessionCapacityIdleLabel")}</span>

@@ -105,6 +105,7 @@ func (h *Handler) capturePromptRequestIngress(c *gin.Context, body []byte) {
 		return
 	}
 	ensurePromptPolicyRequestCorrelationID(c)
+	captureUsageRequestIngress(c, body)
 	if h == nil || h.store == nil {
 		return
 	}

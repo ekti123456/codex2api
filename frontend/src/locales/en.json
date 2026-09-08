@@ -1398,6 +1398,10 @@
     "sessionCapacityMaxLabel": "Maximum active sessions",
     "sessionCapacityIdleLabel": "Idle release time (minutes)",
     "sessionCapacityBadge": "Sessions {{current}}/{{maximum}}",
+    "sessionCapacityReservedBadge": "Reserved {{current}}/{{maximum}}",
+    "sessionCapacityReservedLabel": "Expansion-only reserved slots",
+    "sessionCapacityReservedHint": "Reserve part of the total capacity for verified surcharged windows. Zero disables reservation.",
+    "sessionCapacityReservedRange": "Reserved slots must be an integer between zero and total session capacity",
     "sessionCapacityTooltipTitle": "Active sessions {{current}}/{{maximum}}",
     "sessionCapacityAccount": "Upstream account",
     "sessionCapacitySessionId": "Session ID",
@@ -2106,6 +2110,22 @@
     "reason7dUrgency": "7d Reset Soon"
   },
   "usage": {
+    "diagnostics": {
+      "column": "Request type",
+      "title": "Request diagnostics",
+      "open": "Inspect request classification, root identity and account selection",
+      "missing": "Not provided / not recorded",
+      "unavailable": "No diagnostic snapshot exists for this log. Historical request types are not inferred.",
+      "hint": "Snapshots reflect actual decision points. Missing fields do not imply an exemption; fingerprints do not authenticate an official client. UUIDs are preserved; other custom identities appear as hash: digests. Candidate rejection reasons cover the selection attempt, not necessarily the final account. Timestamps are UTC.",
+      "changed": "Classification changed between identity resolution, content inspection or dispatch. Compare the snapshots.",
+      "truncated": "The snapshot reached its size or nesting limit. Some ingress fields were omitted; decision information was preserved.",
+      "copy": "Copy redacted diagnostics",
+      "copied": "Redacted diagnostics copied",
+      "copyFailed": "Copy failed. Select the diagnostic text manually.",
+      "retry": "Reload",
+      "types": { "user": "User request", "related_internal": "Related internal", "independent_internal": "Independent background", "related_unclassified": "Related (not classified internal)", "compaction": "Compaction", "gateway_internal": "Gateway internal", "unknown": "Unrecognized", "not_recorded": "Not recorded" },
+      "sections": { "request": "Request", "resolved": "Resolved identity", "audit": "Content inspection", "dispatch": "Model dispatch", "windows": "Window decisions", "routing": "Account selection", "recent": "Unlinked recent-account fallback", "incoming": "Ingress fields by source" }
+    },
     "title": "Usage Statistics",
     "description": "Request logs and performance metrics",
     "loadingTitle": "Loading Usage Statistics",

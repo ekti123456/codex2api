@@ -153,6 +153,7 @@ type promptSessionCreationLimitStatus struct {
 	// response.create frame describe different conversations. It is not a
 	// capacity exhaustion and must be surfaced with its own error code.
 	IdentityConflict bool
+	AdmissionError   string
 }
 
 func promptSessionWindowRequestDetail(c *gin.Context, body []byte, account *auth.Account, cfg promptfilter.Config) cache.PromptSessionWindowDetail {
@@ -210,9 +211,15 @@ func (h *Handler) checkPromptSessionCreationLimitForSelectedAccountAdmission(c *
 	}
 	enabled, _, _ := account.SessionCapacityConfig()
 	if !enabled {
+		if grant := windowGrantForRequest(c); grant != nil && grant.Grant.Expanded {
+			return promptSessionCreationLimitStatus{AdmissionError: "扩容窗口需要支持窗口容量的账号，请联系管理员"}, true
+		}
+		setUsageUserWindow(c, "account_windows_disabled")
+		recordUsageAccountWindow(c, account, affinityKey, priorSessionAccountID, false)
 		return promptSessionCreationLimitStatus{}, false
 	}
 	status, exceeded := h.checkPromptSessionCreationLimitWithAccountAdmission(c, h.promptFilterConfigForRequest(c), body, account, affinityKey, priorSessionAccountID)
+	recordUsageAccountWindow(c, account, affinityKey, priorSessionAccountID, exceeded)
 	if !exceeded && c != nil && status.Subject != "" && status.SessionHash != "" {
 		h.promptSessionLimitMu.Lock()
 		expiresAt := h.promptSessionLimits[status.Subject][status.SessionHash]
@@ -276,7 +283,8 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 			}
 		}
 	}
-	if (!status.Enabled || status.Limit <= 0 || status.WindowSeconds <= 0) && !cooldownEnabled {
+	if (!status.Enabled || status.Limit <= 0 || status.WindowSeconds <= 0) && !cooldownEnabled && windowGrantForRequest(c) == nil {
+		setUsageUserWindow(c, "disabled")
 		return status, false
 	}
 	if status.WindowSeconds <= 0 {
@@ -285,17 +293,21 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 
 	rootIdentity := h.resolveRequestRootSessionIdentityForContext(c, body)
 	if h.verifiedNewAPISessionAccountingBypass(c) {
+		setUsageUserWindow(c, "passive_exempt")
 		setLocalSessionAccountingBypass(c, true)
 		return status, false
 	}
 	if requestSessionAccountingBypass(c) {
+		setUsageUserWindow(c, "passive_exempt")
 		return status, false
 	}
 	if classifyLocalCodexIndependentSessionAccounting(c, rootIdentity) {
+		setUsageUserWindow(c, "passive_exempt")
 		setLocalSessionAccountingBypass(c, true)
 		return status, false
 	}
 	if rootIdentity.authoritative && rootIdentity.conflict {
+		setUsageUserWindow(c, "identity_conflict")
 		status.IdentityConflict = true
 		return status, true
 	}
@@ -331,11 +343,21 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 	// Strong enforcement requires both a stable conversation identity and a
 	// stable authenticated subject. Content/IP fallbacks deliberately do not count.
 	if sessionID == "" || status.Subject == "" {
+		setUsageUserWindow(c, "identity_missing")
 		return status, false
 	}
 	status.SessionHash = hashRiskIdentity(sessionID)
+	grant := windowGrantForRequest(c)
+	if grant != nil && grant.Grant.Root != status.SessionHash {
+		status.IdentityConflict = true
+		return status, true
+	}
+	usageRequestDiagnosticState(c).UserWindowKeyHash = status.SessionHash
 	now := time.Now()
 	expiresAt := now.Add(time.Duration(status.WindowSeconds) * time.Second)
+	if grant != nil {
+		expiresAt = grant.Grant.ExpiresAt
+	}
 	requestDetail := cache.PromptSessionWindowDetail{}
 	if !reuseOnlyRequest {
 		requestDetail = promptSessionWindowRequestDetail(c, body, account, cfg)
@@ -388,6 +410,7 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 	}
 	status.NextRecoveryAt = earliestExpiry
 	if _, exists := sessions[status.SessionHash]; exists {
+		setUsageUserWindow(c, "reused")
 		status.Existing = true
 		status.Used = len(sessions)
 		if cooldownEnabled && !reuseOnlyRequest {
@@ -424,6 +447,7 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 	}
 	if reuseOnlyRequest {
 		status.Used = len(sessions)
+		setUsageUserWindow(c, "related_no_new_window")
 		if len(sessions) == 0 {
 			delete(h.promptSessionLimits, status.Subject)
 		}
@@ -434,17 +458,30 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 		writePromptSessionLimitHeaders(c, status)
 		return status, false
 	}
-	quotaExceeded := status.Enabled && len(sessions) >= status.Limit
+	ordinary, expanded := 0, 0
+	for key := range sessions {
+		if h.promptSessionWindowDetails[status.Subject][key].Expanded {
+			expanded++
+		} else {
+			ordinary++
+		}
+	}
+	quotaExceeded := status.Enabled && ordinary >= status.Limit
+	if grant != nil && grant.Grant.Expanded {
+		quotaExceeded = expanded >= grant.Grant.ExtraLimit
+	}
 	if cooldownEnabled && priorSessionAccountID > 0 && h.store != nil {
 		status.WindowCreatedAt = h.store.AccountSessionUsagePeriod(priorSessionAccountID, affinityKey, now).StartedAt
 	}
 	if cooldownEnabled && h.reserveSessionCooldown(c, policyContext, cooldown, &status, priorSessionAccountID > 0, quotaExceeded, expiresAt, now) {
+		setUsageUserWindow(c, "cooldown_rejected")
 		status.Used = len(sessions)
 		h.promptSessionLimitMu.Unlock()
 		writePromptSessionLimitHeaders(c, status)
 		return status, true
 	}
 	if quotaExceeded {
+		setUsageUserWindow(c, "limit_rejected")
 		status.Used = len(sessions)
 		status.RetryAfter = int((earliestExpiry.Sub(now) + time.Second - 1) / time.Second)
 		if status.RetryAfter < 1 {
@@ -457,11 +494,29 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 	// Store each session's own expiry instead of its creation time. Different
 	// users may have different window durations, so a later request must never
 	// clean another user's sessions using the later request's TTL.
+	if grant != nil {
+		if !c.GetBool("window_grant_confirmed") {
+			h.promptSessionLimitMu.Unlock()
+			if err := h.confirmRequestWindowGrant(c); err != nil {
+				status.AdmissionError = "窗口授权已失效，请重试"
+				return status, true
+			}
+			c.Set("window_grant_confirmed", true)
+			return h.checkPromptSessionCreationLimitWithAccountAdmission(c, cfg, body, account, affinityKey, priorSessionAccountID)
+		}
+		requestDetail.GrantID = grant.Grant.ID
+		requestDetail.Expanded = grant.Grant.Expanded
+		requestDetail.Multiplier = grant.Grant.Multiplier
+	}
 	sessions[status.SessionHash] = expiresAt
 	if status.NextRecoveryAt.IsZero() || expiresAt.Before(status.NextRecoveryAt) {
 		status.NextRecoveryAt = expiresAt
 	}
 	requestDetail.CreatedAt = now
+	if receipt := cooldownReceipt(c); receipt != nil {
+		requestDetail.CreatedAt = time.UnixMilli(receipt.CreatedAt)
+	}
+	setUsageUserWindow(c, "created")
 	requestDetail.ExpiresAt = expiresAt
 	details := h.promptSessionWindowDetails[status.Subject]
 	if details == nil {
@@ -504,6 +559,9 @@ func sendPromptSessionCreationLimitError(c *gin.Context, status promptSessionCre
 }
 
 func promptSessionCreationLimitMessage(status promptSessionCreationLimitStatus) string {
+	if status.AdmissionError != "" {
+		return status.AdmissionError
+	}
 	if status.IdentityConflict {
 		return "会话标识发生冲突，请新建连接后重试"
 	}
@@ -519,6 +577,9 @@ func promptSessionCreationLimitMessage(status promptSessionCreationLimitStatus) 
 
 func promptSessionCreationLimitAPIError(status promptSessionCreationLimitStatus) *api.APIError {
 	code := api.ErrorCode("session_creation_limit_exceeded")
+	if status.AdmissionError != "" {
+		code = api.ErrorCode("window_expansion_invalid")
+	}
 	if status.IdentityConflict {
 		code = api.ErrorCode("session_identity_conflict")
 	}

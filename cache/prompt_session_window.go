@@ -15,6 +15,9 @@ const PromptSessionLimitRuntimeNamespace = "prompt-session-limit-v1"
 // The authoritative expiry remains in PromptSessionLimitState.Sessions for
 // backward compatibility with the original v1 payload.
 type PromptSessionWindowDetail struct {
+	GrantID         string    `json:"grant_id,omitempty"`
+	Expanded        bool      `json:"expanded,omitempty"`
+	Multiplier      float64   `json:"multiplier,omitempty"`
 	CreatedAt       time.Time `json:"created_at,omitempty"`
 	ExpiresAt       time.Time `json:"expires_at,omitempty"`
 	AccountID       int64     `json:"account_id,omitempty"`

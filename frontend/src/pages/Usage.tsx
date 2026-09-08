@@ -9,6 +9,7 @@ import Pagination from '../components/Pagination'
 import ChannelFilter, { useUsageChannel } from '../components/ChannelFilter'
 import ChannelLogo from '../components/ChannelLogo'
 import CompactionBadges from '../components/CompactionBadges'
+import UsageRequestDiagnostics, { UsageRequestTypeButton } from '../components/UsageRequestDiagnostics'
 import ModelLogo from '../components/ModelLogo'
 import Modal from '../components/Modal'
 import StateShell from '../components/StateShell'
@@ -1453,11 +1454,12 @@ function EmptyPanel({ accent, icon, text }: { accent: PanelAccentKey; icon: Reac
   )
 }
 
-type UsageTableColumn = 'status' | 'error' | 'model' | 'account' | 'apiKey' | 'newapiUser' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
+type UsageTableColumn = 'requestType' | 'status' | 'error' | 'model' | 'account' | 'apiKey' | 'newapiUser' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
 
 const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string }> = [
   { key: 'status', labelKey: 'usage.tableStatus' },
   { key: 'model', labelKey: 'usage.tableModel' },
+  { key: 'requestType', labelKey: 'usage.diagnostics.column' },
   { key: 'account', labelKey: 'usage.tableAccount' },
   { key: 'apiKey', labelKey: 'usage.tableApiKey' },
   { key: 'newapiUser', labelKey: 'usage.tableNewAPIUser' },
@@ -1478,6 +1480,7 @@ const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string 
 
 const USAGE_VISIBLE_COLUMNS_KEY = 'codex2api:usage:visible-columns'
 const DEFAULT_USAGE_VISIBLE_COLUMNS: Record<UsageTableColumn, boolean> = {
+  requestType: true,
   status: true,
   error: true,
   model: true,
@@ -1763,6 +1766,7 @@ export default function Usage() {
   const [showCustomPopover, setShowCustomPopover] = useState(false)
   const customChipRef = useRef<HTMLButtonElement>(null)
   const [logs, setLogs] = useState<UsageLog[]>([])
+  const [diagnosticsLog, setDiagnosticsLog] = useState<UsageLog | null>(null)
   const [logsTotal, setLogsTotal] = useState(0)
   const [logsLoading, setLogsLoading] = useState(false)
   const [errorSummary, setErrorSummary] = useState<OpsErrorSummary | null>(null)
@@ -2625,6 +2629,7 @@ export default function Usage() {
                             hasCompactionHistory={log.has_compaction_history}
                           />
                           <InternalRequestBadge log={log} />
+                          {visibleColumns.requestType && <UsageRequestTypeButton log={log} onClick={() => setDiagnosticsLog(log)} />}
                         </div>
                         {visibleColumns.time && (
                           <div className="shrink-0 whitespace-nowrap text-right text-[11px] tabular-nums text-muted-foreground">
@@ -2751,6 +2756,7 @@ export default function Usage() {
                     <TableRow>
                       {visibleColumns.status && <TableHead className={usageTableHeadClass}>{t('usage.tableStatus')}</TableHead>}
                       {visibleColumns.model && <TableHead className={usageTableHeadClass}>{t('usage.tableModel')}</TableHead>}
+                      {visibleColumns.requestType && <TableHead className={usageTableHeadClass}>{t('usage.diagnostics.column')}</TableHead>}
                       {visibleColumns.account && <TableHead className={usageTableHeadClass}>{t('usage.tableAccount')}</TableHead>}
                       {visibleColumns.apiKey && <TableHead className={usageTableHeadClass}>{t('usage.tableApiKey')}</TableHead>}
                       {visibleColumns.newapiUser && <TableHead className={usageTableHeadClass}>{t('usage.tableNewAPIUser')}</TableHead>}
@@ -2848,6 +2854,7 @@ export default function Usage() {
                             )}
                           </div>
                         </TableCell>}
+                        {visibleColumns.requestType && <TableCell><UsageRequestTypeButton log={log} onClick={() => setDiagnosticsLog(log)} /></TableCell>}
                         {visibleColumns.account && <TableCell className={`${usageTableTextClass} text-muted-foreground`}>
                           <span className="block max-w-[180px] truncate whitespace-nowrap" title={formatUsageAccountTitle(log)}>
                             {formatUsageAccountLabel(log)}
@@ -2970,6 +2977,7 @@ export default function Usage() {
         </div>
 
         {confirmDialog}
+        <UsageRequestDiagnostics key={diagnosticsLog?.id ?? 'closed'} log={diagnosticsLog} onClose={() => setDiagnosticsLog(null)} />
       </>
     </StateShell>
   )

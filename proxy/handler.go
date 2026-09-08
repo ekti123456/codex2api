@@ -143,17 +143,28 @@ func (h *Handler) nextAccountForSessionWithDispatchGuard(sessionID string, apiKe
 // a preference, never a durable session binding: callers can continue with
 // ordinary scheduling when the remembered account is unavailable.
 func (h *Handler) takeUnlinkedRecentAccount(c *gin.Context, identity requestSessionIdentity, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, policy auth.DispatchPolicy) (*auth.Account, string) {
+	state := usageRequestDiagnosticState(c)
 	if h == nil || h.store == nil || h.cache == nil || c == nil || c.Request == nil || !identity.unlinkedFallbackOnly || identity.unlinkedFallbackScope == "" {
+		if state != nil {
+			state.Recent.Result = "not_applicable"
+		}
 		return nil, ""
 	}
 	raw, found, err := h.cache.GetRuntime(c.Request.Context(), unlinkedFallbackRuntimeNamespace, identity.unlinkedFallbackScope)
 	if err != nil || !found || len(raw) == 0 {
+		state.Recent.Result = "missing"
+		if err != nil {
+			state.Recent.Result = "cache_error"
+		}
 		return nil, ""
 	}
 	var record unlinkedFallbackRuntimeRecord
 	if json.Unmarshal(raw, &record) != nil || record.AccountID <= 0 || record.ObservedAt.IsZero() {
+		state.Recent.Result = "invalid_record"
 		return nil, ""
 	}
+	state.Recent.AccountID = record.AccountID
+	state.Recent.ObservedAt = record.ObservedAt.UTC()
 	started := time.Now()
 	if value, ok := c.Get(unlinkedFallbackContextKey); ok {
 		if contextValue, valid := value.(unlinkedFallbackContext); valid && !contextValue.RequestStarted.IsZero() {
@@ -162,12 +173,18 @@ func (h *Handler) takeUnlinkedRecentAccount(c *gin.Context, identity requestSess
 	}
 	maxAge := time.Duration(h.store.CodexUnlinkedAccountFallbackSeconds()) * time.Second
 	if !record.ObservedAt.Before(started) || started.Sub(record.ObservedAt) > maxAge {
+		state.Recent.Result = "expired"
+		if !record.ObservedAt.Before(started) {
+			state.Recent.Result = "after_request_start"
+		}
 		return nil, ""
 	}
 	account := h.store.TakePreferredAccountWithDispatch(record.AccountID, apiKeyID, exclude, filter, policy, selectionTraceForRequest(c))
 	if account == nil {
+		state.Recent.Result = "account_unavailable"
 		return nil, ""
 	}
+	state.Recent.Result = "selected"
 	return account, strings.TrimSpace(record.ProxyURL)
 }
 
@@ -657,6 +674,7 @@ func passiveInternalAccountEligible(account *auth.Account, effectiveModel string
 // requests. Existing roots retain their account; rootless requests use normal
 // scheduling without creating a replacement root binding.
 func (h *Handler) applyPassiveInternalModelRouting(c *gin.Context, effectiveModel string, identity requestSessionIdentity, affinityKey string, allowRelay bool, filter auth.AccountFilter) auth.AccountFilter {
+	h.recordUsageAuthorization(c, "dispatch")
 	allowModelBypass := h.passiveInternalModelsAllowed(c)
 	if identity.requiresRootAccount && (!identity.relatedToRoot || identity.unlinkedFallbackOnly) {
 		return func(*auth.Account) bool { selectionTraceForRequest(c).Reject("root_unresolved"); return false }
@@ -684,6 +702,7 @@ func (h *Handler) applyPassiveInternalModelRouting(c *gin.Context, effectiveMode
 	if !found {
 		rootAccountID, found = h.store.SessionAffinityAccountID(rootKey)
 	}
+	recordUsageRootAccount(c, rootAccountID, found)
 	return func(account *auth.Account) bool {
 		if !found {
 			selectionTraceForRequest(c).Reject("root_unresolved")
@@ -1811,6 +1830,10 @@ func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInp
 	populateUserAgentMetaFromRequest(c, input)
 	populateWsAcquireFromRequest(c, input)
 	populateCompactUsageMetaFromRequest(c, input)
+	mode := h.db.GetUsageLogMode()
+	if mode != database.UsageLogModeOff && (mode != database.UsageLogModeErrors || input.StatusCode >= 400) {
+		populateUsageRequestDiagnostics(c, input)
+	}
 	h.populateAccountSessionObservation(c, input)
 	if receipt := cooldownReceipt(c); receipt != nil && input.StatusCode >= 200 && input.StatusCode < 300 && input.ErrorMessage == "" && input.SessionHash == receipt.Root && cache.PromptSessionLimitSubject(input.NewAPIPlatform, input.NewAPIUserID) == receipt.Subject {
 		receipt.Successful = true
@@ -3243,6 +3266,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	v1 := r.Group("/v1")
 	v1.Use(auth)
 	v1.POST("/prompt-filter/newapi/verify", h.VerifyNewAPIPolicyHandshake)
+	v1.POST("/session-windows", h.ControlNewAPIUserWindows)
 	v1.POST("/chat/completions", h.ChatCompletions)
 	v1.POST("/responses", h.Responses)
 	v1.GET("/responses", h.ResponsesWebSocket)
@@ -4114,8 +4138,10 @@ func (h *Handler) Responses(c *gin.Context) {
 	apiKeyID := requestAPIKeyID(c)
 	affinityKey := capacityAwareSessionAffinityKey(sessionIdentity, apiKeyID)
 	priorSessionAccountID, _ := h.store.AccountSessionAccountID(affinityKey, time.Now())
+	recordUsageRootAccount(c, priorSessionAccountID, priorSessionAccountID > 0)
 	turnContinuation := codexTurnContinuationToken(c.Request.Header, rawBody) != ""
-	_, turnHasBinding := h.store.SessionAffinityAccountID(affinityKey)
+	boundAccountID, turnHasBinding := h.store.SessionAffinityAccountID(affinityKey)
+	recordUsageRootAccount(c, boundAccountID, turnHasBinding)
 	hasPreviousResponse := strings.TrimSpace(gjson.GetBytes(rawBody, "previous_response_id").String()) != ""
 	turnContinuationPinned := codexContinuationPinned(turnContinuation, hasPreviousResponse, turnHasBinding, priorSessionAccountID)
 	ruleIdentity := h.payloadRuleIdentity(c)
@@ -4243,6 +4269,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	grokQualityAttempts := 0
 	for attempt := 0; ; attempt++ {
 		selectionTraceForRequest(c).Reset()
+		beginUsageSelectionAttempt(c, attempt+1)
 		account, stickyProxyURL, retainedHTTPFallback := wsHTTPFallback.Take()
 		if !retainedHTTPFallback {
 			affinityGuard = auth.SessionAffinityGuard{}
@@ -6214,7 +6241,9 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	apiKeyID := requestAPIKeyID(c)
 	affinityKey := capacityAwareSessionAffinityKey(sessionIdentity, apiKeyID)
 	priorSessionAccountID, _ := h.store.AccountSessionAccountID(affinityKey, time.Now())
-	_, compactHasBinding := h.store.SessionAffinityAccountID(affinityKey)
+	recordUsageRootAccount(c, priorSessionAccountID, priorSessionAccountID > 0)
+	boundAccountID, compactHasBinding := h.store.SessionAffinityAccountID(affinityKey)
+	recordUsageRootAccount(c, boundAccountID, compactHasBinding)
 	reasoningEffort := extractReasoningEffort(rawBody)
 	serviceTier := extractServiceTier(rawBody)
 	if serviceTier != "" {
@@ -6304,6 +6333,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	dispatchPolicy := dispatchPolicyForModel(effectiveModel)
 	for attempt := 0; ; attempt++ {
 		selectionTraceForRequest(c).Reset()
+		beginUsageSelectionAttempt(c, attempt+1)
 		var account *auth.Account
 		var stickyProxyURL string
 		var affinityGuard auth.SessionAffinityGuard
@@ -7172,6 +7202,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	apiKeyID := requestAPIKeyID(c)
 	affinityKey := capacityAwareSessionAffinityKey(sessionIdentity, apiKeyID)
 	priorSessionAccountID, _ := h.store.AccountSessionAccountID(affinityKey, time.Now())
+	recordUsageRootAccount(c, priorSessionAccountID, priorSessionAccountID > 0)
 	accountFilter := accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
 	beginDispatchSelection(c)
 	accountFilter = h.applyPassiveInternalModelRouting(c, effectiveModel, sessionIdentity, affinityKey, true, accountFilter)
@@ -7217,6 +7248,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	grokQualityAttempts := 0
 	for attempt := 0; ; attempt++ {
 		selectionTraceForRequest(c).Reset()
+		beginUsageSelectionAttempt(c, attempt+1)
 		account, stickyProxyURL, retainedHTTPFallback := wsHTTPFallback.Take()
 		if !retainedHTTPFallback {
 			affinityGuard = auth.SessionAffinityGuard{}

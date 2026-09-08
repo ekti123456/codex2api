@@ -2796,7 +2796,7 @@ func TestUsageStatsBaselinePreservesCacheRateAndFirstTokenAfterClear(t *testing.
 	}
 }
 
-func TestAccountBilledWindowV2KeepsFirstAnchorAcrossHourDriftAndResetsOnRollover(t *testing.T) {
+func TestAccountBilledWindowV2KeepsFirstAnchorAcrossMinuteDriftAndResetsOnRollover(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 	db, err := New("sqlite", dbPath)
 	if err != nil {
@@ -2831,10 +2831,10 @@ func TestAccountBilledWindowV2KeepsFirstAnchorAcrossHourDriftAndResetsOnRollover
 		t.Fatalf("first observed current window = %.2f, err=%v, want 12", billed, err)
 	}
 	driftedWindow := currentWindow
-	driftedWindow.Start = currentStart.Add(3*time.Hour + 456*time.Millisecond)
+	driftedWindow.Start = currentStart.Add(3*time.Minute + 456*time.Millisecond)
 	billed, err = db.GetAccountBilledWindow(ctx, driftedWindow)
 	if err != nil || billed != 12 {
-		t.Fatalf("hour-drifted live current window = %.2f, err=%v, want 12", billed, err)
+		t.Fatalf("minute-drifted live current window = %.2f, err=%v, want 12", billed, err)
 	}
 
 	if err := db.ClearUsageLogs(ctx, driftedWindow); err != nil {
@@ -2842,12 +2842,12 @@ func TestAccountBilledWindowV2KeepsFirstAnchorAcrossHourDriftAndResetsOnRollover
 	}
 	billed, err = db.GetAccountBilledWindow(ctx, driftedWindow)
 	if err != nil || billed != 12 {
-		t.Fatalf("hour-drifted current window after clear = %.2f, err=%v, want 12", billed, err)
+		t.Fatalf("minute-drifted current window after clear = %.2f, err=%v, want 12", billed, err)
 	}
 
 	// A live row before the drifted observation still belongs to the stable
 	// anchor and must not disappear from the query's live half.
-	insertCost(currentStart.Add(time.Hour), 200, "", 3)
+	insertCost(currentStart.Add(time.Minute), 200, "", 3)
 	billed, err = db.GetAccountBilledWindow(ctx, driftedWindow)
 	if err != nil || billed != 15 {
 		t.Fatalf("archived + canonical-anchor live window = %.2f, err=%v, want 15", billed, err)
@@ -2928,7 +2928,7 @@ func TestAccountBilledWindowV2SeparatesKindsAndDurationChanges(t *testing.T) {
 	}
 	drifted := []AccountBillingWindow{windows[0], windows[1]}
 	drifted[0].Start = drifted[0].Start.Add(time.Hour)
-	drifted[1].Start = drifted[1].Start.Add(6 * time.Hour)
+	drifted[1].Start = drifted[1].Start.Add(3 * time.Minute)
 	billed, err := db.GetAccountsBilledWindows(ctx, drifted)
 	if err != nil {
 		t.Fatalf("GetAccountsBilledWindows(two kinds): %v", err)
@@ -3052,7 +3052,7 @@ func TestAccountBilledWindowV2SurvivesDatabaseReopen(t *testing.T) {
 	}
 	defer db.Close()
 	drifted := window
-	drifted.Start = drifted.Start.Add(6*time.Hour + 750*time.Millisecond)
+	drifted.Start = drifted.Start.Add(3*time.Minute + 750*time.Millisecond)
 	billed, err := db.GetAccountBilledWindow(ctx, drifted)
 	if err != nil || billed != 9.75 {
 		t.Fatalf("reopened drifted window = %.2f, err=%v, want 9.75", billed, err)
@@ -3093,7 +3093,7 @@ func TestAccountBilledWindowV2KeepsNewerAnchorForStaleBackwardObservation(t *tes
 	}
 
 	withinDrift := current
-	withinDrift.Start = start.Add(time.Hour)
+	withinDrift.Start = start.Add(3 * time.Minute)
 	if billed, err := db.GetAccountBilledWindow(ctx, withinDrift); err != nil || billed != 4 {
 		t.Fatalf("same-window read = %.2f, err=%v, want 4", billed, err)
 	}

@@ -122,6 +122,9 @@ func (h *Handler) reserveSessionCooldown(c *gin.Context, identity verifiedNewAPI
 	reserved := false
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
 	err := h.db.UpdateSessionCooldown(ctx, status.Subject, func(state *database.SessionCooldownState) error {
+		if !existing {
+			state.AverageSeconds, state.Samples, state.EvaluatedAt = average, samples, now
+		}
 		retention := time.Duration(max(cfg.FrequencyWindowSeconds, cfg.MaxIntervalSeconds, status.WindowSeconds)) * time.Second
 		pruneSessionCooldown(state, now, retention)
 		root := state.Roots[status.SessionHash]
@@ -236,12 +239,31 @@ func (h *Handler) finishSessionCooldown(c *gin.Context) {
 		return
 	}
 	if removed {
+		removedWindow := false
 		h.promptSessionLimitMu.Lock()
-		if current := h.promptSessionLimits[receipt.Subject][receipt.Root]; current.Equal(receipt.WindowExpiry) {
+		detail := h.promptSessionWindowDetails[receipt.Subject][receipt.Root]
+		if current := h.promptSessionLimits[receipt.Subject][receipt.Root]; current.Equal(receipt.WindowExpiry) && (detail.CreatedAt.IsZero() || detail.CreatedAt.UnixMilli() == receipt.CreatedAt) {
 			delete(h.promptSessionLimits[receipt.Subject], receipt.Root)
 			delete(h.promptSessionWindowDetails[receipt.Subject], receipt.Root)
+			removedWindow = true
 		}
 		h.promptSessionLimitMu.Unlock()
+		if !removedWindow {
+			return
+		}
 		h.persistPromptSessionLimits(receipt.Subject, time.Now())
+		if grant := windowGrantForRequest(c); grant != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err := h.db.UpdateUserWindowAdmissions(ctx, receipt.Subject, func(state *database.UserWindowAdmissionState) error {
+				if current := state.Windows[receipt.Root]; current != nil && current.ID == grant.Grant.ID && current.ExpiresAt.Equal(receipt.WindowExpiry) {
+					delete(state.Windows, receipt.Root)
+				}
+				return nil
+			})
+			cancel()
+			if err != nil {
+				log.Printf("event=window_grant_cleanup_failed subject=%s", receipt.Subject)
+			}
+		}
 	}
 }
