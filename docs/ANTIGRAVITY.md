@@ -105,8 +105,10 @@ curl -s http://127.0.0.1:2004/v1beta/models/gemini-3.7-flash-high:generateConten
 Gemini-native clients authenticate with the same key through `x-goog-api-key`; for example with the `google-genai` Python SDK:
 
 ```python
+import os
 from google import genai
-client = genai.Client(api_key=CODEX2API_KEY, http_options={"base_url": "http://127.0.0.1:2004"})
+
+client = genai.Client(api_key=os.environ["CODEX2API_KEY"], http_options={"base_url": "http://127.0.0.1:2004"})
 client.models.generate_content(model="gemini-3.7-flash-high", contents="Say hello")
 ```
 
