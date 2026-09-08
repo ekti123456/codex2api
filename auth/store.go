@@ -107,7 +107,10 @@ func IsValidCodexPassthroughMode(value string) bool {
 }
 
 const (
-	DefaultTestContent  = "hi"
+	DefaultTestContent = "hi"
+	// DefaultTestModel 是连通性测试的出厂默认模型;须是当前上游仍在线、free/plus/pro
+	// 三档都可用的模型(gpt-5.4 已于 2026-09 下线)。
+	DefaultTestModel    = "gpt-5.5"
 	MaxTestContentRunes = 8192
 )
 
@@ -7751,7 +7754,7 @@ func (s *Store) GetTestModel() string {
 	if v, ok := s.testModel.Load().(string); ok && v != "" {
 		return v
 	}
-	return "gpt-5.4"
+	return DefaultTestModel
 }
 
 // SetTestContent dynamically updates connection test input text.

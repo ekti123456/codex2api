@@ -815,10 +815,11 @@ func normalizeResponsesImageOnlyModel(body map[string]any) bool {
 		body["tool_choice"] = map[string]any{"type": "image_generation"}
 		modified = true
 	}
-	if imageModel != defaultImagesMainModel {
+	mainModel := imagesMainModel()
+	if imageModel != mainModel {
 		modified = true
 	}
-	body["model"] = defaultImagesMainModel
+	body["model"] = mainModel
 	return modified
 }
 

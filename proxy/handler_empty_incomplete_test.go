@@ -61,7 +61,7 @@ func TestChatCompletionsEmptyIncompleteRetriesThenSucceeds(t *testing.T) {
 				}
 				writeSuccessfulAttempt(w)
 			})
-			body := `{"model":"gpt-5.4","stream":` + boolString(stream) + `,"messages":[{"role":"user","content":"Reply with exactly: OK"}]}`
+			body := `{"model":"gpt-5.5","stream":` + boolString(stream) + `,"messages":[{"role":"user","content":"Reply with exactly: OK"}]}`
 			recorder := invokeChatCompletionsWithBody(t, handler, body)
 			got := recorder.Body.String()
 			if recorder.Code != http.StatusOK {
@@ -95,7 +95,7 @@ func TestChatCompletionsEmptyIncompleteExhaustedReturns502(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			handler, calls := newChatStreamServeTestHandler(t, writeEmptyIncompleteAttempt)
-			body := `{"model":"gpt-5.4","stream":` + boolString(stream) + `,"messages":[{"role":"user","content":"Reply with exactly: OK"}]}`
+			body := `{"model":"gpt-5.5","stream":` + boolString(stream) + `,"messages":[{"role":"user","content":"Reply with exactly: OK"}]}`
 			recorder := invokeChatCompletionsWithBody(t, handler, body)
 			got := recorder.Body.String()
 			if recorder.Code != http.StatusBadGateway {
@@ -164,7 +164,7 @@ func TestResponsesEmptyIncompleteRetriesThenSucceeds(t *testing.T) {
 				}
 				writeSuccessfulAttempt(w)
 			})
-			body := `{"model":"gpt-5.4","stream":` + boolString(stream) + `,"input":"Reply with exactly: OK"}`
+			body := `{"model":"gpt-5.5","stream":` + boolString(stream) + `,"input":"Reply with exactly: OK"}`
 			recorder := invokeResponsesWithBody(t, handler, body)
 			got := recorder.Body.String()
 			if recorder.Code != http.StatusOK {
@@ -191,7 +191,7 @@ func TestResponsesEmptyIncompleteExhaustedReturns502(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			handler, calls := newChatStreamServeTestHandler(t, writeEmptyIncompleteAttempt)
-			body := `{"model":"gpt-5.4","stream":` + boolString(stream) + `,"input":"Reply with exactly: OK"}`
+			body := `{"model":"gpt-5.5","stream":` + boolString(stream) + `,"input":"Reply with exactly: OK"}`
 			recorder := invokeResponsesWithBody(t, handler, body)
 			got := recorder.Body.String()
 			if recorder.Code != http.StatusBadGateway {

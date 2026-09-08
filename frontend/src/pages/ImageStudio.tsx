@@ -66,12 +66,17 @@ const IMAGE_ASSET_CACHE_STORE = 'assets'
 const IMAGE_ASSET_CACHE_VERSION = 1
 const IMAGE_MODEL_2K_ALIAS = 'gpt-image-2-2k'
 const IMAGE_MODEL_4K_ALIAS = 'gpt-image-2-4k'
-const IMAGE_NOTICE_KEYS = [
-  'images.notices.pngFallback',
-  'images.notices.transparent',
-  'images.notices.highQuality',
-  'images.notices.accountRouting',
-]
+const IMAGE_MODEL_2K_SUFFIX = '-2k'
+const IMAGE_MODEL_4K_SUFFIX = '-4k'
+type ImageSizeTier = '1k' | '2k' | '4k'
+
+function imageSizeTierForModel(model: string): ImageSizeTier {
+  const lower = model.trim().toLowerCase()
+  if (lower.endsWith(IMAGE_MODEL_4K_SUFFIX)) return '4k'
+  if (lower.endsWith(IMAGE_MODEL_2K_SUFFIX)) return '2k'
+  return '1k'
+}
+const IMAGE_NOTICE_KEYS = ['images.notices.pngFallback', 'images.notices.transparent', 'images.notices.highQuality', 'images.notices.accountRouting']
 
 type TemplateEditorDraft = {
   id: number | null
@@ -86,7 +91,15 @@ type TemplateEditorDraft = {
   style: string
 }
 
+// gpt-image-2.5 flare / sunburst 暂不公开：后端透传与尺寸档位逻辑已就绪，但不下发到
+// 下拉框；正式推出时取消注释即可（顺序保持在 gpt-image-2 之前）。
 const IMAGE_MODELS = [
+  // { label: 'gpt-image-2.5-flare', value: 'gpt-image-2.5-flare' },
+  // { label: 'gpt-image-2.5-flare-2k', value: 'gpt-image-2.5-flare-2k' },
+  // { label: 'gpt-image-2.5-flare-4k', value: 'gpt-image-2.5-flare-4k' },
+  // { label: 'gpt-image-2.5-sunburst', value: 'gpt-image-2.5-sunburst' },
+  // { label: 'gpt-image-2.5-sunburst-2k', value: 'gpt-image-2.5-sunburst-2k' },
+  // { label: 'gpt-image-2.5-sunburst-4k', value: 'gpt-image-2.5-sunburst-4k' },
   { label: 'gpt-image-2', value: 'gpt-image-2' },
   { label: IMAGE_MODEL_2K_ALIAS, value: IMAGE_MODEL_2K_ALIAS },
   { label: IMAGE_MODEL_4K_ALIAS, value: IMAGE_MODEL_4K_ALIAS },
@@ -111,18 +124,18 @@ const SIZE_4K_VALUES = new Set(['auto', '3840x2160', '2160x3840', '2880x2880'])
 const ASPECT_RATIO_IDS = ['auto', '1:1', '16:9', '9:16'] as const
 type AspectRatioId = typeof ASPECT_RATIO_IDS[number]
 
-const ASPECT_RATIO_SIZE_MAP: Record<string, Record<Exclude<AspectRatioId, 'auto'>, string>> = {
-  'gpt-image-2': {
+const ASPECT_RATIO_SIZE_MAP: Record<ImageSizeTier, Record<Exclude<AspectRatioId, 'auto'>, string>> = {
+  '1k': {
     '1:1': '1024x1024',
     '16:9': '1536x864',
     '9:16': '864x1536',
   },
-  [IMAGE_MODEL_2K_ALIAS]: {
+  '2k': {
     '1:1': '2048x2048',
     '16:9': '2560x1440',
     '9:16': '1440x2560',
   },
-  [IMAGE_MODEL_4K_ALIAS]: {
+  '4k': {
     '1:1': '2880x2880',
     '16:9': '3840x2160',
     '9:16': '2160x3840',
@@ -243,10 +256,10 @@ function tagsToText(tags?: string[]): string {
 }
 
 function sizeOptionsForModel(model: string) {
-  switch (model) {
-    case IMAGE_MODEL_2K_ALIAS:
+  switch (imageSizeTierForModel(model)) {
+    case '2k':
       return SIZE_OPTIONS.filter(option => SIZE_2K_VALUES.has(option.value))
-    case IMAGE_MODEL_4K_ALIAS:
+    case '4k':
       return SIZE_OPTIONS.filter(option => SIZE_4K_VALUES.has(option.value))
     default:
       return SIZE_OPTIONS
@@ -259,8 +272,7 @@ function aspectFromSize(size: string): AspectRatioId {
 
 function sizeForAspect(model: string, aspect: AspectRatioId): string {
   if (aspect === 'auto') return 'auto'
-  const map = ASPECT_RATIO_SIZE_MAP[model] ?? ASPECT_RATIO_SIZE_MAP['gpt-image-2']
-  return map[aspect]
+  return ASPECT_RATIO_SIZE_MAP[imageSizeTierForModel(model)][aspect]
 }
 
 function normalizeImageSizeForModel(model: string, size: string): string {
@@ -469,7 +481,9 @@ function blobFromInlineImageAsset(asset: ImageAsset): Blob | null {
       }
       chunks.push(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer)
     }
-    return new Blob(chunks, { type: asset.mime_type || 'application/octet-stream' })
+    return new Blob(chunks, {
+      type: asset.mime_type || 'application/octet-stream',
+    })
   } catch {
     return null
   }
@@ -542,42 +556,52 @@ export default function ImageStudio() {
     const list = Array.from(files).filter(file => file.type.startsWith('image/'))
     if (list.length === 0) return
 
-    // Read length outside the state updater so toast/FileReader side effects run once
-    // (React may re-invoke pure updaters under StrictMode / concurrent rendering).
-    const prevLength = inputImageDataURLsRef.current.length
-    if (prevLength >= MAX_INPUT_IMAGES) {
-      showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }), 'error')
-      return
-    }
-    const remaining = MAX_INPUT_IMAGES - prevLength
-    const filesToRead = list.slice(0, remaining)
-    if (list.length > remaining) {
-      showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }), 'error')
-    }
+      // Read length outside the state updater so toast/FileReader side effects run once
+      // (React may re-invoke pure updaters under StrictMode / concurrent rendering).
+      const prevLength = inputImageDataURLsRef.current.length
+      if (prevLength >= MAX_INPUT_IMAGES) {
+        showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }), 'error')
+        return
+      }
+      const remaining = MAX_INPUT_IMAGES - prevLength
+      const filesToRead = list.slice(0, remaining)
+      if (list.length > remaining) {
+        showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }), 'error')
+      }
 
-    void Promise.allSettled(filesToRead.map(file => new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = () => reject(new Error('Failed to read file'))
-      reader.readAsDataURL(file)
-    }))).then(results => {
-      const dataURLs: string[] = []
-      for (const r of results) {
-        if (r.status === 'fulfilled') dataURLs.push(r.value)
-      }
-      if (dataURLs.length > 0) {
-        setInputImageDataURLs(current => [...current, ...dataURLs].slice(0, MAX_INPUT_IMAGES))
-      }
-      if (dataURLs.length < results.length) {
-        showToast(t('images.loadFailed'), 'error')
-      }
-    })
-  }, [showToast, t])
+      void Promise.allSettled(
+        filesToRead.map(
+          file =>
+            new Promise<string>((resolve, reject) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(reader.result as string)
+              reader.onerror = () => reject(new Error('Failed to read file'))
+              reader.readAsDataURL(file)
+            }),
+        ),
+      ).then(results => {
+        const dataURLs: string[] = []
+        for (const r of results) {
+          if (r.status === 'fulfilled') dataURLs.push(r.value)
+        }
+        if (dataURLs.length > 0) {
+          setInputImageDataURLs(current => [...current, ...dataURLs].slice(0, MAX_INPUT_IMAGES))
+        }
+        if (dataURLs.length < results.length) {
+          showToast(t('images.loadFailed'), 'error')
+        }
+      })
+    },
+    [showToast, t],
+  )
 
-  const handleImageFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.length) appendInputImages(e.target.files)
-    e.target.value = ''
-  }, [appendInputImages])
+  const handleImageFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files?.length) appendInputImages(e.target.files)
+      e.target.value = ''
+    },
+    [appendInputImages],
+  )
 
   useEffect(() => {
     if (view && !IMAGE_VIEWS.includes(view as ImageView)) {
@@ -625,7 +649,10 @@ export default function ImageStudio() {
   }, [historyPage, showToast, t])
 
   const loadAssets = useCallback(async () => {
-    const res = await api.getImageAssets({ page: assetPage, pageSize: IMAGE_ASSET_PAGE_SIZE })
+    const res = await api.getImageAssets({
+      page: assetPage,
+      pageSize: IMAGE_ASSET_PAGE_SIZE,
+    })
     setAssets(res.assets ?? [])
     setAssetTotal(res.total ?? 0)
   }, [assetPage])
@@ -734,7 +761,9 @@ export default function ImageStudio() {
     if (!currentJob || !['queued', 'running'].includes(currentJob.status)) return
     const timer = window.setInterval(async () => {
       try {
-        const res = await api.getImageJob(currentJob.id, { includeCache: true })
+        const res = await api.getImageJob(currentJob.id, {
+          includeCache: true,
+        })
         setCurrentJob(res.job)
         if (!['queued', 'running'].includes(res.job.status)) {
           await Promise.all([loadJobs(), loadAssets(), loadTemplates(), loadHistoryJobs()])
@@ -1086,7 +1115,9 @@ export default function ImageStudio() {
         await loadHistoryJobs()
       }
       if (currentJob?.assets?.some(item => item.id === asset.id)) {
-        const res = await api.getImageJob(currentJob.id, { includeCache: true })
+        const res = await api.getImageJob(currentJob.id, {
+          includeCache: true,
+        })
         setCurrentJob(res.job)
       }
       showToast(t('images.assetDeleted'), 'success')
@@ -1137,23 +1168,37 @@ export default function ImageStudio() {
   const recentJobs = jobs.slice(0, 3)
   const maxAssetPage = Math.max(1, Math.ceil(assetTotal / IMAGE_ASSET_PAGE_SIZE))
   const maxHistoryPage = Math.max(1, Math.ceil(historyTotal / IMAGE_JOB_HISTORY_PAGE_SIZE))
-  const filteredHistoryJobs = historyStatusFilter === 'all'
-    ? historyJobs
-    : historyJobs.filter(job => job.status === historyStatusFilter)
-  const templateSelectOptions = templates.length > 0
-    ? [{ label: t('images.noTemplateSelected'), value: '' }, ...templates.map(template => ({ label: template.name || `#${template.id}`, value: String(template.id) }))]
-    : [{ label: t('images.noTemplates'), value: '' }]
-  const backgroundOptions = useMemo(() => [
-    { label: t('images.backgroundOptions.auto'), value: 'auto' },
-    { label: t('images.backgroundOptions.opaque'), value: 'opaque' },
-    { label: t('images.backgroundOptions.transparent'), value: 'transparent' },
-  ], [t])
-  const upscaleOptions = useMemo(() => [
-    { label: t('images.upscaleOptions.auto'), value: '' },
-    { label: t('images.upscaleOptions.none'), value: 'none' },
-    { label: t('images.upscaleOptions.2k'), value: '2k' },
-    { label: t('images.upscaleOptions.4k'), value: '4k' },
-  ], [t])
+  const filteredHistoryJobs = historyStatusFilter === 'all' ? historyJobs : historyJobs.filter(job => job.status === historyStatusFilter)
+  const templateSelectOptions =
+    templates.length > 0
+      ? [
+          { label: t('images.noTemplateSelected'), value: '' },
+          ...templates.map(template => ({
+            label: template.name || `#${template.id}`,
+            value: String(template.id),
+          })),
+        ]
+      : [{ label: t('images.noTemplates'), value: '' }]
+  const backgroundOptions = useMemo(
+    () => [
+      { label: t('images.backgroundOptions.auto'), value: 'auto' },
+      { label: t('images.backgroundOptions.opaque'), value: 'opaque' },
+      {
+        label: t('images.backgroundOptions.transparent'),
+        value: 'transparent',
+      },
+    ],
+    [t],
+  )
+  const upscaleOptions = useMemo(
+    () => [
+      { label: t('images.upscaleOptions.auto'), value: '' },
+      { label: t('images.upscaleOptions.none'), value: 'none' },
+      { label: t('images.upscaleOptions.2k'), value: '2k' },
+      { label: t('images.upscaleOptions.4k'), value: '4k' },
+    ],
+    [t],
+  )
   const hasGenerationDraft = Boolean(
     prompt.trim() ||
     selectedTemplateId ||
@@ -1574,7 +1619,9 @@ export default function ImageStudio() {
                         <div className="flex items-center justify-between gap-1">
                           <span className="font-mono text-[12px] font-semibold tabular-nums">#{job.id}</span>
                           <Badge className={cn(jobStatusClass(job.status), 'text-[10px]')}>
-                            {t(`images.status.${job.status}`, { defaultValue: job.status })}
+                            {t(`images.status.${job.status}`, {
+                              defaultValue: job.status,
+                            })}
                           </Badge>
                         </div>
                         <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
@@ -1592,9 +1639,15 @@ export default function ImageStudio() {
     </Card>
   )
 
-  const historyStatusOptions: Array<{ value: ImageJobStatusFilter; label: string }> = [
+  const historyStatusOptions: Array<{
+    value: ImageJobStatusFilter
+    label: string
+  }> = [
     { value: 'all', label: t('common.all') },
-    ...IMAGE_JOB_STATUSES.map(status => ({ value: status, label: t(`images.status.${status}`) })),
+    ...IMAGE_JOB_STATUSES.map(status => ({
+      value: status,
+      label: t(`images.status.${status}`),
+    })),
   ]
 
   const selectHistoryJob = (job: ImageGenerationJob) => {
@@ -1828,10 +1881,26 @@ function ImageNoticeCarousel() {
 function ImageStudioTabs({ activeView }: { activeView: ImageView }) {
   const { t } = useTranslation()
   const tabs = [
-    { view: 'studio' as const, label: t('images.views.studio'), to: '/images/studio' },
-    { view: 'prompts' as const, label: t('images.views.prompts'), to: '/images/prompts' },
-    { view: 'gallery' as const, label: t('images.views.gallery'), to: '/images/gallery' },
-    { view: 'history' as const, label: t('images.views.history'), to: '/images/history' },
+    {
+      view: 'studio' as const,
+      label: t('images.views.studio'),
+      to: '/images/studio',
+    },
+    {
+      view: 'prompts' as const,
+      label: t('images.views.prompts'),
+      to: '/images/prompts',
+    },
+    {
+      view: 'gallery' as const,
+      label: t('images.views.gallery'),
+      to: '/images/gallery',
+    },
+    {
+      view: 'history' as const,
+      label: t('images.views.history'),
+      to: '/images/history',
+    },
   ]
   const activeIndex = Math.max(0, tabs.findIndex(tab => tab.view === activeView))
 
@@ -1898,7 +1967,9 @@ function StudioCanvas({
         {currentJob ? (
           <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 sm:left-4 sm:top-4">
             <Badge className={cn(jobStatusClass(currentJob.status), 'pointer-events-auto shadow-sm backdrop-blur-sm')}>
-              {t(`images.status.${currentJob.status}`, { defaultValue: currentJob.status })}
+              {t(`images.status.${currentJob.status}`, {
+                defaultValue: currentJob.status,
+              })}
             </Badge>
             <span className="rounded-full bg-background/80 px-2 py-0.5 font-mono text-[10px] text-muted-foreground shadow-sm backdrop-blur-sm">
               #{currentJob.id}
@@ -2166,14 +2237,23 @@ function TemplateEditorDialog({
   const { t } = useTranslation()
   const editing = Boolean(draft.id)
   const sizeOptions = useMemo(() => sizeOptionsForModel(draft.model), [draft.model])
-  const backgroundOptions = useMemo(() => [
-    { label: t('images.backgroundOptions.auto'), value: 'auto' },
-    { label: t('images.backgroundOptions.opaque'), value: 'opaque' },
-    { label: t('images.backgroundOptions.transparent'), value: 'transparent' },
-  ], [t])
+  const backgroundOptions = useMemo(
+    () => [
+      { label: t('images.backgroundOptions.auto'), value: 'auto' },
+      { label: t('images.backgroundOptions.opaque'), value: 'opaque' },
+      {
+        label: t('images.backgroundOptions.transparent'),
+        value: 'transparent',
+      },
+    ],
+    [t],
+  )
 
   const changeModel = (value: string) => {
-    onChange({ model: value, size: normalizeImageSizeForModel(value, draft.size) })
+    onChange({
+      model: value,
+      size: normalizeImageSizeForModel(value, draft.size),
+    })
   }
 
   return (
@@ -2399,7 +2479,11 @@ function HistoryJobCard({
             <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
               <div className="flex items-center gap-2">
                 <span className="font-geist-mono text-base font-semibold">#{job.id}</span>
-                <Badge className={jobStatusClass(job.status)}>{t(`images.status.${job.status}`, { defaultValue: job.status })}</Badge>
+                <Badge className={jobStatusClass(job.status)}>
+                  {t(`images.status.${job.status}`, {
+                    defaultValue: job.status,
+                  })}
+                </Badge>
               </div>
               <div className="mt-2 line-clamp-2 text-sm leading-6 text-foreground">{job.prompt}</div>
             </button>

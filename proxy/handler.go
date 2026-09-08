@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -6571,7 +6572,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	}
 	responseModel := logModel
 	if model == "" {
-		model = "gpt-5.4"
+		model = defaultAnthropicFallbackModel
 		logModel = model
 		responseModel = model
 	}
@@ -7782,6 +7783,33 @@ func isCodexModelUnsupportedError(body []byte) bool {
 		}
 	}
 	return false
+}
+
+// codexUnsupportedModelRe 匹配上游 "The 'gpt-5.4-mini' model is not supported when
+// using Codex with a ChatGPT account." 里被拒绝的模型名。
+var codexUnsupportedModelRe = regexp.MustCompile(`(?i)the '([^']+)' model is not supported`)
+
+// codexUnsupportedModelFromBody 从"模型不支持"400 里抽出被拒绝的模型名;不是该类
+// 错误或抽不出名字时返回空串。调用方据此区分被拒的是请求模型还是生图驱动主模型。
+func codexUnsupportedModelFromBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	candidates := []string{
+		gjson.GetBytes(body, "error.message").String(),
+		gjson.GetBytes(body, "detail").String(),
+		gjson.GetBytes(body, "message").String(),
+		string(body),
+	}
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		if match := codexUnsupportedModelRe.FindStringSubmatch(candidate); len(match) == 2 {
+			return strings.TrimSpace(match[1])
+		}
+	}
+	return ""
 }
 
 func isCodexModelCapacityError(body []byte) bool {
