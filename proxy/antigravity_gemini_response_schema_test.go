@@ -106,3 +106,36 @@ func TestGeminiNativeToAntigravityEnvelope_NormalizesResponseJsonSchema(t *testi
 		t.Fatalf("responseSchema missing in envelope: %s", payload)
 	}
 }
+
+// $ref 里的 JSON Pointer 转义(~1 → /、~0 → ~、百分号编码)要解码后再查定义键,
+// 否则 "A/B" 这类键永远命中不了,引用会被清成 {} 丢约束。
+func TestAntigravityNormalizeNativeGeminiResponseSchema_DecodesJSONPointerRefs(t *testing.T) {
+	request := map[string]any{
+		"generationConfig": map[string]any{
+			"responseJsonSchema": map[string]any{
+				"type": "object",
+				"$defs": map[string]any{
+					"A/B":    map[string]any{"type": "object", "properties": map[string]any{"slash": map[string]any{"type": "string"}}},
+					"T~X":    map[string]any{"type": "object", "properties": map[string]any{"tilde": map[string]any{"type": "integer"}}},
+					"Sp ace": map[string]any{"type": "object", "properties": map[string]any{"space": map[string]any{"type": "boolean"}}},
+				},
+				"properties": map[string]any{
+					"a": map[string]any{"$ref": "#/$defs/A~1B"},
+					"b": map[string]any{"$ref": "#/$defs/T~0X"},
+					"c": map[string]any{"$ref": "#/$defs/Sp%20ace"},
+				},
+			},
+		},
+	}
+	antigravityNormalizeNativeGeminiResponseSchema(request)
+	encoded, _ := json.Marshal(request)
+	schema := gjson.GetBytes(encoded, "generationConfig.responseSchema")
+	for prop, leaf := range map[string]string{"a": "slash", "b": "tilde", "c": "space"} {
+		if !schema.Get("properties." + prop + ".properties." + leaf).Exists() {
+			t.Fatalf("$ref for %q not resolved through pointer decoding: %s", prop, schema.Raw)
+		}
+	}
+	if schema.Get("properties.a.$ref").Exists() || schema.Get("$defs").Exists() {
+		t.Fatalf("unresolved $ref/$defs leaked: %s", schema.Raw)
+	}
+}

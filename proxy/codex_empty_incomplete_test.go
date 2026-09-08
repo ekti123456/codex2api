@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codex2api/auth"
+	"github.com/codex2api/config"
+	"github.com/codex2api/database"
 	"github.com/tidwall/gjson"
 )
 
@@ -186,13 +189,33 @@ func TestEmptyIncompleteNonStreamBody(t *testing.T) {
 }
 
 func TestReportStreamOutcomeFailure_SkipsRequestScoped(t *testing.T) {
-	// 空 incomplete 与容量降载一样不进账号健康度；这里只验证判定入口。
-	outcome := streamOutcome{logStatusCode: http.StatusBadGateway, failureKind: codexEmptyIncompleteFailureKind, penalize: true, requestScoped: true}
-	if !outcome.penalize || !outcome.requestScoped {
-		t.Fatal("fixture must be retryable and request scoped")
+	// 空 incomplete 与容量降载一样不进账号健康度:用真实 store 与账号断言
+	// 连击与健康档位不变,并以同样的非请求维度故障做对照。
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 1, TestConcurrency: 1, TestModel: "gpt-5.4"})
+	t.Cleanup(store.Stop)
+	account := &auth.Account{DBID: 1, AccessToken: "at-1", PlanType: "pro", AccountID: "acct-1"}
+	store.AddAccount(account)
+	h := NewHandler(store, nil, &config.Config{AllowAnonymousV1: true}, nil)
+
+	failureStreak := func() int {
+		account.Mu().RLock()
+		defer account.Mu().RUnlock()
+		return account.FailureStreak
 	}
-	var h *Handler
-	// h.store 为 nil；若 requestScoped 未被跳过，这里会解引用空指针而 panic。
-	h = &Handler{}
-	h.reportStreamOutcomeFailure(nil, outcome, 0)
+	tierBefore := account.GetHealthTier()
+
+	scoped := streamOutcome{logStatusCode: http.StatusBadGateway, failureKind: codexEmptyIncompleteFailureKind, penalize: true, requestScoped: true}
+	h.reportStreamOutcomeFailure(account, scoped, 0)
+	if got := failureStreak(); got != 0 {
+		t.Fatalf("request-scoped failure must not touch FailureStreak, got %d", got)
+	}
+	if got := account.GetHealthTier(); got != tierBefore {
+		t.Fatalf("request-scoped failure must not change health tier: %s -> %s", tierBefore, got)
+	}
+
+	plain := streamOutcome{logStatusCode: http.StatusBadGateway, failureKind: "server", penalize: true}
+	h.reportStreamOutcomeFailure(account, plain, 0)
+	if got := failureStreak(); got != 1 {
+		t.Fatalf("control: ordinary 5xx must be reported, FailureStreak = %d", got)
+	}
 }

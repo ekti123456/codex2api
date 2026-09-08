@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -1147,6 +1148,17 @@ func antigravityRequiredFieldNames(raw any) []string {
 	}
 }
 
+// decodeJSONPointerToken 把 $ref 里的 JSON Pointer 引用 token 还原成定义键:
+// 片段里先做百分号解码,再按 RFC 6901 把 ~1 还原成 /、~0 还原成 ~(顺序不能反)。
+// 不解码时 "#/$defs/A~1B" 会按字面量找不到 "A/B",引用被清成 {} 丢掉约束。
+func decodeJSONPointerToken(token string) string {
+	if unescaped, err := url.PathUnescape(token); err == nil {
+		token = unescaped
+	}
+	token = strings.ReplaceAll(token, "~1", "/")
+	return strings.ReplaceAll(token, "~0", "~")
+}
+
 func antigravityCleanGeminiSchema(value any, definitions map[string]any, resolving map[string]bool, depth int) any {
 	if depth > 32 {
 		return nil
@@ -1164,6 +1176,7 @@ func antigravityCleanGeminiSchema(value any, definitions map[string]any, resolvi
 			case strings.HasPrefix(ref, definitionsPrefix):
 				name = strings.TrimPrefix(ref, definitionsPrefix)
 			}
+			name = decodeJSONPointerToken(name)
 			if definition, ok := definitions[name]; ok && name != "" && !resolving[name] {
 				resolving[name] = true
 				if expanded, ok := antigravityCleanGeminiSchema(definition, definitions, resolving, depth+1).(map[string]any); ok {
