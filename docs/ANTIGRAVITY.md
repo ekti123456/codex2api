@@ -84,6 +84,7 @@ Antigravity OAuth accounts also support the native Gemini REST shape for clients
 Requirements and behavior:
 
 - **OAuth only.** API Key / Interactions accounts are rejected; bind a downstream key to the `antigravity` upstream channel (or use an `auto` key whose scoped catalog includes Antigravity models).
+- **Authentication.** Send the Codex2API downstream key as `Authorization: Bearer <key>`, `x-api-key: <key>`, or `x-goog-api-key: <key>`. The last form is what the `google-genai` SDK, ADK, and the Gemini channel of aggregator gateways send by default, so pointing their base URL at Codex2API works without a custom header. The `?key=` query-string form is not accepted (the key would land in URLs and access logs).
 - **Model IDs** match the published Antigravity catalog (`gemini-3.7-flash-high`, `gemini-3.8-flash-low`, Claude tiers exposed by the channel, and so on), not raw Google wire IDs.
 - **Tool schemas** are normalized before upstream dispatch: orphan `required` entries are dropped, `anyOf` / `oneOf` / `allOf` unions are flattened, invalid function names are sanitized with response-name restore, and schemas are sent as `parametersJsonSchema` (Cloud Code expectation).
 - **Multi-turn tools:** `functionResponse` turns are regrouped for the adapter; leading `inlineData` parts in the same user turn are attached under the matching `functionResponse.parts`.
@@ -99,6 +100,16 @@ curl -s http://127.0.0.1:2004/v1beta/models/gemini-3.7-flash-high:generateConten
   -H "Authorization: Bearer $CODEX2API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"contents":[{"role":"user","parts":[{"text":"Say hello"}]}]}'
+```
+
+Gemini-native clients authenticate with the same key through `x-goog-api-key`; for example with the `google-genai` Python SDK:
+
+```python
+import os
+from google import genai
+
+client = genai.Client(api_key=os.environ["CODEX2API_KEY"], http_options={"base_url": "http://127.0.0.1:2004"})
+client.models.generate_content(model="gemini-3.7-flash-high", contents="Say hello")
 ```
 
 Not yet implemented on this surface: batch/embed APIs, Imagen `predict`, and full parity with every `generativelanguage` metadata field on model list responses.

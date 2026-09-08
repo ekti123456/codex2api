@@ -5139,6 +5139,75 @@ func TestAuthMiddlewareSetsAPIKeyContext(t *testing.T) {
 	}
 }
 
+// Gemini 原生客户端(google-genai SDK、ADK、聚合网关的 Gemini 渠道)默认用
+// x-goog-api-key 传密钥,/v1beta 必须认它;?key= 查询串不认。
+func TestAuthMiddlewareAcceptsGoogleAPIKeyHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	key := "sk-test-goog-1234567890"
+	id, err := db.InsertAPIKey(context.Background(), "Gemini client", key)
+	if err != nil {
+		t.Fatalf("InsertAPIKey 返回错误: %v", err)
+	}
+
+	handler := NewHandler(nil, db, nil, nil)
+	router := gin.New()
+	router.Use(handler.authMiddleware())
+	router.GET("/v1beta/models", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"id": c.MustGet(contextAPIKeyID), "raw": c.MustGet("apiKey")})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
+	req.Header.Set("x-goog-api-key", key)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("x-goog-api-key status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		ID  int64  `json:"id"`
+		Raw string `json:"raw"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal 返回错误: %v", err)
+	}
+	if payload.ID != id || payload.Raw != key {
+		t.Fatalf("api key context = %+v, want id %d / raw %q", payload, id, key)
+	}
+
+	// 查询串形态不接受:密钥会进 URL 与访问日志。
+	req = httptest.NewRequest(http.MethodGet, "/v1beta/models?key="+key, nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("?key= status = %d, want 401", recorder.Code)
+	}
+}
+
+func TestDownstreamAuthorizationHeaderPrecedence(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
+	req.Header.Set("x-goog-api-key", "goog-key")
+	if got := downstreamAuthorizationHeader(req); got != "Bearer goog-key" {
+		t.Fatalf("x-goog-api-key alone = %q, want Bearer goog-key", got)
+	}
+	req.Header.Set("Authorization", "Bearer auth-key")
+	if got := downstreamAuthorizationHeader(req); got != "Bearer auth-key" {
+		t.Fatalf("Authorization must win over x-goog-api-key, got %q", got)
+	}
+	req.Header.Del("Authorization")
+	req.Header.Set("x-api-key", "anthropic-key")
+	if got := downstreamAuthorizationHeader(req); got != "Bearer anthropic-key" {
+		t.Fatalf("x-api-key must win over x-goog-api-key, got %q", got)
+	}
+}
+
 func TestAuthMiddlewareAcceptsOpenAIWebSocketSubprotocolAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
