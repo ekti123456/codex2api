@@ -144,7 +144,7 @@ func (h *Handler) nextAccountForSessionWithDispatchGuard(sessionID string, apiKe
 // ordinary scheduling when the remembered account is unavailable.
 func (h *Handler) takeUnlinkedRecentAccount(c *gin.Context, identity requestSessionIdentity, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, policy auth.DispatchPolicy) (*auth.Account, string) {
 	state := usageRequestDiagnosticState(c)
-	if h == nil || h.store == nil || h.cache == nil || c == nil || c.Request == nil || !identity.unlinkedFallbackOnly || identity.unlinkedFallbackScope == "" {
+	if h == nil || h.store == nil || h.cache == nil || c == nil || c.Request == nil || identity.requiresRootAccount || !identity.unlinkedFallbackOnly || identity.unlinkedFallbackScope == "" {
 		if state != nil {
 			state.Recent.Result = "not_applicable"
 		}

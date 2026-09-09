@@ -97,6 +97,9 @@ type newAPIPolicyMeta struct {
 	// fork. It identifies the source session without merging the fork's root.
 	ForkedFromSessionFingerprint string `json:"forked_from_session_fingerprint,omitempty"`
 	RootAccountWaitMillis        *int64 `json:"root_account_wait_millis,omitempty"`
+	OriginalRootFingerprint      string `json:"original_root_fingerprint,omitempty"`
+	RootAssociation              string `json:"root_association,omitempty"`
+	RootCandidateCount           *int   `json:"root_candidate_count,omitempty"`
 }
 
 type verifiedNewAPIPolicyContext struct {
@@ -526,6 +529,19 @@ func normalizeVerifiedNewAPIPolicyMeta(meta *newAPIPolicyMeta) bool {
 		}
 	}
 	meta.RootSessionFingerprint = strings.ToLower(strings.TrimSpace(meta.RootSessionFingerprint))
+	meta.OriginalRootFingerprint = strings.ToLower(strings.TrimSpace(meta.OriginalRootFingerprint))
+	if meta.OriginalRootFingerprint != "" {
+		decoded, err := hex.DecodeString(meta.OriginalRootFingerprint)
+		if err != nil || len(decoded) != 16 {
+			return false
+		}
+	}
+	if meta.RootAssociation, ok = normalizedVerifiedNewAPIIdentityText(meta.RootAssociation, 64); !ok {
+		return false
+	}
+	if meta.RootCandidateCount != nil && (*meta.RootCandidateCount < 0 || *meta.RootCandidateCount > 64) {
+		return false
+	}
 	meta.ForkedFromSessionFingerprint = strings.ToLower(strings.TrimSpace(meta.ForkedFromSessionFingerprint))
 	meta.RootSessionState = strings.ToLower(strings.TrimSpace(meta.RootSessionState))
 	meta.RootSessionRelation = strings.ToLower(strings.TrimSpace(meta.RootSessionRelation))

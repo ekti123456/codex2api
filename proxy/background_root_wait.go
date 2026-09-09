@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -12,12 +13,8 @@ import (
 const backgroundRootAccountWaitTimeout = 30 * time.Second
 
 func requiresBackgroundRootAccount(source string) bool {
-	switch strings.ToLower(strings.TrimSpace(source)) {
-	case "thread_title", "ambient_suggestions":
-		return true
-	default:
-		return false
-	}
+	source = strings.TrimSpace(source)
+	return source != "" && !strings.EqualFold(source, "user")
 }
 
 func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context, identity requestSessionIdentity) *api.APIError {
@@ -25,7 +22,9 @@ func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context
 		return nil
 	}
 	if !identity.relatedToRoot || !identity.stableIdentity || identity.unlinkedFallbackOnly || strings.TrimSpace(identity.affinityID) == "" {
-		return api.NewAPIError(api.ErrCodeInvalidRequest, "Background request has no valid main conversation root.", api.ErrorTypeInvalidRequest)
+		state := usageRequestDiagnosticState(requestContext)
+		state.RootAccountWait = "unresolved"
+		return api.NewAPIError(api.ErrCodeBackgroundRootUnavailable, "后台请求尚未关联有效主会话，请先发起主请求。请求已停止，未选择其他账号。", api.ErrorTypeInvalidRequest)
 	}
 	state := usageRequestDiagnosticState(requestContext)
 	deadline := state.StartedAt.Add(backgroundRootAccountWaitTimeout)
@@ -50,6 +49,10 @@ func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context
 	if requestContext.Request.Context().Err() != nil {
 		state.RootAccountWait = "canceled"
 		return api.NewAPIError(api.ErrCodeInvalidRequest, "Background request was canceled while waiting for its main conversation.", api.ErrorTypeInvalidRequest)
+	}
+	if !errors.Is(waitErr, context.DeadlineExceeded) {
+		state.RootAccountWait = "unavailable"
+		return api.NewAPIError(api.ErrCodeBackgroundRootUnavailable, "主会话绑定暂不可用或等待请求过多，请稍后再试。未选择其他账号。", api.ErrorTypeInvalidRequest)
 	}
 	return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "Main conversation account was not bound within the 30-second wait limit. Background request stopped; no other account was selected.", api.ErrorTypeInvalidRequest)
 }

@@ -122,3 +122,34 @@ func TestRootAccountWaitPeriodicallyChecksSharedBinding(test *testing.T) {
 		}
 	})
 }
+
+func TestRootAccountWaitCoalescesSharedReads(test *testing.T) {
+	synctest.Test(test, func(test *testing.T) {
+		store, account := newSessionCapacityTestStore(5)
+		sharedCache := &rootWaitTestCache{}
+		store.tokenCache = sharedCache
+		requestContext, cancel := context.WithTimeout(test.Context(), 30*time.Second)
+		defer cancel()
+		results := make(chan int64, 8)
+		for range 8 {
+			go func() {
+				accountID, _ := store.WaitForRootAccount(requestContext, "remote-root")
+				results <- accountID
+			}()
+		}
+		synctest.Wait()
+		time.Sleep(2500 * time.Millisecond)
+		sharedCache.ready.Store(true)
+		for range 8 {
+			if accountID := <-results; accountID != account.ID() {
+				test.Fatalf("wrong account: %d", accountID)
+			}
+		}
+		if reads := sharedCache.reads.Load(); reads != 4 {
+			test.Fatalf("same-root waits amplified shared reads: %d", reads)
+		}
+		if len(store.rootAccountWaiters) != 0 {
+			test.Fatal("shared waiter leaked")
+		}
+	})
+}

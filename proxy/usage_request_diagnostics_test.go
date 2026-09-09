@@ -139,7 +139,7 @@ func TestUsageRequestDiagnosticsRecentSelectionDecisions(test *testing.T) {
 			account := &auth.Account{DBID: 17, AccessToken: "test-token", Status: auth.StatusReady}
 			handler.store.AddAccount(account)
 			body := []byte(`{"model":"gpt-5.6-sol","input":"background"}`)
-			requestContext, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "subagent", RequestKind: "turn"})
+			requestContext, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "user", RequestKind: "turn"})
 			handler.primeNewAPIPolicyContext(requestContext, body)
 			identity := handler.resolveRequestSessionIdentityForContext(requestContext, body)
 			if !identity.unlinkedFallbackOnly || identity.unlinkedFallbackScope == "" {

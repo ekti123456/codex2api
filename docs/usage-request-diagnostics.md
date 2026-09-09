@@ -37,13 +37,19 @@
 
 此检查覆盖 Responses、compact、Chat、Messages 和 Responses WebSocket；复用现有模型白名单及账号级模型映射语义。获得既有被动模型豁免的标题/子请求不因此被拦截。账号冷却、限额、暂停等原有故障处理保持不变，不把它们误报成“没有模型”。检查使用现有绑定和账号模型配置，无数据库迁移或历史用量扫描。
 
-## 标题与后台建议的等待
+## 被动请求的主账号关联
 
-`thread_title` 和 `ambient_suggestions` 最多等待主根账号绑定 30 秒。NewAPI 已消耗的根解析等待通过签名 `root_account_wait_millis` 扣除；未携带该字段的旧网关/直连请求使用本地 30 秒上限。等待不创建窗口，不持有账号或 API Key 并发位，也不使用无根最近账号或随机选号。主根绑定一旦出现即继续，仅沿用该账号；其他来源不变。
+独立后台、Guardian、子代理、记忆整理、标题和建议等非 `user` 来源均要求明确主根关联，不能在根账号缺失后降级为最近账号或普通选号。NewAPI 在同平台/用户/Token/设备范围内只允许唯一有效主会话候选，并保存原始后台根到主根的关联；明确父子关系沿既有根/Thread/Turn 绑定继承，不以最近的其他会话替代父根。已关联的独立后台在最终诊断中可显示为 `related_internal`，原始 `thread_source` 不变。
 
-本地绑定/账号窗口准入发出按根通知，跨实例每秒只查询该根的缓存键，无每秒全账号扫描或用量表查询。断开请求会取消等待并清理订阅。超时返回 400 `codex_root_account_wait_timeout`；WebSocket 返回同错误码的错误帧并关闭当前请求。
+两端共享最多 30 秒的找根/账号绑定等待。NewAPI 已消耗的时间通过签名 `root_account_wait_millis` 扣除。无法证明主根关联的旧网关或直连独立请求返回 400 `codex_background_root_unavailable`，不会仅凭一个最近账号记录建立关联；有明确主根的请求才进入账号等待。等待不创建窗口，不持有上游账号或 API Key 并发位，超时返回 400 `codex_root_account_wait_timeout`。主账号不可用、被排除或不能执行当前模型时不改选其他账号；已有被动模型豁免和压缩绑定规则继续生效。
+
+本地绑定/账号窗口准入发出按根通知，同一根的并行等待共享检查结果，跨实例每秒只查对应缓存键，不按请求数量重复查询或扫描用量表。等待注册有数量上限，断开请求会取消等待并清理订阅。WebSocket 返回对应错误帧；Messages 错误保留 Anthropic 结构并附带可供网关停止重试的错误码。
 
 已保存的诊断增加 `root_account_wait`（`found`、`timeout`、`canceled`）和 `root_account_wait_millis`（本地实际等待毫秒数）。是否形成用量日志仍遵循原日志保存路径；未选号的超时以请求错误记录为准。绑定已存在但不可调度时仍按原有可用性/权限限制处理，不把所有 503 都改成 400。
+
+`resolved.original_root_fingerprint` 保留 NewAPI 解析前的原始根；`root_fingerprint` 是实际关联主根。`root_association` 记录 `same_scope_unique`、`existing_alias`、`thread_binding`、`turn_binding` 或 `explicit_parent`；`root_candidate_count` 是关联时的候选数。等待结果还包括 `unresolved`（关联未建立）和 `unavailable`（等待容量或服务不可用）。这些字段来自现有解析结果和签名元数据，不额外搜索日志或回填历史。
+
+上线先部署 Codex2API，再部署 NewAPI，须更新全部实例。只升级 NewAPI 不能保证旧 Codex2API 已移除普通选号出口；新 Codex2API 遇到尚未完成主根关联的旧 NewAPI 请求会明确拒绝。原有普通用户请求的选号与非模型故障恢复不变。
 
 ## 性能与隐私
 

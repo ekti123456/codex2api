@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codex2api/api"
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/codex2api/security"
@@ -165,17 +166,15 @@ func claudeHasAuthoritativeQuotaCooldown(account *auth.Account) bool {
 }
 
 // sendAnthropicError 发送 Anthropic 格式的错误响应
-func sendAnthropicError(c *gin.Context, statusCode int, errType, message string) {
+func sendAnthropicError(c *gin.Context, statusCode int, errType, message string, codes ...api.ErrorCode) {
 	if !claimContinuousRetryTerminal(c, continuousRetryProtocolAnthropic) {
 		return
 	}
-	c.JSON(statusCode, gin.H{
-		"type": "error",
-		"error": gin.H{
-			"type":    errType,
-			"message": message,
-		},
-	})
+	errorBody := gin.H{"type": errType, "message": message}
+	if len(codes) > 0 && codes[0] != "" {
+		errorBody["code"] = codes[0]
+	}
+	c.JSON(statusCode, gin.H{"type": "error", "error": errorBody})
 }
 
 // writeAnthropicStreamErrorEvent 通过流写入器发送 Anthropic 协议的流内 error 事件。
@@ -520,7 +519,7 @@ func (h *Handler) Messages(c *gin.Context) {
 		return
 	}
 	if waitError := h.waitForBackgroundRootAccount(c, sessionIdentity); waitError != nil {
-		sendAnthropicError(c, http.StatusBadRequest, string(waitError.Type), waitError.Message)
+		sendAnthropicError(c, http.StatusBadRequest, string(waitError.Type), waitError.Message, waitError.Code)
 		return
 	}
 	releaseAPIKeyConcurrency, ok := h.acquireAPIKeyConcurrency(c)

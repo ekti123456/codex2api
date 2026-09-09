@@ -1432,22 +1432,8 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	}
 	if identity.requiresRootAccount {
 		identity.unlinkedFallbackOnly = false
-	} else if h.passiveInternalModelsAllowed(c) && !identity.ownsRootBinding {
-		if !identity.relatedToRoot {
-			identity.unlinkedFallbackOnly = true
-		} else {
-			rootKey := sessionAffinityKey(identity.affinityID, requestAPIKeyID(c))
-			rootAccountID, found := h.store.AccountSessionAccountID(rootKey, time.Now())
-			if !found {
-				rootAccountID, found = h.store.SessionAffinityAccountID(rootKey)
-			}
-			recordUsageRootAccount(c, rootAccountID, found)
-			if !found {
-				identity.unlinkedFallbackOnly = true
-			}
-		}
 	}
-	identity.protectedRelatedLease = identity.relatedToRoot && passiveInternalRequestAuthorized(c)
+	identity.protectedRelatedLease = identity.relatedToRoot && (identity.requiresRootAccount || passiveInternalRequestAuthorized(c))
 	if identity.unlinkedFallbackOnly {
 		identity.affinityID = ""
 	}

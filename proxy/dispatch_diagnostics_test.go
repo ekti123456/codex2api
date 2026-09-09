@@ -127,15 +127,17 @@ func TestDispatchDiagnosticsModelAndGroupGateAttribution(test *testing.T) {
 func TestDispatchDiagnosticsDoNotBlameExemptPassiveModels(test *testing.T) {
 	handler := newRootlessPassiveModelTestHandler(test)
 	body := []byte(`{"model":"future-internal-model","input":"background"}`)
-	ctx, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "future_internal_kind", RequestKind: "turn"})
+	ctx, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved, RootSessionRelation: newAPIPolicyRootSessionRelationRelated, RootSessionFingerprint: promptSessionTestFingerprint(test.Name()), ThreadSource: "future_internal_kind", RequestKind: "turn"})
 	handler.primeNewAPIPolicyContext(ctx, body)
 	identity := handler.resolveRequestSessionIdentityForContext(ctx, body)
-	if !identity.unlinkedFallbackOnly || !passiveInternalRequestAuthorized(ctx) {
-		test.Fatal("test request did not acquire trusted rootless classification")
+	if identity.unlinkedFallbackOnly || !identity.requiresRootAccount || !passiveInternalRequestAuthorized(ctx) {
+		test.Fatal("test request did not acquire linked passive classification")
 	}
 	beginDispatchSelection(ctx)
 	account := &auth.Account{DBID: 17, AccessToken: "token", Models: []string{"different-model"}}
-	filter := handler.applyPassiveInternalModelRouting(ctx, "future-internal-model", identity, "", true, accountFilterForModel("future-internal-model"))
+	handler.store.AddAccount(account)
+	handler.store.BindSessionAffinity(sessionAffinityKey(identity.affinityID, 101), account, "")
+	filter := handler.applyPassiveInternalModelRouting(ctx, "future-internal-model", identity, capacityAwareSessionAffinityKey(identity, 101), true, accountFilterForModel("future-internal-model"))
 	if !filter(account) {
 		test.Fatal("diagnostic instrumentation disabled the passive exemption")
 	}
@@ -149,12 +151,14 @@ func TestDispatchDiagnosticsReachHTTPFailureFromActualSelection(test *testing.T)
 	handler.store.SetSchedulerEngine("legacy")
 	handler.store.AddAccount(&auth.Account{DBID: 17, AccessToken: "token", Status: auth.StatusReady, Disabled: 1})
 	body := []byte(`{"model":"gpt-5.5","input":"hello"}`)
-	ctx, recorder := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, newAPIPolicyMeta{ChannelID: 7, RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "future_internal_kind", RequestKind: "turn"})
+	fingerprint := promptSessionTestFingerprint(test.Name())
+	handler.store.BindSessionAffinity(sessionAffinityKey("newapi-root-session:"+fingerprint, 101), handler.store.FindByID(17), "")
+	ctx, recorder := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, newAPIPolicyMeta{ChannelID: 7, RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved, RootSessionRelation: newAPIPolicyRootSessionRelationRelated, RootSessionFingerprint: fingerprint, ThreadSource: "future_internal_kind", RequestKind: "turn"})
 	handler.Responses(ctx)
 	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get(dispatchDiagnosticHeader) == "" {
 		test.Fatalf("missing protected final dispatch failure: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if diagnostic := selectionTraceForRequest(ctx).Snapshot(); diagnostic.Reason != "account_disabled" {
+	if diagnostic := selectionTraceForRequest(ctx).Snapshot(); diagnostic.Reason != "root_owner_unavailable" || diagnostic.RootAccount != 17 || len(diagnostic.Reasons) != 1 || diagnostic.Reasons[0] != "account_disabled" {
 		test.Fatalf("handler lost the actual selection reason: %+v", diagnostic)
 	}
 	if strings.Contains(recorder.Body.String(), "account_disabled") {

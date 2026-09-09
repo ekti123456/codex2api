@@ -36,8 +36,8 @@ func TestClaudeSessionHintPreservesNewAPIRootRouting(test *testing.T) {
 				if identity.affinityID != "newapi-root-session:"+fingerprint {
 					test.Fatalf("Claude hint replaced the verified NewAPI root: %+v", identity)
 				}
-			} else if identity.affinityID != "" || !identity.unlinkedFallbackOnly {
-				test.Fatalf("Claude hint bypassed the rootless fallback boundary: %+v", identity)
+			} else if identity.affinityID != "" || identity.unlinkedFallbackOnly || !identity.requiresRootAccount {
+				test.Fatalf("Claude hint bypassed the main-root requirement: %+v", identity)
 			}
 		})
 	}

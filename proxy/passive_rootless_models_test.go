@@ -51,63 +51,50 @@ func signedRootlessPassiveModelContext(t *testing.T, method, path string, body [
 	return requestContext, recorder
 }
 
-func TestRootlessPassiveModelsReuseRecentAccountWithoutModelNamesOrBindings(t *testing.T) {
-	for _, rootState := range []string{newAPIPolicyRootSessionUnavailable, newAPIPolicyRootSessionResolved, "independent"} {
-		for _, model := range []string{"gpt-5.6-luna", "future-internal-model-2030"} {
-			t.Run(rootState+"/"+model, func(t *testing.T) {
-				handler := newRootlessPassiveModelTestHandler(t)
-				account := &auth.Account{DBID: 17, AccessToken: "recent", Status: auth.StatusReady, Models: []string{"gpt-5.6-sol"}}
-				handler.store.AddAccount(account)
-				body := []byte(`{"model":"` + model + `","input":"background task"}`)
-				meta := newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: rootState, ThreadSource: "future_internal_kind", RequestKind: "turn"}
-				if rootState == newAPIPolicyRootSessionResolved {
-					meta.RootSessionRelation = newAPIPolicyRootSessionRelationRelated
-					meta.RootSessionFingerprint = promptSessionTestFingerprint("missing-root-binding")
-				}
-				if rootState == "independent" {
-					meta.RootSessionState = newAPIPolicyRootSessionResolved
-					meta.RootSessionRelation = newAPIPolicyRootSessionRelationRoot
-					meta.RootSessionFingerprint = promptSessionTestFingerprint("independent-background-root")
-					meta.SessionAccounting = newAPISessionAccountingBypass
-					meta.PassiveFeature = newAPIPassiveFeatureIndependent
-				}
-				requestContext, _ := signedRootlessPassiveModelContext(t, http.MethodPost, "/v1/responses", body, meta)
-				handler.primeNewAPIPolicyContext(requestContext, body)
-				identity := handler.resolveRequestSessionIdentityForContext(requestContext, body)
-				if !passiveInternalRequestAuthorized(requestContext) || !identity.unlinkedFallbackOnly || identity.unlinkedFallbackScope == "" {
-					t.Fatalf("rootless internal classification = %+v", identity)
-				}
-				key := capacityAwareSessionAffinityKey(identity, 101)
-				if key != "" {
-					t.Fatalf("rootless request acquired durable affinity %q", key)
-				}
-				filter := handler.applyPassiveInternalModelRouting(requestContext, model, identity, key, true, accountFilterForModel(model))
-				if !filter(account) || account.SupportsCodexModel(model) {
-					t.Fatal("test did not exercise a model whitelist exemption")
-				}
-				observation, err := json.Marshal(unlinkedFallbackRuntimeRecord{AccountID: account.ID(), ObservedAt: time.Now().Add(-time.Second)})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := handler.cache.SetRuntime(t.Context(), unlinkedFallbackRuntimeNamespace, identity.unlinkedFallbackScope, observation, time.Minute); err != nil {
-					t.Fatal(err)
-				}
-				selected, proxyURL := handler.takeUnlinkedRecentAccount(requestContext, identity, 101, nil, filter, auth.DispatchPolicyStandard)
-				if selected != account {
-					t.Fatalf("recent account = %+v, want account %d", selected, account.ID())
-				}
-				handler.bindAccountSession(requestContext, key, selected, proxyURL)
-				handler.store.Release(selected)
-				rootKey := sessionAffinityKey("newapi-root-session:"+meta.RootSessionFingerprint, 101)
-				if _, found := handler.store.SessionAffinityAccountID(rootKey); found {
-					t.Fatal("temporary scheduling manufactured a root binding")
-				}
-				if selected, _ := handler.takeUnlinkedRecentAccount(requestContext, identity, 101, map[int64]bool{account.ID(): true}, filter, auth.DispatchPolicyStandard); selected != nil {
-					handler.store.Release(selected)
-					t.Fatal("model exemption bypassed account exclusion")
-				}
-			})
-		}
+func TestRootlessPassiveRequestsRejectRecentAccountWithoutMainBinding(test *testing.T) {
+	for _, state := range []string{"unavailable", "related", "independent"} {
+		test.Run(state, func(test *testing.T) {
+			handler := newRootlessPassiveModelTestHandler(test)
+			account := &auth.Account{DBID: 17, AccessToken: "recent", Status: auth.StatusReady, Models: []string{"gpt-5.6-sol"}}
+			handler.store.AddAccount(account)
+			remaining := int64(0)
+			meta := newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable,
+				ThreadSource: "agent_created_thread", RequestKind: "turn", RootAccountWaitMillis: &remaining}
+			if state != "unavailable" {
+				meta.RootSessionState = newAPIPolicyRootSessionResolved
+				meta.RootSessionFingerprint = promptSessionTestFingerprint("background-root")
+				meta.RootSessionRelation = newAPIPolicyRootSessionRelationRelated
+			}
+			if state == "independent" {
+				meta.RootSessionRelation = newAPIPolicyRootSessionRelationRoot
+				meta.SessionAccounting = newAPISessionAccountingBypass
+				meta.PassiveFeature = newAPIPassiveFeatureIndependent
+			}
+			body := []byte(`{"model":"future-internal-model-2030","input":"background"}`)
+			requestContext, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, meta)
+			handler.primeNewAPIPolicyContext(requestContext, body)
+			identity := handler.resolveRequestSessionIdentityForContext(requestContext, body)
+			if !identity.requiresRootAccount || identity.unlinkedFallbackOnly {
+				test.Fatalf("background may use ordinary scheduling: %+v", identity)
+			}
+			observation, err := json.Marshal(unlinkedFallbackRuntimeRecord{AccountID: account.ID(), ObservedAt: time.Now().Add(-time.Second)})
+			if err != nil {
+				test.Fatal(err)
+			}
+			if err := handler.cache.SetRuntime(test.Context(), unlinkedFallbackRuntimeNamespace, identity.unlinkedFallbackScope, observation, time.Minute); err != nil {
+				test.Fatal(err)
+			}
+			if selected, _ := handler.takeUnlinkedRecentAccount(requestContext, identity, 101, nil, nil, auth.DispatchPolicyStandard); selected != nil {
+				test.Fatal("background borrowed an unproven recent account")
+			}
+			if waitError := handler.waitForBackgroundRootAccount(requestContext, identity); waitError == nil {
+				test.Fatal("background proceeded without a main binding")
+			}
+			filter := handler.applyPassiveInternalModelRouting(requestContext, "future-internal-model-2030", identity, capacityAwareSessionAffinityKey(identity, 101), true, accountFilterForModel("future-internal-model-2030"))
+			if filter(account) {
+				test.Fatal("unbound background selected another account")
+			}
+		})
 	}
 }
 
@@ -150,7 +137,7 @@ func TestRootlessPassiveModelExemptionRequiresTrustedInternalClassification(t *t
 	}
 }
 
-func TestRootlessPassiveModelsReachHTTPUpstreamOutsideModelCatalog(t *testing.T) {
+func TestLinkedPassiveModelsReachHTTPUpstreamOutsideModelCatalog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var upstreamCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -180,12 +167,14 @@ func TestRootlessPassiveModelsReachHTTPUpstreamOutsideModelCatalog(t *testing.T)
 					DBID: 17, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: upstream.URL,
 					APIKey: "rootless-key", Models: []string{"gpt-5.6-sol"},
 				})
+				handler.store.BindSessionAffinity(sessionAffinityKey("newapi-root-session:"+promptSessionTestFingerprint(t.Name()), 101), handler.store.FindByID(17), "")
 				body := []byte(`{"model":"` + model + `","input":"background task"}`)
 				if path == "/v1/chat/completions" || path == "/v1/messages" {
 					body = []byte(`{"model":"` + model + `","max_tokens":16,"messages":[{"role":"user","content":"background task"}]}`)
 				}
 				requestContext, recorder := signedRootlessPassiveModelContext(t, http.MethodPost, path, body, newAPIPolicyMeta{
-					RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "future_background_feature",
+					RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved, ThreadSource: "future_background_feature",
+					RootSessionRelation: newAPIPolicyRootSessionRelationRelated, RootSessionFingerprint: promptSessionTestFingerprint(t.Name()),
 				})
 				before := upstreamCalls.Load()
 				switch path {
@@ -209,7 +198,7 @@ func TestRootlessPassiveModelsReachHTTPUpstreamOutsideModelCatalog(t *testing.T)
 	}
 }
 
-func TestRootlessPassiveWebSocketAcceptsNewModelWithoutCatalogEntry(t *testing.T) {
+func TestLinkedPassiveWebSocketAcceptsNewModelWithoutCatalogEntry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var upstreamCalls atomic.Int32
 	previousExecute := WebsocketExecuteFunc
@@ -223,6 +212,7 @@ func TestRootlessPassiveWebSocketAcceptsNewModelWithoutCatalogEntry(t *testing.T
 	handler.store.AddAccount(&auth.Account{
 		DBID: 17, AccessToken: "rootless-token", AccountID: "rootless-account", Models: []string{"gpt-5.6-sol"},
 	})
+	handler.store.BindSessionAffinity(sessionAffinityKey("newapi-root-session:"+promptSessionTestFingerprint(t.Name()), 101), handler.store.FindByID(17), "")
 	router := gin.New()
 	router.GET("/v1/responses", func(requestContext *gin.Context) {
 		requestContext.Set(contextAPIKeyID, int64(101))
@@ -231,7 +221,8 @@ func TestRootlessPassiveWebSocketAcceptsNewModelWithoutCatalogEntry(t *testing.T
 	server := httptest.NewServer(router)
 	defer server.Close()
 	requestContext, _ := signedRootlessPassiveModelContext(t, http.MethodGet, "/v1/responses", nil, newAPIPolicyMeta{
-		RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "future_background_feature",
+		RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved, ThreadSource: "future_background_feature",
+		RootSessionRelation: newAPIPolicyRootSessionRelationRelated, RootSessionFingerprint: promptSessionTestFingerprint(t.Name()),
 	})
 	connection, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", requestContext.Request.Header)
 	if err != nil {
@@ -285,8 +276,11 @@ func TestRootlessPassiveModelRoutingSupportsNativeIndependentRequests(t *testing
 	requestContext.Request.Header.Set("Authorization", "Bearer direct-rootless-key")
 	requestContext.Set(contextAPIKeyID, int64(101))
 	identity := handler.resolveRequestSessionIdentityForContext(requestContext, body)
-	if !passiveInternalRequestAuthorized(requestContext) || !identity.unlinkedFallbackOnly || !identity.bypassWindowAccounting {
+	if !passiveInternalRequestAuthorized(requestContext) || !identity.requiresRootAccount || identity.unlinkedFallbackOnly || !identity.bypassWindowAccounting {
 		t.Fatalf("native independent classification = %+v", identity)
+	}
+	if handler.waitForBackgroundRootAccount(requestContext, identity) == nil {
+		t.Fatal("native independent request proceeded without a verified main association")
 	}
 	validate := handler.passiveInternalModelValidator(requestContext, body, handler.modelValidator([]string{"gpt-5.6-sol"}))
 	if validationError := validate(gjson.GetBytes(body, "model"), "model"); validationError != nil {

@@ -17,7 +17,7 @@ import (
 func TestBackgroundRootWaitBudgetAndRouting(test *testing.T) {
 	runtimeCache := cache.NewMemory(1)
 	test.Cleanup(func() { _ = runtimeCache.Close() })
-	for _, source := range []string{"thread_title", "ambient_suggestions"} {
+	for _, source := range []string{"thread_title", "ambient_suggestions", "agent_created_thread", "guardian_review", "memory_consolidation", "subagent", "thread_description", "thread_summary"} {
 		for _, scenario := range []string{"late root", "timeout", "shared budget", "already bound"} {
 			test.Run(source+"/"+scenario, func(test *testing.T) {
 				synctest.Test(test, func(test *testing.T) {
@@ -90,9 +90,9 @@ func TestBackgroundRootWaitBudgetAndRouting(test *testing.T) {
 	}
 }
 
-func TestBackgroundRootWaitDoesNotChangeOtherSources(test *testing.T) {
+func TestBackgroundRootWaitDoesNotChangeUserRequests(test *testing.T) {
 	handler := newRootlessPassiveModelTestHandler(test)
-	for _, source := range []string{"user", "memory_consolidation", "thread_description", "thread_title_reconsideration", "guardian_review"} {
+	for _, source := range []string{"user", ""} {
 		meta := newAPIPolicyMeta{
 			RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved,
 			RootSessionRelation:    newAPIPolicyRootSessionRelationRelated,
@@ -109,7 +109,7 @@ func TestBackgroundRootWaitDoesNotChangeOtherSources(test *testing.T) {
 }
 
 func TestBackgroundRootTimeoutPrecedesAPIKeyConcurrency(test *testing.T) {
-	for _, source := range []string{"thread_title", "ambient_suggestions"} {
+	for _, source := range []string{"thread_title", "ambient_suggestions", "agent_created_thread", "guardian_review", "memory_consolidation"} {
 		for _, path := range []string{"/v1/responses", "/v1/responses/compact", "/v1/chat/completions", "/v1/messages"} {
 			test.Run(source+path, func(test *testing.T) {
 				handler := newRootlessPassiveModelTestHandler(test)

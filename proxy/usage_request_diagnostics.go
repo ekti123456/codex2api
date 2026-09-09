@@ -14,24 +14,27 @@ import (
 const usageRequestDiagnosticsContextKey = "usage_request_diagnostics_v1"
 
 type usageRequestResolution struct {
-	ThreadSource        string `json:"thread_source"`
-	RequestKind         string `json:"request_kind"`
-	SubagentKind        string `json:"subagent_kind"`
-	IdentitySource      string `json:"identity_source"`
-	PolicyStatus        string `json:"newapi_policy_status"`
-	RootState           string `json:"root_state"`
-	RootID              string `json:"root_session_id"`
-	RootFingerprint     string `json:"root_fingerprint"`
-	WindowKeyHash       string `json:"window_key_hash"`
-	AffinityKeyHash     string `json:"affinity_key_hash"`
-	Related             bool   `json:"related_to_root"`
-	OwnsUserRoot        bool   `json:"owns_user_root"`
-	Stable              bool   `json:"stable_identity"`
-	Fingerprint         bool   `json:"has_request_fingerprint"`
-	Passive             bool   `json:"passive_authorized"`
-	WindowBypass        bool   `json:"window_accounting_bypass"`
-	Unlinked            bool   `json:"unlinked_fallback_only"`
-	RequiresRootAccount bool   `json:"requires_root_account"`
+	ThreadSource            string `json:"thread_source"`
+	RequestKind             string `json:"request_kind"`
+	SubagentKind            string `json:"subagent_kind"`
+	IdentitySource          string `json:"identity_source"`
+	PolicyStatus            string `json:"newapi_policy_status"`
+	RootState               string `json:"root_state"`
+	RootID                  string `json:"root_session_id"`
+	RootFingerprint         string `json:"root_fingerprint"`
+	OriginalRootFingerprint string `json:"original_root_fingerprint,omitempty"`
+	RootAssociation         string `json:"root_association,omitempty"`
+	RootCandidateCount      *int   `json:"root_candidate_count,omitempty"`
+	WindowKeyHash           string `json:"window_key_hash"`
+	AffinityKeyHash         string `json:"affinity_key_hash"`
+	Related                 bool   `json:"related_to_root"`
+	OwnsUserRoot            bool   `json:"owns_user_root"`
+	Stable                  bool   `json:"stable_identity"`
+	Fingerprint             bool   `json:"has_request_fingerprint"`
+	Passive                 bool   `json:"passive_authorized"`
+	WindowBypass            bool   `json:"window_accounting_bypass"`
+	Unlinked                bool   `json:"unlinked_fallback_only"`
+	RequiresRootAccount     bool   `json:"requires_root_account"`
 }
 
 type usageRequestAuthorization struct {
@@ -271,6 +274,12 @@ func (h *Handler) captureUsageRequestResolution(c *gin.Context, body []byte, ide
 	}
 	state.Resolved = resolution
 	if policy.MetaVerified {
+		resolution.OriginalRootFingerprint = policy.Meta.OriginalRootFingerprint
+		resolution.RootAssociation = policy.Meta.RootAssociation
+		if policy.Meta.RootCandidateCount != nil {
+			count := *policy.Meta.RootCandidateCount
+			resolution.RootCandidateCount = &count
+		}
 		state.NewAPIRequestID = diagnosticRequestID(policy.Identity.RequestID)
 		state.Incoming["signed_newapi"] = map[string]string{
 			"thread_source": diagnosticLabel(policy.Meta.ThreadSource), "request_kind": diagnosticLabel(policy.Meta.RequestKind),
