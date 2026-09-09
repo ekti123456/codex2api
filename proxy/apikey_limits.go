@@ -287,7 +287,7 @@ func SendAPIKeyLimitError(c *gin.Context, status int, msg string) {
 	api.SendErrorWithStatus(c, api.NewAPIError(errCode, msg, errType), status)
 }
 
-const accountSessionCapacityExceededMessage = "上游账号的活跃会话容量已满，请复用已有会话或稍后再试"
+const accountSessionCapacityExceededMessage = "上游账号的模型活跃会话容量已满，请使用其他模型，或者扩容窗口"
 
 // SendAccountSessionCapacityError reports deterministic account-session
 // exhaustion as a non-retryable request error. Codex clients retry HTTP 429
