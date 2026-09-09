@@ -934,6 +934,9 @@ func mergeGrokNativeUsage(current, next *UsageInfo) *UsageInfo {
 	current.ReasoningTokens = max(current.ReasoningTokens, next.ReasoningTokens)
 	current.CachedTokens = max(current.CachedTokens, next.CachedTokens)
 	current.CacheWriteTokens = max(current.CacheWriteTokens, next.CacheWriteTokens)
+	current.ImageInputTokens = max(current.ImageInputTokens, next.ImageInputTokens)
+	current.ImageOutputTokens = max(current.ImageOutputTokens, next.ImageOutputTokens)
+	current.CachedImageInputTokens = max(current.CachedImageInputTokens, next.CachedImageInputTokens)
 	current.CacheWrite5mTokens = max(current.CacheWrite5mTokens, next.CacheWrite5mTokens)
 	current.CacheWrite1hTokens = max(current.CacheWrite1hTokens, next.CacheWrite1hTokens)
 	current.TotalTokens = max(current.TotalTokens, next.TotalTokens)
@@ -4334,6 +4337,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					logInput.PromptTokens, logInput.CompletionTokens, logInput.TotalTokens = usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens
 					logInput.InputTokens, logInput.OutputTokens = usage.InputTokens, usage.OutputTokens
 					logInput.ReasoningTokens, logInput.CachedTokens = usage.ReasoningTokens, usage.CachedTokens
+					logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 				}
 				if outcome.logStatusCode != http.StatusOK {
 					logInput.UpstreamErrorKind = outcome.failureKind
@@ -4750,6 +4754,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				logInput.OutputTokens = usage.OutputTokens
 				logInput.ReasoningTokens = usage.ReasoningTokens
 				logInput.CachedTokens = usage.CachedTokens
+				logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 			}
 			applyImageUsageLogInfo(logInput, imageLogInfo)
 			h.logUsageForRequest(c, logInput)
@@ -5669,6 +5674,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			logInput.OutputTokens = usage.OutputTokens
 			logInput.ReasoningTokens = usage.ReasoningTokens
 			logInput.CachedTokens = usage.CachedTokens
+			logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 		}
 		applyImageUsageLogInfo(logInput, imageLogInfo)
 		h.logUsageForRequest(c, logInput)
@@ -7056,6 +7062,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				logInput.PromptTokens, logInput.CompletionTokens, logInput.TotalTokens = usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens
 				logInput.InputTokens, logInput.OutputTokens = usage.InputTokens, usage.OutputTokens
 				logInput.ReasoningTokens, logInput.CachedTokens = usage.ReasoningTokens, usage.CachedTokens
+				logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 			}
 			if outcome.logStatusCode != http.StatusOK {
 				logInput.UpstreamErrorKind = outcome.failureKind
@@ -7590,6 +7597,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			logInput.OutputTokens = usage.OutputTokens
 			logInput.ReasoningTokens = usage.ReasoningTokens
 			logInput.CachedTokens = usage.CachedTokens
+			logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 		}
 		h.logUsageForRequest(c, logInput)
 

@@ -8999,6 +8999,8 @@ type settingsResponse struct {
 	MaxConcurrency                      int    `json:"max_concurrency"`
 	GlobalRPM                           int    `json:"global_rpm"`
 	TestModel                           string `json:"test_model"`
+	CodexImagesMainModel                string `json:"codex_images_main_model"`
+	CodexImagesDefaultMainModel         string `json:"codex_images_default_main_model"`
 	TestContent                         string `json:"test_content"`
 	TestConcurrency                     int    `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes    int    `json:"background_refresh_interval_minutes"`
@@ -9179,6 +9181,7 @@ type updateSettingsReq struct {
 	MaxConcurrency                      *int                             `json:"max_concurrency"`
 	GlobalRPM                           *int                             `json:"global_rpm"`
 	TestModel                           *string                          `json:"test_model"`
+	CodexImagesMainModel                *string                          `json:"codex_images_main_model"`
 	TestContent                         *string                          `json:"test_content"`
 	TestConcurrency                     *int                             `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes    *int                             `json:"background_refresh_interval_minutes"`
@@ -9992,6 +9995,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		MaxConcurrency:                      h.store.GetMaxConcurrency(),
 		GlobalRPM:                           h.rateLimiter.GetRPM(),
 		TestModel:                           h.store.GetTestModel(),
+		CodexImagesMainModel:                runtimeCfg.CodexImagesMainModel,
+		CodexImagesDefaultMainModel:         proxy.ImagesDefaultMainModel(),
 		TestContent:                         h.store.GetTestContent(),
 		TestConcurrency:                     h.store.GetTestConcurrency(),
 		ResponseCacheLocalMaxBytes:          responseCacheSettings.LocalMaxBytes,
@@ -10275,6 +10280,14 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "response_cache_config_generation 为只读字段")
 		return
 	}
+	if req.CodexImagesMainModel != nil {
+		normalized, err := proxy.NormalizeImagesMainModel(*req.CodexImagesMainModel)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.CodexImagesMainModel = &normalized
+	}
 	modelCooldownUpdateRequested := req.RelayModelCooldownMode != nil ||
 		req.RelayModelCooldownSeconds != nil ||
 		req.RelayModelCooldownBackoffEnabled != nil ||
@@ -10424,6 +10437,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	persistedAutoResetCreditsEnabled := false
 	persistedAutoResetCreditsBeforeExpiryMin := 60
 	persistedAutoActivate5hWindowEnabled := false
+	codexImagesMainModel := ""
 	persistedUTLSShutdownTimeoutMinutes := database.NormalizeUTLSShutdownTimeoutMinutes(0)
 	modelsListReadMaxBytes := database.DefaultModelsListReadMaxBytes
 	sessionSlotBufferEnabled := h.store.SessionSlotBufferEnabled()
@@ -10447,6 +10461,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		persistedAutoResetCreditsEnabled = existingSettings.AutoResetCreditsEnabled
 		persistedAutoResetCreditsBeforeExpiryMin = existingSettings.AutoResetCreditsBeforeExpiryMin
 		persistedAutoActivate5hWindowEnabled = existingSettings.AutoActivate5hWindowEnabled
+		codexImagesMainModel = existingSettings.CodexImagesMainModel
 		persistedUTLSShutdownTimeoutMinutes = database.NormalizeUTLSShutdownTimeoutMinutes(existingSettings.UTLSShutdownTimeoutMinutes)
 		modelsListReadMaxBytes = database.NormalizeModelsListReadMaxBytes(existingSettings.ModelsListReadMaxBytes)
 		sessionSlotBufferEnabled = existingSettings.SessionSlotBufferEnabled
@@ -10454,6 +10469,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if req.SessionSlotBufferEnabled != nil {
 		sessionSlotBufferEnabled = *req.SessionSlotBufferEnabled
+	}
+	if req.CodexImagesMainModel != nil {
+		codexImagesMainModel = *req.CodexImagesMainModel
 	}
 	if req.SessionSlotBufferSeconds != nil {
 		sessionSlotBufferSeconds = database.NormalizeSessionSlotBufferSeconds(*req.SessionSlotBufferSeconds)
@@ -11492,6 +11510,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		MaxConcurrency:                      h.store.GetMaxConcurrency(),
 		GlobalRPM:                           h.rateLimiter.GetRPM(),
 		TestModel:                           h.store.GetTestModel(),
+		CodexImagesMainModel:                codexImagesMainModel,
 		TestContent:                         h.store.GetTestContent(),
 		TestConcurrency:                     h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes:    h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -11612,6 +11631,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
+		if req.CodexImagesMainModel != nil {
+			writeError(c, http.StatusInternalServerError, "保存生图设置失败，文本驱动模型未生效")
+			return
+		}
 		if req.SessionSlotBufferEnabled != nil || req.SessionSlotBufferSeconds != nil {
 			writeError(c, http.StatusInternalServerError, "保存会话并发槽缓冲设置失败，设置未生效")
 			return
@@ -11651,6 +11674,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 			h.store.SetSessionSlotBuffer(time.Duration(sessionSlotBufferSeconds) * time.Second)
 			log.Printf("设置已更新: session_slot_buffer_seconds = %d", sessionSlotBufferSeconds)
 		}
+		runtimeCfg.CodexImagesMainModel = codexImagesMainModel
+		proxy.UpdateRuntimeSettings(func(current proxy.RuntimeSettings) proxy.RuntimeSettings {
+			current.CodexImagesMainModel = codexImagesMainModel
+			return current
+		})
 		if req.SessionSlotBufferEnabled != nil {
 			h.store.SetSessionSlotBufferEnabled(sessionSlotBufferEnabled)
 			log.Printf("设置已更新: session_slot_buffer_enabled = %t", sessionSlotBufferEnabled)
@@ -11791,6 +11819,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		MaxConcurrency:                      h.store.GetMaxConcurrency(),
 		GlobalRPM:                           h.rateLimiter.GetRPM(),
 		TestModel:                           h.store.GetTestModel(),
+		CodexImagesMainModel:                runtimeCfg.CodexImagesMainModel,
+		CodexImagesDefaultMainModel:         proxy.ImagesDefaultMainModel(),
 		TestContent:                         h.store.GetTestContent(),
 		TestConcurrency:                     h.store.GetTestConcurrency(),
 		ResponseCacheLocalMaxBytes:          responseCacheSettings.LocalMaxBytes,

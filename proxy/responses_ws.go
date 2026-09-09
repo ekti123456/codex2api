@@ -1488,6 +1488,7 @@ func (h *Handler) streamResponsesWSUpstream(
 		logInput.OutputTokens = usage.OutputTokens
 		logInput.ReasoningTokens = usage.ReasoningTokens
 		logInput.CachedTokens = usage.CachedTokens
+		logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
 	}
 	applyImageUsageLogInfo(logInput, imageLogInfo)
 	h.logUsageForRequest(c, logInput)
