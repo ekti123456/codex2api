@@ -155,8 +155,8 @@ func TestWindowExpansionQuoteAdmissionAndFixedTariff(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	if state.Windows[failedStatus.SessionHash] != nil {
-		test.Fatal("failed request retained its confirmed billing grant")
+	if state.Windows[failedStatus.SessionHash] == nil || !state.Windows[failedStatus.SessionHash].Confirmed {
+		test.Fatal("failed request removed a confirmed billing grant")
 	}
 }
 

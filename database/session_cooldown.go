@@ -39,6 +39,7 @@ func (db *DB) ensureSessionCooldownTables(ctx context.Context) error {
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS prompt_session_cooldowns (subject VARCHAR(255) PRIMARY KEY, state TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS prompt_user_window_grants (subject VARCHAR(255) PRIMARY KEY, state TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS prompt_root_naming_claims (subject VARCHAR(255) NOT NULL, root VARCHAR(64) NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(subject, root))`,
 		`CREATE TABLE IF NOT EXISTS account_session_usage_successes (
 			account_id BIGINT NOT NULL, period_id VARCHAR(64) NOT NULL,
 			eligible_after_ms BIGINT NOT NULL, PRIMARY KEY(account_id, period_id))`,

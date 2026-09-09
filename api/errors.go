@@ -135,7 +135,8 @@ func HTTPStatusCode(code ErrorCode) int {
 		return http.StatusConflict
 	case ErrCodeInvalidRequest, ErrCodeInvalidParameter, ErrCodeMissingField, ErrCodeInvalidFieldType,
 		ErrCodeInvalidFieldFormat, ErrCodeContextLengthExceeded, ErrCodeUnsupportedModel,
-		ErrCodeAccountSessionCapacity, ErrCodeRootAccountWaitTimeout, ErrCodeBackgroundRootUnavailable, ErrCodeSessionModelUnavailable:
+		ErrCodeAccountSessionCapacity, ErrCodeRootAccountWaitTimeout, ErrCodeBackgroundRootUnavailable, ErrCodeSessionModelUnavailable,
+		"codex_root_already_named", "window_billing_refresh_required", "window_expansion_invalid":
 		return http.StatusBadRequest
 	case ErrCodeServiceUnavailable:
 		return http.StatusServiceUnavailable

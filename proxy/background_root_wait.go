@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const backgroundRootAccountWaitTimeout = 30 * time.Second
+const backgroundRootAccountWaitTimeout = 60 * time.Second
 
 func requiresBackgroundRootAccount(source string) bool {
 	source = strings.TrimSpace(source)
@@ -43,7 +43,7 @@ func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context
 	if waitErr == nil {
 		state.RootAccountWait = "found"
 		recordUsageRootAccount(requestContext, accountID, true)
-		return nil
+		return handler.waitForBackgroundWindowGrant(waitContext, requestContext)
 	}
 	state.RootAccountWait = "timeout"
 	if requestContext.Request.Context().Err() != nil {
@@ -54,5 +54,5 @@ func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context
 		state.RootAccountWait = "unavailable"
 		return api.NewAPIError(api.ErrCodeBackgroundRootUnavailable, "主会话绑定暂不可用或等待请求过多，请稍后再试。未选择其他账号。", api.ErrorTypeInvalidRequest)
 	}
-	return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "Main conversation account was not bound within the 30-second wait limit. Background request stopped; no other account was selected.", api.ErrorTypeInvalidRequest)
+	return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "Main conversation account was not bound within the 60-second wait limit. Background request stopped; no other account was selected.", api.ErrorTypeInvalidRequest)
 }

@@ -67,7 +67,7 @@ func TestBackgroundRootWaitBudgetAndRouting(test *testing.T) {
 						handler.store.BindSessionAffinity(rootKey, root, "")
 					}
 					waitError := <-result
-					wantDuration := map[string]time.Duration{"late root": 10 * time.Second, "timeout": 30 * time.Second, "shared budget": 7 * time.Second}[scenario]
+					wantDuration := map[string]time.Duration{"late root": 10 * time.Second, "timeout": 60 * time.Second, "shared budget": 7 * time.Second}[scenario]
 					if elapsed := time.Since(started); elapsed != wantDuration {
 						test.Fatalf("wait=%v, want %v", elapsed, wantDuration)
 					}
@@ -138,7 +138,7 @@ func TestBackgroundRootTimeoutPrecedesAPIKeyConcurrency(test *testing.T) {
 					"/v1/chat/completions": handler.ChatCompletions, "/v1/messages": handler.Messages,
 				}[path]
 				endpoint(requestContext)
-				if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "30-second wait limit") {
+				if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "60-second wait limit") {
 					test.Fatalf("root timeout was not enforced before concurrency: %d %s", recorder.Code, recorder.Body.String())
 				}
 			})

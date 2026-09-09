@@ -73,7 +73,7 @@ func (h *Handler) inspectPromptFilterOpenAIWithBlockWriter(c *gin.Context, rawBo
 		return true
 	}
 	if apiErr := h.requestWindowGrantError(c); apiErr != nil {
-		api.SendErrorWithStatus(c, apiErr, http.StatusBadRequest)
+		api.SendError(c, apiErr)
 		return true
 	}
 	if h.rejectLockedPromptConversation(c, cfg, signedBody, rawBody, endpoint, model) {
@@ -163,7 +163,7 @@ func (h *Handler) inspectPromptFilterAnthropic(c *gin.Context, rawBody []byte, e
 		return true
 	}
 	if apiErr := h.requestWindowGrantError(c); apiErr != nil {
-		sendAnthropicError(c, http.StatusBadRequest, "invalid_request_error", apiErr.Message)
+		sendAnthropicError(c, api.HTTPStatusCode(apiErr.Code), string(apiErr.Type), apiErr.Message, apiErr.Code)
 		return true
 	}
 	if h.rejectLockedPromptConversation(c, cfg, signedBody, rawBody, endpoint, model) {

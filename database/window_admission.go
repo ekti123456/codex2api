@@ -14,13 +14,15 @@ type UserWindowGrant struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 	PendingUntil time.Time `json:"pending_until"`
 	Confirmed    bool      `json:"confirmed"`
+	NoWindow     bool      `json:"no_window,omitempty"`
 	Expanded     bool      `json:"expanded"`
 	Multiplier   float64   `json:"multiplier"`
 	ExtraLimit   int       `json:"extra_limit"`
 }
 
 type UserWindowAdmissionState struct {
-	Windows map[string]*UserWindowGrant `json:"windows"`
+	Windows      map[string]*UserWindowGrant     `json:"windows"`
+	Reservations map[string]map[string]time.Time `json:"reservations,omitempty"`
 }
 
 func (db *DB) UpdateUserWindowAdmissions(ctx context.Context, subject string, update func(*UserWindowAdmissionState) error) error {

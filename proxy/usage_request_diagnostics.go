@@ -65,6 +65,8 @@ type usageRequestDiagnostics struct {
 	RootAccountLookup     string                       `json:"root_account_lookup"`
 	RootAccountWait       string                       `json:"root_account_wait,omitempty"`
 	RootAccountWaitMillis int64                        `json:"root_account_wait_millis,omitempty"`
+	Naming                string                       `json:"naming,omitempty"`
+	WindowGrant           string                       `json:"window_grant,omitempty"`
 	UserWindowKeyHash     string                       `json:"user_window_key_hash,omitempty"`
 	UserWindow            string                       `json:"user_window"`
 	AccountWindow         string                       `json:"account_window"`

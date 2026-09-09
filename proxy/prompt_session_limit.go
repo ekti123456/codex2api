@@ -154,6 +154,7 @@ type promptSessionCreationLimitStatus struct {
 	// capacity exhaustion and must be surfaced with its own error code.
 	IdentityConflict bool
 	AdmissionError   string
+	AdmissionCode    api.ErrorCode
 }
 
 func promptSessionWindowRequestDetail(c *gin.Context, body []byte, account *auth.Account, cfg promptfilter.Config) cache.PromptSessionWindowDetail {
@@ -205,6 +206,18 @@ func (h *Handler) checkPromptSessionCreationLimitForSelectedAccount(c *gin.Conte
 // affinity admission separate from user-window creation. priorSessionAccountID
 // describes the account-session state before scheduling selected account.
 func (h *Handler) checkPromptSessionCreationLimitForSelectedAccountAdmission(c *gin.Context, body []byte, account *auth.Account, affinityKey string, priorSessionAccountID int64) (promptSessionCreationLimitStatus, bool) {
+	status, blocked := h.admitSelectedAccountWindow(c, body, account, affinityKey, priorSessionAccountID)
+	if blocked || account == nil {
+		return status, blocked
+	}
+	if err := h.claimRequestRootNaming(c, body); err != nil {
+		status.AdmissionError, status.AdmissionCode = err.Message, err.Code
+		return status, true
+	}
+	return status, false
+}
+
+func (h *Handler) admitSelectedAccountWindow(c *gin.Context, body []byte, account *auth.Account, affinityKey string, priorSessionAccountID int64) (promptSessionCreationLimitStatus, bool) {
 	clearAccountSessionObservationContext(c)
 	if account == nil || (c != nil && c.GetBool("prompt_intelligence_internal")) {
 		return promptSessionCreationLimitStatus{}, false
@@ -213,6 +226,13 @@ func (h *Handler) checkPromptSessionCreationLimitForSelectedAccountAdmission(c *
 	if !enabled {
 		if grant := windowGrantForRequest(c); grant != nil && grant.Grant.Expanded {
 			return promptSessionCreationLimitStatus{AdmissionError: "扩容窗口需要支持窗口容量的账号，请联系管理员"}, true
+		}
+		if grant := windowGrantForRequest(c); grant != nil && !grant.Grant.Confirmed {
+			grant.Grant.NoWindow = true
+			if err := h.confirmRequestWindowGrant(c); err != nil {
+				apiErr := requestWindowGrantAPIError(err)
+				return promptSessionCreationLimitStatus{AdmissionError: apiErr.Message, AdmissionCode: apiErr.Code}, true
+			}
 		}
 		setUsageUserWindow(c, "account_windows_disabled")
 		recordUsageAccountWindow(c, account, affinityKey, priorSessionAccountID, false)
@@ -410,6 +430,15 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 	}
 	status.NextRecoveryAt = earliestExpiry
 	if _, exists := sessions[status.SessionHash]; exists {
+		if grant != nil && !grant.Grant.Confirmed {
+			h.promptSessionLimitMu.Unlock()
+			if err := h.confirmRequestWindowGrant(c); err != nil {
+				apiErr := requestWindowGrantAPIError(err)
+				status.AdmissionError, status.AdmissionCode = apiErr.Message, apiErr.Code
+				return status, true
+			}
+			return h.checkPromptSessionCreationLimitWithAccountAdmission(c, cfg, body, account, affinityKey, priorSessionAccountID)
+		}
 		setUsageUserWindow(c, "reused")
 		status.Existing = true
 		status.Used = len(sessions)
@@ -495,10 +524,16 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 	// users may have different window durations, so a later request must never
 	// clean another user's sessions using the later request's TTL.
 	if grant != nil {
+		if grant.Grant.NoWindow {
+			grant.Grant.NoWindow = false
+			grant.Grant.Confirmed = false
+			c.Set("window_grant_convert_no_window", true)
+		}
 		if !c.GetBool("window_grant_confirmed") {
 			h.promptSessionLimitMu.Unlock()
 			if err := h.confirmRequestWindowGrant(c); err != nil {
-				status.AdmissionError = "窗口授权已失效，请重试"
+				apiErr := requestWindowGrantAPIError(err)
+				status.AdmissionError, status.AdmissionCode = apiErr.Message, apiErr.Code
 				return status, true
 			}
 			c.Set("window_grant_confirmed", true)
@@ -555,7 +590,11 @@ func writePromptSessionLimitHeaders(c *gin.Context, status promptSessionCreation
 }
 
 func sendPromptSessionCreationLimitError(c *gin.Context, status promptSessionCreationLimitStatus) {
-	api.SendErrorWithStatus(c, promptSessionCreationLimitAPIError(status), http.StatusBadRequest)
+	statusCode := http.StatusBadRequest
+	if status.AdmissionCode == api.ErrCodeServiceUnavailable {
+		statusCode = http.StatusServiceUnavailable
+	}
+	api.SendErrorWithStatus(c, promptSessionCreationLimitAPIError(status), statusCode)
 }
 
 func promptSessionCreationLimitMessage(status promptSessionCreationLimitStatus) string {
@@ -579,6 +618,9 @@ func promptSessionCreationLimitAPIError(status promptSessionCreationLimitStatus)
 	code := api.ErrorCode("session_creation_limit_exceeded")
 	if status.AdmissionError != "" {
 		code = api.ErrorCode("window_expansion_invalid")
+	}
+	if status.AdmissionCode != "" {
+		code = status.AdmissionCode
 	}
 	if status.IdentityConflict {
 		code = api.ErrorCode("session_identity_conflict")

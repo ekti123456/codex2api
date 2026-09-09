@@ -239,6 +239,9 @@ func (h *Handler) finishSessionCooldown(c *gin.Context) {
 		return
 	}
 	if removed {
+		if grant := windowGrantForRequest(c); grant != nil && grant.Grant.Confirmed {
+			return
+		}
 		removedWindow := false
 		h.promptSessionLimitMu.Lock()
 		detail := h.promptSessionWindowDetails[receipt.Subject][receipt.Root]

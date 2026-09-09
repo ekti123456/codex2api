@@ -648,7 +648,12 @@ func (h *Handler) Messages(c *gin.Context) {
 		if status, exceeded := h.checkPromptSessionCreationLimitForSelectedAccountAdmission(c, rawBody, account, affinityKey, priorSessionAccountID); exceeded {
 			h.releaseSelectedAccountAfterPromptSessionRejection(account, affinityKey, priorSessionAccountID)
 			writePromptSessionLimitHeaders(c, status)
-			sendAnthropicError(c, http.StatusBadRequest, "invalid_request_error", promptSessionCreationLimitMessage(status))
+			apiErr := promptSessionCreationLimitAPIError(status)
+			statusCode := http.StatusBadRequest
+			if status.AdmissionCode == api.ErrCodeServiceUnavailable {
+				statusCode = http.StatusServiceUnavailable
+			}
+			sendAnthropicError(c, statusCode, "invalid_request_error", apiErr.Message, apiErr.Code)
 			return
 		}
 		if attempt > 0 {
