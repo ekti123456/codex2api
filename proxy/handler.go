@@ -4201,6 +4201,10 @@ func (h *Handler) Responses(c *gin.Context) {
 		accountFilter = accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, allowCodexAccounts)
 	}
 	beginDispatchSelection(c)
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, logModel, effectiveModel, nativeRemoteCompactionV2); modelError != nil {
+		api.SendError(c, modelError)
+		return
+	}
 	accountFilter = h.applyPassiveInternalModelRouting(c, effectiveModel, sessionIdentity, affinityKey, true, accountFilter)
 	accountFilter = h.withRequestModelCooldownFilter(c, effectiveModel, accountFilter)
 	if continuationUnavailable {
@@ -4308,6 +4312,10 @@ func (h *Handler) Responses(c *gin.Context) {
 		}
 		if account == nil {
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) {
+				return
+			}
+			if selectionTraceForRequest(c).SessionModelDenied() {
+				h.sendDispatchUnavailable(c, isStream, false)
 				return
 			}
 			if lastStatusCode > 0 && len(lastBody) > 0 {
@@ -6303,6 +6311,10 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	// 中转账号会命中上游自身的 /responses/compact，使仅接入中转的用户也能压缩（issue #174）。
 	accountFilter := accountFilterForCompactResponsesModelWithOriginal(routingModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
 	beginDispatchSelection(c)
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, routingModel, effectiveModel, true); modelError != nil {
+		api.SendError(c, modelError)
+		return
+	}
 	accountFilter = h.applyPassiveInternalModelRouting(c, effectiveModel, sessionIdentity, affinityKey, true, accountFilter)
 	accountFilter = h.withRequestModelCooldownFilter(c, effectiveModel, accountFilter)
 	accountFilter = excludeClaudeAccountsFilter(accountFilter, selectionTraceForRequest(c))
@@ -6403,6 +6415,10 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			}
 			if account == nil {
 				if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) {
+					return
+				}
+				if selectionTraceForRequest(c).SessionModelDenied() {
+					h.sendDispatchUnavailable(c, false, false)
 					return
 				}
 				if (lastStatusCode == http.StatusTooManyRequests || lastStatusCode == http.StatusBadGateway) && len(lastBody) > 0 {
@@ -7217,6 +7233,10 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	recordUsageRootAccount(c, priorSessionAccountID, priorSessionAccountID > 0)
 	accountFilter := accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
 	beginDispatchSelection(c)
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, logModel, effectiveModel, false); modelError != nil {
+		api.SendError(c, modelError)
+		return
+	}
 	accountFilter = h.applyPassiveInternalModelRouting(c, effectiveModel, sessionIdentity, affinityKey, true, accountFilter)
 	accountFilter = h.withRequestModelCooldownFilter(c, effectiveModel, accountFilter)
 	accountFilter = h.applyUpstreamChannelFilter(c, effectiveModel, accountFilter)
@@ -7276,6 +7296,10 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		}
 		if account == nil {
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolChat) {
+				return
+			}
+			if selectionTraceForRequest(c).SessionModelDenied() {
+				h.sendDispatchUnavailable(c, isStream, true)
 				return
 			}
 			if lastStatusCode == http.StatusTooManyRequests && len(lastBody) > 0 {

@@ -501,6 +501,10 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 
 	accountFilter := accountFilterForModel(effectiveModel)
 	beginDispatchSelection(c)
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, logModel, effectiveModel, false); modelError != nil {
+		_ = writeResponsesWSError(conn, modelError)
+		return newResponsesWSCloseError(websocket.ClosePolicyViolation, modelError.Message, modelError)
+	}
 	accountFilter = h.applyPassiveInternalModelRouting(c, effectiveModel, sessionIdentity, affinityKey, false, accountFilter)
 	accountFilter = h.withRequestModelCooldownFilter(c, effectiveModel, accountFilter)
 	accountFilter = applyAffinityGroupRouting(c, sessionIdentity, accountFilter)
@@ -657,7 +661,9 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			if c.Request.Context().Err() != nil {
 				return errResponsesWSClientGone
 			}
-			if compactionAffinity.Known {
+			if modelError := sessionModelErrorForRequest(c); modelError != nil {
+				apiErr = modelError
+			} else if compactionAffinity.Known {
 				apiErr = compactionUpstreamUnavailableAPIError()
 			} else if lastRetryableUpstreamErr != nil {
 				apiErr = responsesWSClientUpstreamAPIError(lastRetryableUpstreamErr, hideUpstreamErrors)
@@ -1818,6 +1824,9 @@ func responsesWSClientUpstreamAPIError(apiErr *api.APIError, hideUpstreamErrors 
 }
 
 func responsesWSTerminalCloseCode(apiErr *api.APIError, fallback int) int {
+	if apiErr != nil && apiErr.Code == api.ErrCodeSessionModelUnavailable {
+		return websocket.ClosePolicyViolation
+	}
 	if apiErr != nil && isCodexCapacityCodeOrMessage(string(apiErr.Code), apiErr.Message) {
 		return websocket.ClosePolicyViolation
 	}

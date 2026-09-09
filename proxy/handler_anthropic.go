@@ -537,6 +537,10 @@ func (h *Handler) Messages(c *gin.Context) {
 	affinityKey := capacityAwareSessionAffinityKey(sessionIdentity, apiKeyID)
 	priorSessionAccountID, _ := h.store.AccountSessionAccountID(affinityKey, time.Now())
 	beginDispatchSelection(c)
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, effectiveModel, effectiveModel, false); modelError != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": modelError})
+		return
+	}
 	accountFilter := accountFilterForResponsesModel(effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
 	accountFilter = h.applyPassiveInternalModelRouting(c, effectiveModel, sessionIdentity, affinityKey, true, accountFilter)
 	accountFilter = h.withRequestModelCooldownFilter(c, effectiveModel, accountFilter)
@@ -595,6 +599,13 @@ func (h *Handler) Messages(c *gin.Context) {
 		}
 		if account == nil {
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolAnthropic) {
+				return
+			}
+			if modelError := sessionModelErrorForRequest(c); modelError != nil {
+				if isStream && writeCommittedAnthropicRetryError(c, string(modelError.Type), modelError.Message) {
+					return
+				}
+				c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": modelError})
 				return
 			}
 			if lastClaudePolicyErr != nil {

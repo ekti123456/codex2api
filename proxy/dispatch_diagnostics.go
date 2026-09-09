@@ -114,6 +114,18 @@ func (handler *Handler) dispatchFailureForRequest(ctx *gin.Context) dispatchFail
 }
 
 func (handler *Handler) sendDispatchUnavailable(ctx *gin.Context, stream bool, chat bool) {
+	if modelError := sessionModelErrorForRequest(ctx); modelError != nil {
+		if stream && ctx.Writer.Written() {
+			if chat && writeCommittedChatRetryError(ctx, modelError.Message) {
+				return
+			}
+			if !chat && writeCommittedResponsesRetryError(ctx, modelError.Message) {
+				return
+			}
+		}
+		api.SendError(ctx, modelError)
+		return
+	}
 	if !ctx.Writer.Written() {
 		protocol := continuousRetryProtocolResponses
 		if chat {
@@ -159,6 +171,9 @@ func dispatchStreamError(ctx *gin.Context, message, code string) gin.H {
 }
 
 func (handler *Handler) dispatchUnavailableAPIError(ctx *gin.Context) *api.APIError {
+	if modelError := sessionModelErrorForRequest(ctx); modelError != nil {
+		return modelError
+	}
 	failure := handler.dispatchFailureForRequest(ctx)
 	err := api.NewAPIError(api.ErrCodeServiceUnavailable, dispatchPublicMessage, api.ErrorTypeServer)
 	details := gin.H{"request_id": failure.RequestID}

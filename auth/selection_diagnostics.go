@@ -17,12 +17,14 @@ type SelectionDiagnostic struct {
 }
 
 type SelectionTrace struct {
-	mu             sync.Mutex
-	reasons        map[string]struct{}
-	rootAccount    int64
-	suspended      int
-	frozen         bool
-	expandedWindow bool
+	mu                 sync.Mutex
+	reasons            map[string]struct{}
+	rootAccount        int64
+	suspended          int
+	frozen             bool
+	expandedWindow     bool
+	sessionModelFilter AccountFilter
+	sessionModelDenied bool
 }
 
 func (trace *SelectionTrace) SetExpandedWindow(allowed bool) {
@@ -122,6 +124,7 @@ func (trace *SelectionTrace) Reset() {
 		trace.reasons = nil
 		trace.rootAccount = 0
 		trace.frozen = false
+		trace.sessionModelDenied = false
 		trace.mu.Unlock()
 	}
 }

@@ -32,6 +32,7 @@ const (
 	ErrCodeRateLimitReached           ErrorCode = "rate_limit_reached"
 	ErrCodeAccountSessionCapacity     ErrorCode = "account_session_capacity_exceeded"
 	ErrCodeRootAccountWaitTimeout     ErrorCode = "codex_root_account_wait_timeout"
+	ErrCodeSessionModelUnavailable    ErrorCode = "session_model_unavailable"
 
 	// Server errors
 	ErrCodeServerError        ErrorCode = "server_error"
@@ -133,7 +134,7 @@ func HTTPStatusCode(code ErrorCode) int {
 		return http.StatusConflict
 	case ErrCodeInvalidRequest, ErrCodeInvalidParameter, ErrCodeMissingField, ErrCodeInvalidFieldType,
 		ErrCodeInvalidFieldFormat, ErrCodeContextLengthExceeded, ErrCodeUnsupportedModel,
-		ErrCodeAccountSessionCapacity, ErrCodeRootAccountWaitTimeout:
+		ErrCodeAccountSessionCapacity, ErrCodeRootAccountWaitTimeout, ErrCodeSessionModelUnavailable:
 		return http.StatusBadRequest
 	case ErrCodeServiceUnavailable:
 		return http.StatusServiceUnavailable

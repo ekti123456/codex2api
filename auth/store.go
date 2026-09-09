@@ -6734,6 +6734,9 @@ func (s *Store) nextCapacityAdmittedFreshAccount(key string, apiKeyID int64, exc
 // The extra exclusion prevents a scheduler snapshot race from immediately
 // selecting the same owner again before its stale affinity is removed.
 func (s *Store) nextCapacityAdmittedFreshAccountExcluding(key string, apiKeyID int64, exclude map[int64]bool, filter AccountFilter, policy DispatchPolicy, now time.Time, excludedAccountID int64, traces ...*SelectionTrace) *Account {
+	if excludedAccountID > 0 && !selectionTrace(traces).CheckSessionModel(s.FindByID(excludedAccountID)) {
+		return nil
+	}
 	localExclude := cloneAccountExclusions(exclude)
 	if excludedAccountID > 0 {
 		localExclude[excludedAccountID] = true
@@ -6846,11 +6849,14 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 	// affinity is bounded or disabled. An active admitted conversation normally
 	// must not migrate to another upstream account. A fresh root request is the
 	// exception: if its owner is no longer dispatchable (for example quota
-	// auto-pause, an auth fence, or a request filter mismatch), the owner must be
+	// auto-pause, an auth fence, or a non-model filter mismatch), the owner must be
 	// released and the request may be admitted on another account. The old code
 	// discarded the capacity/full distinction here and returned nil for every
 	// failed take, which turned an otherwise routable request into a 503.
 	if accountID, exists := s.AccountSessionAccountID(key, now); exists {
+		if !selectionTrace(traces).CheckSessionModel(s.FindByID(accountID)) {
+			return nil, "", SessionAffinityGuard{}
+		}
 		if exclude != nil && exclude[accountID] {
 			// A related Guardian/title/summary turn belongs to the root account.
 			// Retrying it on another account would manufacture the cross-account
@@ -6927,6 +6933,9 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 			rootBound = false
 		}
 		if rootBound {
+			if !selectionTrace(traces).CheckSessionModel(s.FindByID(rootBinding.accountID)) {
+				return nil, "", SessionAffinityGuard{}
+			}
 			selectionTrace(traces).Bind(rootBinding.accountID)
 			concurrencyAllowance := int64(0)
 			if protectedRelatedRequest {
@@ -6946,6 +6955,9 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 		}
 		if !rootBound {
 			if cachedRoot, cached := s.getCachedSessionAffinity(rootKey); cached {
+				if !selectionTrace(traces).CheckSessionModel(s.FindByID(cachedRoot.accountID)) {
+					return nil, "", SessionAffinityGuard{}
+				}
 				selectionTrace(traces).Bind(cachedRoot.accountID)
 				concurrencyAllowance := int64(0)
 				if protectedRelatedRequest {
@@ -6966,6 +6978,9 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 	binding, ok := s.sessionBindings[key]
 	s.sessionMu.RUnlock()
 
+	if ok && binding.expiresAt.After(now) && !selectionTrace(traces).CheckSessionModel(s.FindByID(binding.accountID)) {
+		return nil, "", SessionAffinityGuard{}
+	}
 	// 绑定账号是 Grok 时，用 Grok 专属粘性模式覆盖全局（默认 strict，减少中途换号致缓存失效）。
 	mode := s.GetAffinityMode()
 	failurePinned := false
@@ -6985,6 +7000,11 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 		}
 	}
 	if mode == AffinityModeOff && !preserveBinding {
+		if !ok && selectionTrace(traces).hasSessionModelFilter() {
+			if cached, found := s.getCachedSessionAffinity(key); found && !selectionTrace(traces).CheckSessionModel(s.FindByID(cached.accountID)) {
+				return nil, "", SessionAffinityGuard{}
+			}
+		}
 		return s.nextCapacityAdmittedFreshAccount(key, apiKeyID, exclude, filter, policy, now, traces...), "", SessionAffinityGuard{}
 	}
 
@@ -7067,7 +7087,7 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 				return fallback, "", SessionAffinityGuard{preserveAccountID: binding.accountID}
 			}
 			// The bound account failed a non-capacity eligibility check (quota,
-			// status, credential, model/group/egress filter, ...). A fresh root
+			// status, credential, group/egress filter, ...). A fresh root
 			// request may migrate, and the stale affinity must be removed once a
 			// replacement is available so the next attempt does not rediscover it.
 			fallback := s.nextCapacityAdmittedFreshAccountExcluding(key, apiKeyID, exclude, filter, policy, now, binding.accountID, traces...)
@@ -7079,6 +7099,9 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 		}
 	}
 	if binding, ok := s.getCachedSessionAffinity(key); ok {
+		if !selectionTrace(traces).CheckSessionModel(s.FindByID(binding.accountID)) {
+			return nil, "", SessionAffinityGuard{}
+		}
 		if !s.affinityProxyStillValid(binding.accountID, binding.proxyURL) {
 			if preserveBinding {
 				return s.takeByIDForContinuation(binding.accountID, apiKeyID, exclude, filter, key, policy, traces...), "", SessionAffinityGuard{}
@@ -7911,6 +7934,9 @@ func (s *Store) waitForSessionAvailableWithFilter(ctx context.Context, key strin
 		}
 		if acc != nil {
 			return acc, proxyURL, guard
+		}
+		if selectionTrace(traces).SessionModelDenied() {
+			return nil, "", SessionAffinityGuard{}
 		}
 		if s.SchedulerEngine() == "legacy" && !hasCandidate() {
 			return nil, "", SessionAffinityGuard{}
