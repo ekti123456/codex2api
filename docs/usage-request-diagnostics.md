@@ -31,6 +31,14 @@
 
 请求保存开始/完成时间（UTC）、请求关联 ID、已验证 NewAPI 请求 ID、重试序号。每次重试清除上一轮最近账号和准入结果；每个 WS 帧清除上一帧诊断，日志落库的是不可变 JSON 快照。日志原有 `created_at` 是写日志时间，不替代请求开始时间。
 
+## 标题与后台建议的等待
+
+`thread_title` 和 `ambient_suggestions` 最多等待主根账号绑定 30 秒。NewAPI 已消耗的根解析等待通过签名 `root_account_wait_millis` 扣除；未携带该字段的旧网关/直连请求使用本地 30 秒上限。等待不创建窗口，不持有账号或 API Key 并发位，也不使用无根最近账号或随机选号。主根绑定一旦出现即继续，仅沿用该账号；其他来源不变。
+
+本地绑定/账号窗口准入发出按根通知，跨实例每秒只查询该根的缓存键，无每秒全账号扫描或用量表查询。断开请求会取消等待并清理订阅。超时返回 400 `codex_root_account_wait_timeout`；WebSocket 返回同错误码的错误帧并关闭当前请求。
+
+已保存的诊断增加 `root_account_wait`（`found`、`timeout`、`canceled`）和 `root_account_wait_millis`（本地实际等待毫秒数）。是否形成用量日志仍遵循原日志保存路径；未选号的超时以请求错误记录为准。绑定已存在但不可调度时仍按原有可用性/权限限制处理，不把所有 503 都改成 400。
+
 ## 性能与隐私
 
 - 数据库仅新增 `request_type`、`request_diagnostics` 两列；SQLite/PostgreSQL 均为兼容旧数据的增量迁移，无历史回填、额外索引或关联查询。

@@ -4182,6 +4182,10 @@ func (h *Handler) Responses(c *gin.Context) {
 	if h.enforceAPIKeyLimitsAndReply(c, effectiveModel) {
 		return
 	}
+	if waitError := h.waitForBackgroundRootAccount(c, sessionIdentity); waitError != nil {
+		api.SendError(c, waitError)
+		return
+	}
 	releaseAPIKeyConcurrency, ok := h.acquireAPIKeyConcurrency(c)
 	if !ok {
 		return
@@ -6284,6 +6288,10 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	if h.enforceAPIKeyLimitsAndReply(c, effectiveModel) {
 		return
 	}
+	if waitError := h.waitForBackgroundRootAccount(c, sessionIdentity); waitError != nil {
+		api.SendError(c, waitError)
+		return
+	}
 	releaseAPIKeyConcurrency, ok := h.acquireAPIKeyConcurrency(c)
 	if !ok {
 		return
@@ -7188,6 +7196,10 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	}
 
 	if h.enforceAPIKeyLimitsAndReply(c, effectiveModel) {
+		return
+	}
+	if waitError := h.waitForBackgroundRootAccount(c, sessionIdentity); waitError != nil {
+		api.SendError(c, waitError)
 		return
 	}
 	releaseAPIKeyConcurrency, ok := h.acquireAPIKeyConcurrency(c)

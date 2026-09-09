@@ -82,8 +82,12 @@ func TestAmbientSuggestionMissingRootNeverReachesUpstream(test *testing.T) {
 		upstreamCalls.Add(1)
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n"))}, nil
 	}
-	for _, transport := range []string{"http", "websocket"} {
-		test.Run(transport, func(test *testing.T) {
+	for _, scenario := range []struct{ transport, source string }{
+		{"http", "ambient_suggestions"}, {"websocket", "ambient_suggestions"},
+		{"http", "thread_title"}, {"websocket", "thread_title"},
+	} {
+		test.Run(scenario.source+"/"+scenario.transport, func(test *testing.T) {
+			transport := scenario.transport
 			handler := newRootlessPassiveModelTestHandler(test)
 			other := &auth.Account{DBID: 18, AccessToken: "other", AccountID: "other", Models: []string{"gpt-5.6-sol"}}
 			if transport == "http" {
@@ -93,15 +97,17 @@ func TestAmbientSuggestionMissingRootNeverReachesUpstream(test *testing.T) {
 			meta := newAPIPolicyMeta{
 				RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved,
 				RootSessionRelation:    newAPIPolicyRootSessionRelationRelated,
-				RootSessionFingerprint: promptSessionTestFingerprint(test.Name()), ThreadSource: "ambient_suggestions",
+				RootSessionFingerprint: promptSessionTestFingerprint(test.Name()), ThreadSource: scenario.source,
 				RequestKind: "turn", PassiveFeature: newAPIPassiveFeatureRelatedInternal,
 			}
+			remaining := int64(20)
+			meta.RootAccountWaitMillis = &remaining
 			if transport == "http" {
 				body := []byte(`{"model":"gpt-5.6-sol","input":"background task"}`)
 				requestContext, recorder := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, meta)
 				handler.Responses(requestContext)
-				if recorder.Code < http.StatusBadRequest {
-					test.Fatalf("missing root request succeeded: %s", recorder.Body.String())
+				if recorder.Code != http.StatusBadRequest || gjson.Get(recorder.Body.String(), "error.code").String() != "codex_root_account_wait_timeout" {
+					test.Fatalf("missing root response=%d %s", recorder.Code, recorder.Body.String())
 				}
 			} else {
 				router := gin.New()
@@ -124,6 +130,9 @@ func TestAmbientSuggestionMissingRootNeverReachesUpstream(test *testing.T) {
 				_, payload, err := connection.ReadMessage()
 				if err != nil || gjson.GetBytes(payload, "type").String() != "error" {
 					test.Fatalf("missing root event=%s error=%v", payload, err)
+				}
+				if gjson.GetBytes(payload, "error.code").String() != "codex_root_account_wait_timeout" {
+					test.Fatalf("missing root event=%s", payload)
 				}
 			}
 			if upstreamCalls.Load() != 0 {

@@ -1358,8 +1358,8 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	verifiedPolicy := (status == "verified" || status == "signed_response") && policyContext.MetaVerified
 	accountingBypass := h.verifiedNewAPISessionAccountingBypass(c)
 	rootIdentity := h.resolveRequestRootSessionIdentityForContext(c, body)
-	identity.requiresRootAccount = strings.EqualFold(strings.TrimSpace(rootIdentity.threadSource), "ambient_suggestions")
-	if verifiedPolicy && strings.EqualFold(strings.TrimSpace(policyContext.Meta.ThreadSource), "ambient_suggestions") {
+	identity.requiresRootAccount = requiresBackgroundRootAccount(rootIdentity.threadSource)
+	if verifiedPolicy && requiresBackgroundRootAccount(policyContext.Meta.ThreadSource) {
 		identity.requiresRootAccount = true
 	}
 	if !verifiedPolicy {

@@ -514,6 +514,7 @@ func (s *Store) AdmitAccountSession(account *Account, sessionKey string, now tim
 		}
 		state.lastSeen = now
 		s.accountSessionMu.Unlock()
+		s.notifyRootAccountWaiters(sessionKey)
 		return true
 	}
 	reserved, allowed := accountSessionSlotAvailable(int64(len(bySession)), reservedCount, limits, selectionTrace(traces).ExpandedWindow())
@@ -523,6 +524,7 @@ func (s *Store) AdmitAccountSession(account *Account, sessionKey string, now tim
 	}
 	bySession[sessionKey] = &accountSessionState{sessionID: sessionKey, lastSeen: now, usagePeriodID: uuid.NewString(), usageStartedAt: now, reserved: reserved}
 	s.accountSessionMu.Unlock()
+	s.notifyRootAccountWaiters(sessionKey)
 	return true
 }
 

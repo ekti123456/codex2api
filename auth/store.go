@@ -3357,6 +3357,8 @@ type Store struct {
 	modelCooldownSettings         atomic.Value // database.ModelCooldownSettings
 	promptFilterConfig            atomic.Value // promptFilterConfigState
 	sessionMu                     sync.RWMutex
+	rootAccountWaitMu             sync.Mutex
+	rootAccountWaiters            map[string]*rootAccountWaitState
 	sessionBindings               map[string]sessionAffinity
 	sessionSlotBufferEnabled      atomic.Bool
 	sessionSlotBufferNS           atomic.Int64
@@ -6595,6 +6597,7 @@ func (s *Store) bindSessionAffinity(key string, account *Account, proxyURL strin
 	}
 	s.sessionBindings[key] = binding
 	s.sessionMu.Unlock()
+	s.notifyRootAccountWaiters(key)
 
 	// Unstable/content-derived affinity is deliberately process-local. It may
 	// remain in sessionBindings for fast reuse during this process, but writing

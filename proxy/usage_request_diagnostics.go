@@ -60,6 +60,8 @@ type usageRequestDiagnostics struct {
 	ClassificationChanged bool                         `json:"classification_changed"`
 	RootAccountID         int64                        `json:"root_account_id,omitempty"`
 	RootAccountLookup     string                       `json:"root_account_lookup"`
+	RootAccountWait       string                       `json:"root_account_wait,omitempty"`
+	RootAccountWaitMillis int64                        `json:"root_account_wait_millis,omitempty"`
 	UserWindowKeyHash     string                       `json:"user_window_key_hash,omitempty"`
 	UserWindow            string                       `json:"user_window"`
 	AccountWindow         string                       `json:"account_window"`

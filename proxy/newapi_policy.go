@@ -96,6 +96,7 @@ type newAPIPolicyMeta struct {
 	// ForkedFromSessionFingerprint is a signed affinity hint for a user-created
 	// fork. It identifies the source session without merging the fork's root.
 	ForkedFromSessionFingerprint string `json:"forked_from_session_fingerprint,omitempty"`
+	RootAccountWaitMillis        *int64 `json:"root_account_wait_millis,omitempty"`
 }
 
 type verifiedNewAPIPolicyContext struct {

@@ -472,6 +472,10 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		_ = writeResponsesWSError(conn, apiErr)
 		return newResponsesWSCloseError(closeCode, apiErr.Message, apiErr)
 	}
+	if waitError := h.waitForBackgroundRootAccount(c, sessionIdentity); waitError != nil {
+		_ = writeResponsesWSError(conn, waitError)
+		return newResponsesWSCloseError(websocket.ClosePolicyViolation, waitError.Message, waitError)
+	}
 	// Only a request that passed payload, prompt-policy and API-key admission may
 	// replace the active owner. Claim before concurrency/account acquisition so
 	// the old request can release those leases for the new one.
