@@ -182,6 +182,10 @@ data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","created":1712345678
 data: [DONE]
 ```
 
+**自定义工具：** Chat 请求支持 `tools[].type="custom"` 与嵌套 `custom` 声明，历史和响应使用 `tool_calls[].custom.name/input`。`custom.input` 始终是原始文本，即使其内容恰好是 JSON；普通函数仍使用 `function.arguments`。流式 custom 输入放在 `delta.tool_calls[].custom.input`，调用 ID 与工具结果的 `tool_call_id` 保持配对。非流式响应也会从 `output_item.done` 补回最终响应中缺失的调用。
+
+Messages 的 `tool_use.input` 必须使用对象，因此自由文本工具输入通过 `{"input":"原始文本"}` 包装。调用 ID 携带可逆的类型标记；客户端回传该 ID 和输入对象后，网关恢复原始 custom 调用及对应结果。需要这种桥接的工具应声明仅包含字符串 `input` 属性的 `input_schema`；后续请求依据已标记的调用历史恢复工具类型和命名空间。普通函数输入不会依据字段名被猜测为 custom。`input.done`/`output_item.done` 可补齐遗漏的末尾增量；与已发送输入矛盾或超过输入上限的 custom 调用按上游协议错误结束。
+
 ### 2. Responses
 
 **端点:** `POST /v1/responses`
@@ -218,7 +222,10 @@ data: [DONE]
 | include              | array        | 否   | 包含的额外字段                                                                                     |
 | previous_response_id | string       | 否   | 上一响应 ID，用于上下文连续                                                                        |
 
-`previous_response_id` 的上下文先查当前进程的有界 L1。已认证请求按 API Key ID 隔离；未配置任何 API Key、显式启用 `CODEX_ALLOW_ANONYMOUS=true` 后放行的请求共用 `anon` 命名空间。Redis 模式在 L1 未命中时可从共享后端重建；后端值未超过重建上限但超过 L1 准入预算时仍可服务本次请求，只是不提升到 L1。Memory 模式没有共享 response context 后备，依赖上下文被判定为超限、已淘汰或缺失时可能返回 HTTP `409 response_context_unavailable`。共享后端暂时不可用且请求依赖该上下文时可能返回 HTTP `503 service_unavailable`。如果账号池存在可用的 relay-style 后备，网关可保留原始 `previous_response_id` 继续转发，而不是立即返回上述错误。客户端原生 Responses WebSocket 入口不执行这次本地查找，会保留 `previous_response_id` 交给上游。
+`previous_response_id` 的上下文先查当前进程的有界 L1。已认证请求按 API Key ID 隔离；未配置任何 API Key、显式启用 `CODEX_ALLOW_ANONYMOUS=true` 后放行的请求共用 `anon` 命名空间。Redis 模式在 L1 未命中时可从共享后端重建；后端值未超过重建上限但超过 L1 准入预算时仍可服务本次请求，只是不提升到 L1。Memory 模式没有共享 response context 后备，依赖上下文被判定为超限、已淘汰或缺失时可能返回 HTTP `409 response_context_unavailable`。共享后端暂时不可用且请求依赖该上下文时可能返回 HTTP `503 service_unavailable`。如果账号池存在可用的 relay-style 后备，网关可保留原始 `previous_response_id` 继续转发，而不是立即返回上述错误。客户端原生 Responses WebSocket 入口在上游连接正常时保留 `previous_response_id` 并只发送当轮增量，轮次开始时保留仍有效的 L1 祖先引用，快照合并与序列化在响应成功提交后才执行并写入本地缓存，共享后端（Redis）写入在后台完成，不占首字路径。缓存会收集 `response.output_item.done`，因此最终 `response.output` 为空时也能保留消息、`phase`、工具调用/结果及 Lite `additional_tools` 声明。`response.completed` 和 `response.incomplete` 成功提交后均可写入，仍受写入策略、TTL 和容量限制约束；按需写入模式下，`store` 未显式为 `false` 的 WebSocket 会话从根轮起即有写入资格；显式 `store:false` 的会话（如 Codex CLI 全量上下文）不写缓存，其历史无法事后恢复。续链失效、换号或转为 HTTP 时，只有能够恢复所需上下文才继续发送；缺失、超限或不可移植的加密状态返回 `response_context_unavailable` 错误帧，共享后端故障返回 `service_unavailable`，随后关闭连接（409 使用 1008，后端暂时不可用使用 1011）。客户端应重发完整上下文并开始新的响应链。
+祖先在轮次开始前已过期或被淘汰时，网关不会把增量伪装成完整快照；该链后续健康轮也不能自行补全历史。缓存 TTL 为 10 分钟，Memory 模式重启会丢失缓存。设置环境变量 `CODEX_WS_CONTINUATION_FAIL_OPEN=true` 可退回旧行为：上下文不可恢复时剥离 `previous_response_id` 后按原样转发，上游将看不到历史；这次有损降级产生的响应不写回放缓存，关闭逃生阀后也不会信任残缺快照。
+
+对于原生 WebSocket 的结构化输出，`gpt-6-astra` 和 `gpt-5.6-luna` 在显式启用 Responses Lite 时保留 JSON Schema 的 `minLength` / `maxLength`。Lite 信号可来自 `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite=true`、`X-OpenAI-Internal-Codex-Responses-Lite: true` 请求头，或由 Payload Rules 注入该元数据标记。该放行仅用于结构化输出；已有工具参数清洗继续使用保守规则。长度约束在入口准备阶段暂时保留，最终出站前才根据最终模型、规则改写后的 Lite 信号、账号 Lite 能力和实际传输统一处理。其他模型、最终未启用 Lite、HTTP 和 Compact 请求沿用原有清洗策略，HTTP 降级请求不会携带不适用的约束。
 
 原生 WebSocket 入口为 `GET /v1/responses`。通过校验与 API Key 限制后，较新的同 API Key、同渠道/分组路由作用域、同会话请求会抢占仍在运行的旧请求，并先取消旧上游以释放账号与并发位。`stream_id` 是抢占键的一部分，因此多路复用的不同流互不影响；不同 API Key 或不同路由作用域也不会互相取消。只有 `prompt_cache_key`、显式会话头、`previous_response_id`、turn state、专用 affinity key 或可稳定派生的内容会话存在时才启用，纯 API Key 兜底身份不会把无关请求合并。Redis 模式支持跨实例抢占，Memory 模式仅在当前进程内生效。
 
@@ -256,7 +263,13 @@ data: [DONE]
 
 **端点:** `POST /v1/images/generations`
 
-**说明:** OpenAI Images 兼容入口。外部请求使用 `gpt-image-2`，内部按 `CLIProxyAPI/` 与 `sub2api/` 的链路转换为 Codex `/responses`：主模型为 `gpt-5.4-mini`，图像模型写入 `tools[0].model`。
+**说明:** OpenAI Images 兼容入口。外部请求使用 `gpt-image-2`、`gpt-image-2.5-flare` 或 `gpt-image-2.5-sunburst`（支持日期快照及 `-2k` / `-4k` 档位后缀），内部按 `CLIProxyAPI/` 与 `sub2api/` 的链路转换为 Codex `/responses`：主模型默认 `gpt-5.6-luna`（优先使用「系统设置 → Codex → 生图设置」中的文本模型，未配置时沿用环境变量 `CODEX_IMAGES_MAIN_MODEL`；被上游拒绝时按 `gpt-5.5` → `gpt-5.6-terra` → `gpt-5.6-sol` → `gpt-6-astra` 顺序换驱动重试），图像模型写入 `tools[0].model`。
+
+GPT Image 2.5 支持 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。质量参数原样传给图片工具；工作台切回旧型号时会将 `xhigh` / `max` 调整为 `high`。省略模型仍默认使用 `gpt-image-2`。`-2k` / `-4k` 是本项目的尺寸与超分别名，发往上游前会剥掉该后缀。
+
+直接使用 `/v1/responses` 时，文本主控放在顶层 `model`，图片模型放在 `tools[].model`；显式文本主控优先于后台生图设置及 `CODEX_IMAGES_MAIN_MODEL`。顶层 `model` 直接填图像模型时，则使用后台配置的文本主控。工具模型省略时仍补为 `gpt-image-2`。
+
+Images 入口的 2.5 token 计费区分文本输入、图片输入与各自缓存：内置费率分别为 $5、$8、$1.25、$2 / 百万 token，图片输出 $30 / 百万 token（[官方价格](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst)，2026-09-09 核对）。Flare/Sunburst 各有独立定价键，日期快照和尺寸别名使用对应基础型号费率；自定义覆盖优先。usage 日志新增 `image_input_tokens`、`image_output_tokens`、`cached_image_input_tokens`，是总输入/输出/缓存的子集，不重复计费。历史日志无法补回未记录的图片 token 明细。
 
 **请求示例:**
 
@@ -450,12 +463,12 @@ data: [DONE]
 {
   "object": "list",
   "data": [
+    { "id": "gpt-6-astra", "object": "model", "owned_by": "openai" },
+    { "id": "gpt-5.6-sol", "object": "model", "owned_by": "openai" },
+    { "id": "gpt-5.6-terra", "object": "model", "owned_by": "openai" },
+    { "id": "gpt-5.6-luna", "object": "model", "owned_by": "openai" },
     { "id": "gpt-5.5", "object": "model", "owned_by": "openai" },
-    { "id": "gpt-5.4", "object": "model", "owned_by": "openai" },
-    { "id": "gpt-5.4-mini", "object": "model", "owned_by": "openai" },
-    { "id": "gpt-5.3-codex", "object": "model", "owned_by": "openai" },
     { "id": "gpt-5.3-codex-spark", "object": "model", "owned_by": "openai" },
-    { "id": "gpt-5.2", "object": "model", "owned_by": "openai" },
     { "id": "gpt-image-2", "object": "model", "owned_by": "openai" },
     { "id": "grok-imagine-image", "object": "model", "owned_by": "xai" },
     { "id": "grok-imagine-video-1.5", "object": "model", "owned_by": "xai" }
@@ -472,8 +485,8 @@ Grok 账号编辑页支持账号级模型映射，可让只请求 GPT 模型名�
 ```json
 {
   "gpt-5.5": "grok-4.5",
-  "gpt-5.4": "grok-4.5",
-  "gpt-5.3-codex": "grok-4.5"
+  "gpt-5.6-sol": "grok-4.5",
+  "gpt-6-astra": "grok-4.5"
 }
 ```
 
@@ -767,31 +780,101 @@ Grok 账号编辑页支持账号级模型映射，可让只请求 GPT 模型名�
 }
 ```
 
-### Claude OAuth 与原生 Messages
+### Claude 凭据与原生 Messages
 
 Claude Code OAuth 账号使用原生 Anthropic Messages 上游，不会进入 Codex WHAM
 或 Responses 探针。以下端点均受现有 `X-Admin-Key` 管理鉴权保护；请求示例中的
 Token、授权码和账号 ID 仅为占位符，服务端不会在响应或日志中回显 access/refresh
 token。
 
+Claude 账号有三种凭据形态，记录在 `credentials.claude_auth_kind`，列表/详情响应以
+`claude_auth_kind` 回传，账号列表 `auth_kind` 筛选与 `summary.oauth / summary.setup_token / summary.api_key`
+按此区分：
+
+- `oauth`：完整 Claude Code OAuth，`access_token + refresh_token`，AT 临期自动续期，
+  可读 profile / 官方 usage 端点；历史账号未写该键时一律视为 `oauth`。
+- `setup_token`：官方 `claude setup-token` 同款长效令牌（`sk-ant-oat01-…`），仅
+  `user:inference` scope，有效期 1 年，没有 refresh token，到期只能重新授权；用量改由
+  原生 Messages 探针采样，套餐信息缺省。适合批量号池。
+- `api_key`：Anthropic 或 Messages 兼容服务的 API Key，必填 `api_key` 与 `base_url`；
+  无 OAuth 刷新和订阅用量采样。`base_url` 支持路径前缀和末尾 `/v1`，移除尾部斜杠，
+  已含 `/v1` 时不重复追加。拒绝 URL 中的用户名/密码、query 和 fragment；允许 HTTP 和私网服务。
+  列表/详情返回 `claude_base_url`，按 `auth_kind=api_key` 筛选。
+
+API Key 请求体原样转发，不应用 Claude Code 指纹、客户端平台/版本策略或 OAuth 的
+`ClaudeSecurityConfig` 请求上限与字段净化；网关通用鉴权、限流和提示词过滤仍生效。
+
 #### POST /api/admin/accounts/claude/oauth/auth-url
 
-创建一次性 PKCE 登录会话，返回授权地址与 `state`。`state` 默认 15 分钟有效且只能
-兑换一次。
+创建一次性 PKCE 登录会话，返回授权地址与 `state`。请求体可选 `{"mode":"oauth"|"setup_token"}`，
+默认 `oauth`；`setup_token` 只申请 `user:inference` 并在交换时请求 1 年有效期。回调地址
+为托管页 `https://platform.claude.com/oauth/code/callback`，授权后页面直接展示 `code#state`
+供复制（响应同时回传 `mode` 与 `redirect_uri`）。`state` 默认 15 分钟有效且只能兑换一次。
 
 #### POST /api/admin/accounts/claude/oauth/exchange-code
 
-使用 `state` 与回调 `code` 换取 Claude OAuth 凭据并入库。可选 `proxy_url`、
-`use_proxy_pool`、`timezone` 和 `name`；入库后会异步执行一次受控原生 Messages
-用量采样。
+使用 `state` 与回调 `code`（接受 `code#state`、纯 code 或整条回调 URL）换取 Claude
+凭据并入库，形态沿用生成链接时的 `mode`。可选 `proxy_url`、`use_proxy_pool`、
+`timezone` 和 `name`；入库后会异步执行一次受控原生 Messages 用量采样。
+
+#### POST /api/admin/accounts/claude/oauth/exchange-session-key
+
+用从已登录 claude.ai 浏览器复制的 `session_key`（sessionKey cookie，接受
+`sessionKey=...` 整段）一键换号：服务端代替浏览器完成组织选择、PKCE 授权与 token
+交换后直接入库，`mode` 同上决定换出 OAuth 凭据或 Setup Token。sessionKey 不落库、
+不回显，换号成功后即可作废。前两步打 claude.ai 网页端，走账号代理并使用浏览器指纹
+客户端；401/403 表示 sessionKey 失效，3xx 视为被 Cloudflare 拦截。
+OAuth 刷新省略 `scope`，沿用最初授予的权限，避免把网页授权的较窄范围扩成完整 CLI 范围。
 
 #### POST /api/admin/accounts/claude/import
 
 直接导入 `cmd/claude_login -out` 生成的 JSON，或下面导出端点生成的 version 1
-Claude 凭据。`access_token` 与 `refresh_token` 必填；同时接受单对象、对象数组和
-`{"accounts":[...]}`。单对象保持历史 `{message,id,email}` 响应，批量导入返回
-`total`、`imported`、`failed` 与逐账号 `items/warnings`。`auth_kind` 仅允许
-`oauth`，模型列表仅允许 `claude-*`。
+Claude 凭据。同时接受单对象、对象数组和 `{"accounts":[...]}`。单对象保持历史
+`{message,id,email}` 响应，批量导入返回 `total`、`imported`、`failed` 与逐账号
+`items/warnings`。`auth_kind` 允许 `oauth`（默认，`refresh_token` 必填，`access_token` 可缺省——
+缺省时服务端先用 RT 走 refresh 授权换出 AT 并补齐邮箱/账号 UUID/套餐，RT 无效返回
+502）、`setup_token`（只需 `access_token`，`expires_at` 缺省为 1 年）或 `api_key`；未声明
+`auth_kind` 且没有 `refresh_token` 的文档仅当 `access_token` 形如 `sk-ant-oat01-`
+才按 `setup_token` 接受。模型列表仅允许 `claude-*`；API Key 自动发现会过滤兼容网关返回的其他模型。
+
+API Key 导入示例：
+
+```json
+{"auth_kind":"api_key","api_key":"example-key","base_url":"https://gateway.example/v1","name":"Messages gateway"}
+```
+
+API Key 账号还可选配置两项客户端请求特征（默认都不启用，出站保持"按原始内容转发"）：
+
+- `custom_headers`：账号级自定义出站请求头（对象），附加到该账号的每个上游请求
+  （含 `/v1/models` 模型发现），最后套用、优先级最高，可显式指定 `User-Agent`。
+  `Authorization`、`x-api-key`、`Content-Type`、`Content-Length`、`Host`、`Accept`、
+  `Accept-Encoding`、`Transfer-Encoding`、`Connection` 为网关保留头，出现即返回 400。
+  `PATCH /api/admin/accounts/:id/scheduler` 的 `custom_headers` 对 API Key 账号执行同样校验，
+  传 `null` 清空。
+- `claude_fingerprint_mode`：Claude Code 客户端身份仿真。空（默认）= 透传，只保留下游
+  `User-Agent`（缺失时为 `Codex2API`）；`force` = 始终携带 Claude Code CLI 的基础身份头
+  （`User-Agent: claude-cli/<版本> (external, cli)`、`X-App`、`X-Stainless-*`、
+  `X-Stainless-Retry-Count/Timeout`、`anthropic-dangerous-direct-browser-access`）；
+  `preserve` = 下游是真实 Claude Code CLI 时保留其身份头、缺失才补齐，非 CLI 客户端按 `force` 处理。
+  只改请求头，不复制 OAuth 会话状态、系统提示词或 `metadata` 身份，也不改变 `x-api-key` 鉴权；
+  `custom_headers` 中的同名头优先于仿真值。该字段对 API Key 账号不继承 OAuth 的全局默认。
+
+```json
+{"auth_kind":"api_key","api_key":"example-key","base_url":"https://gateway.example/v1","claude_fingerprint_mode":"force","custom_headers":{"X-Gateway-Tenant":"team-a"}}
+```
+
+裸 RT 导入在刷新前检查已存凭据，命中直接返回 409；有运行时账号池时，与后台刷新使用同一刷新租约。
+
+#### POST /api/admin/accounts/claude/import-tokens
+
+（旧名 `/import-setup-tokens` 仍可用。）批量粘贴令牌：`text`（任意分隔的自由文本）
+与 `tokens` 数组都会按前缀抽取、保序去重，单次最多 200 枚。`sk-ant-oat01-` 按
+`setup_token` 长效令牌入库；`sk-ant-ort01-` 是 OAuth refresh token，入库前先刷新换出
+AT，按 `oauth` 形态保存，备注默认取邮箱。可选 `name`（Setup Token 的备注前缀，默认
+`claude`，按现有 `<prefix>-N` 最大序号继续编号；单枚且给了 `name` 时直接用作备注）、
+`proxy_url` / `use_proxy_pool`（代理池模式下每枚令牌各取一条）、`timezone`、
+`group_refs`。返回与批量导入相同的 `total/imported/failed/items`；同一令牌（Setup
+Token 按 AT、Refresh Token 刷新前按原 RT，刷新后再按账号 UUID/RT）已存在返回 409（多枚时逐项失败）。
 
 导入文件可恢复账号名称、代理、时区、标签、启用状态、账号级指纹模式和受限身份头。
 分组使用 `group_refs: [{"name":"...","channel":"claude"}]` 按名称映射；不会复用
@@ -800,19 +883,19 @@ Claude 凭据。`access_token` 与 `refresh_token` 必填；同时接受单对�
 
 #### GET /api/admin/accounts/claude/export
 
-导出管理员专用的完整 Claude OAuth 凭据。`ids=1,2` 可精确选择账号，省略时导出全部；
+导出管理员专用的完整 Claude 凭据。`ids=1,2` 可精确选择账号，省略时导出全部；
 `filter=all|healthy` 控制是否只包含当前健康账号；`format=auto|json|zip` 控制输出格式
 （默认 auto：单条 JSON、多条 ZIP；`format=json` 可得到可直接再次导入的对象数组）。响应设置 `Content-Disposition`、实际数量
 `X-Export-Count`、`Cache-Control: no-store, max-age=0`、`Pragma: no-cache` 和
 `X-Content-Type-Options: nosniff`。
 
-version 1 文档包含 `type=claude`、`auth_kind=oauth`、access/refresh token、账号 ID、
+version 1 文档包含 `type=claude`、`auth_kind`（`oauth`、`setup_token` 或 `api_key`，后两者 `refresh_token` 为空）、access/refresh token、账号 ID、
 过期时间、套餐、模型、代理、时区、`claude_fingerprint_mode`、标签、启用状态及
 `group_refs`。`fingerprint_headers` 允许 `User-Agent`、`X-App` 和
 `X-Stainless-*` 身份头，以及可选的 `claude_device_id` 账号身份元数据；后者兼容键名大小写，
 在导入、导出及时区指纹重建时保留，仅用于请求体中的设备身份，不作为 HTTP 头发送。
-任意 `Authorization`、Cookie、API Key 或其它自定义头均不会
-进入导出文件。下载内容为明文高敏凭据，下载后应立即加密保存或在迁移完成后删除。
+`fingerprint_headers` 不包含 `Authorization`、Cookie、API Key 或其它自定义头。
+`api_key` 形态会在凭据字段中导出 `api_key` 和 `base_url`，用于完整恢复账号。下载内容为明文高敏凭据，下载后应立即加密保存或在迁移完成后删除。
 
 #### POST /api/admin/accounts/:id/claude/models
 
@@ -1103,8 +1186,57 @@ data: {"type":"test_complete","success":true}
 data: {"type":"diagnostics","diagnostics":{"model":"claude-haiku-4-5","http_status":200,"duration_ms":523}}
 ```
 
-`diagnostics` 为 Claude 账号的附加事件；失败由 `error` 事件返回。具体诊断字段见上文
-Claude 原生 Messages 测连说明。
+`diagnostics` 事件按渠道携带各自形态的诊断对象，失败由 `error` 事件返回。Claude 账号携带
+`diagnostics` 字段（具体字段见上文 Claude 原生 Messages 测连说明）；Codex / OpenAI Responses
+账号携带 `codex_diagnostics` 字段，两者不会同时出现。两种渠道都遵守同一顺序约定：拿到上游
+响应头后先推一帧只含状态码/响应头信息的诊断，流结束后再推带 `duration_ms` 的最终帧，最终帧
+可能位于 `test_complete`/`error` 之后，客户端应读到 SSE 关闭再刷新账号快照。请求在拿到响应
+头之前就失败（DNS/代理/超时）时不单发 `diagnostics` 事件，诊断对象直接挂在 `error` 事件上，
+只含 `model` 与 `duration_ms`。
+
+WebSocket 诊断不使用连接池的旧握手头：`headers_ms` 留空，`first_frame_ms` 表示本次请求首个上游帧的等待时间。
+`request_id`、`cf_ray` 和响应头来自本次 metadata 帧；同名头以最新帧覆盖。未收到相应字段时留空。
+
+Codex 测连的 `codex_diagnostics` 对象包含：
+
+- `http_status`、`headers_ms`（HTTP 拿到响应头耗时）、`first_frame_ms`（WS 首帧耗时）、`first_content_ms`（首段文本耗时）、
+  `duration_ms`（总耗时），单位毫秒；未观测到的字段省略，不以零代替。
+- `model`（请求模型）、`response_model`（上游 `response.model`）、`transport`
+  （`http` / `websocket`，强制 WS 模式下用量窗口来自 `codex.rate_limits` 帧而非响应头）。
+- `request_id`（优先账号自定义的 `upstream_request_id_header`，否则依次取 `x-request-id`、
+  `request-id`、`x-openai-request-id`、`x-oai-request-id`、`x-goog-request-id`）、`response_id`
+  （`response.id`）、`cf_ray`、`plan_type`（`x-codex-plan-type`）。
+- `safety_buffering_enabled` / `safety_buffering_faster_model`：上游 `x-codex-safety-buffering-*`
+  头（HTTP 响应头或 WS 的 `codex.response.metadata` 帧）。enabled 只表示该模型开着"安全缓冲"
+  能力（上游可能为额外审查扣住输出），faster_model 是官方 CLI "Retry with a faster model"
+  的切换目标，不是本次的回答模型；`safety_buffered=true` 才表示本轮事件里出现过
+  `safety_buffering: true`。
+- `response_status`（最后观测到的 `response.status`，正常终态为 `completed` / `failed` /
+  `incomplete`；流在终态前中断时会停在 `in_progress` 等中间态）、`incomplete_reason`、
+  `error_type`、`error_code`（来自流内 `error` 事件、`response.error`、
+  `response.status_details.error` 或非 200 的 JSON 正文）。
+- `primary_window` / `secondary_window`：`x-codex-primary-*` / `x-codex-secondary-*` 三件套的
+  原样投影 `{used_percent, window_minutes, reset_after_seconds}`，按 `window_minutes` 判断是
+  5h（≥ 60）还是 7d（≥ 1440）窗口。
+- `usage`：终态 `input_tokens`、`output_tokens`、`total_tokens`、`cached_input_tokens`
+  （`input_tokens_details.cached_tokens`）、`reasoning_output_tokens`
+  （`output_tokens_details.reasoning_tokens`），按最新终态值覆盖。
+- `response_headers`：白名单筛选的诊断响应头（`x-codex-*`、`x-ratelimit-*`、`openai-*`、
+  请求标识、`retry-after`、`cf-ray` 等，不含 Cookie 或认证头）；`response_body`：已读取的
+  JSON/SSE 脱敏预览（Access Token / API Key / 代理凭据已替换），最多 64 KiB，截断时
+  `body_truncated=true`。
+
+```text
+data: {"type":"test_start","model":"gpt-5.5"}
+
+data: {"type":"diagnostics","codex_diagnostics":{"model":"gpt-5.5","http_status":200,"headers_ms":412,"transport":"http","request_id":"req_x","plan_type":"plus","primary_window":{"used_percent":12.5,"window_minutes":300,"reset_after_seconds":1800}}}
+
+data: {"type":"content","text":"pong"}
+
+data: {"type":"test_complete","success":true}
+
+data: {"type":"diagnostics","codex_diagnostics":{"model":"gpt-5.5","http_status":200,"headers_ms":412,"first_content_ms":980,"duration_ms":1210,"response_id":"resp_x","response_status":"completed","usage":{"input_tokens":20,"output_tokens":3,"total_tokens":23}}}
+```
 
 #### GET /api/admin/accounts/:id/usage
 
@@ -1199,6 +1331,7 @@ Antigravity 的导入**一直**会采用文件里的 `proxy_url`，只是从不�
   ```
 
 - **`at_txt`** — 每行一个 Access Token（AT-only 模式）:
+
   ```text
   eyJhbGciOiJSUzI1NiIs...token1
   eyJhbGciOiJSUzI1NiIs...token2
@@ -1402,6 +1535,10 @@ data: {"type":"complete","current":3,"total":3,"success":2,"failed":1}
 
 获取使用日志。
 
+HTTP `/v1/*` 响应的 `X-Codex2API-Request-ID` 对应下方可检索的 `request_id`，浏览器可通过 CORS 读取。
+既有 `X-Request-ID` 是请求上下文/访问日志 ID，可能回显客户端传入值，与该网关追踪 ID 独立；排查用量请使用 `X-Codex2API-Request-ID`。
+自动压缩用量的 `parent_request_id` 优先引用父请求的网关追踪 ID；`/v1/live` 结算沿用建连请求的追踪信息。
+
 **查询参数:**
 
 - `start`: RFC3339 开始时间
@@ -1412,7 +1549,9 @@ data: {"type":"complete","current":3,"total":3,"success":2,"failed":1}
 - `model`: 按模型过滤
 - `endpoint`: 按端点过滤
 - `api_key_id`: 按 API 密钥 ID 过滤
-- `q`: 模糊搜索错误、模型、端点、账号、NewAPI 用户、客户端 IP、客户端 User-Agent 或 API Key
+- `request_id`: 网关追踪 ID，精确匹配
+- `upstream_request_id`: 上游请求 ID，精确匹配
+- `q`: 模糊搜索错误、模型、端点、账号、NewAPI 用户、客户端 IP、客户端 User-Agent 、API Key、网关请求 ID 或上游请求 ID
 - `fast`: true/false (是否 fast 服务)
 - `stream`: true/false (是否流式)
 
@@ -1424,6 +1563,10 @@ data: {"type":"complete","current":3,"total":3,"success":2,"failed":1}
     {
       "id": 1,
       "account_id": 1,
+      "request_id": "019-example-gateway-id",
+      "upstream_request_id": "req_example",
+      "upstream_proxy_id": 1,
+      "upstream_proxy_name": "local-egress",
       "account_email": "user@example.com",
       "api_key_id": 3,
       "api_key_name": "Team A",
@@ -2062,12 +2205,12 @@ data: {"type":"progress","proxy_id":1,"current":1,"total":3,"success":1,"result"
 ```json
 {
   "models": [
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex",
     "gpt-5.3-codex-spark",
-    "gpt-5.2",
     "gpt-image-2"
   ],
   "items": [
@@ -2098,12 +2241,12 @@ data: {"type":"progress","proxy_id":1,"current":1,"total":3,"success":1,"result"
   "unchanged": 5,
   "skipped": ["gpt-5.2-codex"],
   "models": [
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex",
     "gpt-5.3-codex-spark",
-    "gpt-5.2",
     "gpt-image-2"
   ],
   "last_synced_at": "2026-04-24T00:00:00Z",
@@ -2310,15 +2453,13 @@ curl -X DELETE http://localhost:8080/api/admin/images/jobs/1 \
 
 ## 支持模型
 
-| 模型                | 说明                                                        |
-| ------------------- | ----------------------------------------------------------- |
-| gpt-5.5             | 最新旗舰模型。计费：$5.00/M 输入 / $30.00/M 输出（标准），priority 分别为 $12.50/M / $75.00/M |
-| gpt-5.4             | 旗舰模型                                                    |
-| gpt-5.4-mini        | 轻量版                                  |
-| gpt-5.3-codex       | 较新版本                                |
-| gpt-5.3-codex-spark | Codex Spark 模型，仅 Pro 订阅账号可调用 |
-| gpt-5.2             | 兼容保留模型                            |
-| gpt-image-2         | GPT Image 2 图像生成模型                |
+| 模型                       | 说明                                                                                      |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| gpt-6-astra                | 最强旗舰模型                                                                              |
+| gpt-5.6-sol / terra / luna | gpt-5.6 系列（luna 为更快档位）                                                           |
+| gpt-5.5                    | 旗舰模型。计费：$5.00/M 输入 / $30.00/M 输出（标准），priority 分别为 $12.50/M / $75.00/M |
+| gpt-5.3-codex-spark        | Codex Spark 模型，仅 Pro 订阅账号可调用                                                   |
+| gpt-image-2                | GPT Image 2 图像生成模型                                                                  |
 
 > 提示：实际支持的模型以 `/v1/models` 接口返回为准，文档可能未及时更新。
 

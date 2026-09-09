@@ -51,9 +51,11 @@ type openAIMessage struct {
 
 // openAIToolCall 表示 assistant 消息中的工具调用
 type openAIToolCall struct {
-	Type     string `json:"type"`
-	ID       string `json:"id"`
-	Function struct {
+	Type      string              `json:"type"`
+	ID        string              `json:"id"`
+	Custom    *customToolCallData `json:"custom,omitempty"`
+	Namespace string              `json:"namespace,omitempty"`
+	Function  struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
@@ -97,6 +99,8 @@ type openAIStreamChunk struct {
 	Model   string         `json:"model"`
 	Choices []streamChoice `json:"choices"`
 	Usage   *UsageInfo     `json:"usage,omitempty"`
+	// ServiceTier 回传上游实际处理档位（response.service_tier），只在终结块携带。
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 // streamChoice 流式块中的选项
@@ -121,10 +125,12 @@ type streamDelta struct {
 
 // toolCallDelta 工具调用增量
 type toolCallDelta struct {
-	Index    int               `json:"index"`
-	ID       string            `json:"id,omitempty"`
-	Type     string            `json:"type,omitempty"`
-	Function toolCallFuncDelta `json:"function"`
+	Index     int                 `json:"index"`
+	ID        string              `json:"id,omitempty"`
+	Type      string              `json:"type,omitempty"`
+	Function  *toolCallFuncDelta  `json:"function,omitempty"`
+	Custom    *customToolCallData `json:"custom,omitempty"`
+	Namespace string              `json:"namespace,omitempty"`
 }
 
 // toolCallFuncDelta 工具函数增量
@@ -141,6 +147,8 @@ type openAICompactResponse struct {
 	Model   string          `json:"model"`
 	Choices []compactChoice `json:"choices"`
 	Usage   *UsageInfo      `json:"usage,omitempty"`
+	// ServiceTier 回传上游实际处理档位（response.service_tier）。
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 // compactChoice 非流式响应中的选项
@@ -161,12 +169,11 @@ type compactMessage struct {
 
 // compactToolCallOut 非流式响应中的工具调用
 type compactToolCallOut struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
+	ID        string              `json:"id"`
+	Type      string              `json:"type"`
+	Function  *toolCallFuncDelta  `json:"function,omitempty"`
+	Custom    *customToolCallData `json:"custom,omitempty"`
+	Namespace string              `json:"namespace,omitempty"`
 }
 
 // openAIErrorResponse 错误响应
@@ -808,10 +815,11 @@ func normalizeResponsesImageOnlyModel(body map[string]any) bool {
 		body["tool_choice"] = map[string]any{"type": "image_generation"}
 		modified = true
 	}
-	if imageModel != defaultImagesMainModel {
+	mainModel := imagesMainModel()
+	if imageModel != mainModel {
 		modified = true
 	}
-	body["model"] = defaultImagesMainModel
+	body["model"] = mainModel
 	return modified
 }
 
@@ -1692,11 +1700,15 @@ func cachedOrParse(rawJSON []byte) openAIRequest {
 // TranslateRequest 将 OpenAI Chat Completions 请求转换为 Codex Responses 格式
 // 采用 Unmarshal→构造 map→Marshal 模式，只做一次 JSON 序列化
 func TranslateRequest(rawJSON []byte) ([]byte, error) {
-	req := sanitizeChatCompletionToolHistory(cachedOrParse(rawJSON))
+	parsed := cachedOrParse(rawJSON)
+	req := sanitizeChatCompletionToolHistory(parsed)
 	if err := validateChatCompletionFunctionNames(req); err != nil {
 		return nil, err
 	}
 	out := buildChatResponsesRequest(req)
+	// 工具名净化映射从净化历史前的解析结果推导，与响应侧 ChatToolNameRestoreMap
+	// 使用同一份输入，保证去重后缀两边一致。
+	applyCodexToolNameMap(out, buildCodexToolNameMap(collectChatToolNames(parsed)))
 	return json.Marshal(out)
 }
 
@@ -1855,6 +1867,14 @@ func buildChatResponsesRequest(req openAIRequest) map[string]any {
 		}
 	}
 
+	if choice := gjson.ParseBytes(req.ToolChoice); choice.Get("type").String() == "custom" {
+		name := choice.Get("custom.name").String()
+		if name == "" {
+			name = choice.Get("name").String()
+		}
+		out["tool_choice"] = map[string]any{"type": "custom", "name": name}
+	}
+
 	// 5. response_format → Responses text.format，并清理结构化输出 schema
 	if len(req.ResponseFormat) > 0 && string(req.ResponseFormat) != "null" {
 		var responseFormat map[string]any
@@ -1915,17 +1935,18 @@ func copyChatResponsesControls(out map[string]any, req openAIRequest) error {
 			return fmt.Errorf("Chat Completions tool_choice %q cannot be represented by Responses", typed)
 		}
 	case map[string]any:
-		if strings.TrimSpace(firstNonEmptyAnyString(typed["type"])) != "function" {
+		toolType := strings.TrimSpace(firstNonEmptyAnyString(typed["type"]))
+		if toolType != "function" && toolType != "custom" {
 			return fmt.Errorf("Chat Completions tool_choice type %q cannot be represented by Responses", firstNonEmptyAnyString(typed["type"]))
 		}
 		name := strings.TrimSpace(firstNonEmptyAnyString(typed["name"]))
-		if function, ok := typed["function"].(map[string]any); ok && name == "" {
+		if function, ok := typed[toolType].(map[string]any); ok && name == "" {
 			name = strings.TrimSpace(firstNonEmptyAnyString(function["name"]))
 		}
 		if name == "" {
 			return fmt.Errorf("Chat Completions function tool_choice requires function.name")
 		}
-		out["tool_choice"] = map[string]any{"type": "function", "name": name}
+		out["tool_choice"] = map[string]any{"type": toolType, "name": name}
 		return nil
 	default:
 		return fmt.Errorf("Chat Completions tool_choice cannot be represented by Responses")
@@ -1953,7 +1974,7 @@ func convertChatToolsToResponsesForGrok(rawTools []json.RawMessage) []any {
 		}
 		// A provider extension already using a Responses-shaped tool object can
 		// be carried into the canonical request without reinterpretation.
-		tools = append(tools, source)
+		tools = append(tools, lowerChatCustomTool(source))
 		_ = isFunction
 	}
 	return tools
@@ -1987,8 +2008,15 @@ func validateChatCompletionFunctionNames(req openAIRequest) error {
 			}
 		}
 		for callIdx, toolCall := range msg.ToolCalls {
-			if strings.TrimSpace(toolCall.Function.Name) == "" {
-				return invalidFunctionNameError(fmt.Sprintf("messages[%d].tool_calls[%d].function.name", msgIdx, callIdx))
+			name, field := toolCall.Function.Name, "function.name"
+			if toolCall.Type == "custom" {
+				name, field = "", "custom.name"
+				if toolCall.Custom != nil {
+					name = toolCall.Custom.Name
+				}
+			}
+			if strings.TrimSpace(name) == "" {
+				return invalidFunctionNameError(fmt.Sprintf("messages[%d].tool_calls[%d].%s", msgIdx, callIdx, field))
 			}
 			if callID := strings.TrimSpace(toolCall.ID); msg.Role == "assistant" && callID != "" {
 				knownCalls[callID] = struct{}{}
@@ -1996,6 +2024,16 @@ func validateChatCompletionFunctionNames(req openAIRequest) error {
 		}
 	}
 	for toolIdx, rawTool := range req.Tools {
+		if tool := gjson.ParseBytes(rawTool); tool.Get("type").String() == "custom" {
+			name, field := tool.Get("name").String(), "name"
+			if tool.Get("custom").IsObject() {
+				name, field = tool.Get("custom.name").String(), "custom.name"
+			}
+			if strings.TrimSpace(name) == "" {
+				return invalidFunctionNameError(fmt.Sprintf("tools[%d].%s", toolIdx, field))
+			}
+			continue
+		}
 		var parsed openAIToolParsed
 		if err := json.Unmarshal(rawTool, &parsed); err != nil || parsed.Type != "function" || parsed.Function == nil {
 			continue
@@ -2127,8 +2165,11 @@ func normalizeFunctionToolsInArray(tools []any) ([]any, bool) {
 		if _, ok := tool["strict"]; !ok {
 			if strict, ok := function["strict"]; ok {
 				tool["strict"] = strict
-				modified = true
+			} else {
+				// Chat 形态（带 function 子对象）的工具按 Chat 默认：strict=false。
+				tool["strict"] = false
 			}
+			modified = true
 		}
 		delete(tool, "function")
 		modified = true
@@ -2148,6 +2189,16 @@ func normalizeResponsesToolChoice(body map[string]any) bool {
 
 	modified := false
 	toolType := strings.TrimSpace(firstNonEmptyAnyString(choice["type"]))
+	if toolType == "custom" {
+		if nested, ok := choice["custom"].(map[string]any); ok {
+			if _, exists := choice["name"]; !exists {
+				choice["name"] = nested["name"]
+			}
+			delete(choice, "custom")
+			return true
+		}
+		return false
+	}
 	function, _ := choice["function"].(map[string]any)
 	name := strings.TrimSpace(firstNonEmptyAnyString(choice["name"]))
 	if toolType == "" && (function != nil || name != "") {
@@ -2172,10 +2223,11 @@ func normalizeResponsesToolChoice(body map[string]any) bool {
 }
 
 type responsesBodyPrepareOptions struct {
-	forceStoreFalse            bool
-	expandPreviousResponse     bool
-	preservePreviousResponseID bool
-	cachedResponseItems        []json.RawMessage
+	forceStoreFalse              bool
+	expandPreviousResponse       bool
+	preservePreviousResponseID   bool
+	deferStructuredStringLengths bool
+	cachedResponseItems          []json.RawMessage
 	// cacheOwner 是 previous_response_id 展开时使用的缓存归属命名空间
 	//（见 responseCacheOwner）。owner 不匹配的缓存按未命中处理，防跨用户注入。
 	cacheOwner string
@@ -2213,7 +2265,7 @@ func prepareResponsesBodyForOwnerDetailed(rawBody []byte, owner string) response
 			preparation.Bypassed = true
 		} else {
 			preparation.RequiresLocalContext = currentInput.IsArray() && inputHasFunctionCallOutput(currentInput)
-			preparation.CacheLookup = getResponseCacheResult(owner, prevID)
+			preparation.CacheLookup = getResponseCacheForReplay(owner, prevID)
 		}
 	}
 	preparedBody, expandedInputRaw := prepareResponsesBodyWithOptions(rawBody, responsesBodyPrepareOptions{
@@ -2228,10 +2280,12 @@ func prepareResponsesBodyForOwnerDetailed(rawBody []byte, owner string) response
 }
 
 // PrepareResponsesWebSocketBody keeps upstream response storage linkage for
-// native Responses WebSocket sessions.
+// native Responses WebSocket sessions. ExecuteRequest applies the final schema
+// policy once payload rules, account capabilities, and transport are known.
 func PrepareResponsesWebSocketBody(rawBody []byte) ([]byte, string) {
 	return prepareResponsesBodyWithOptions(rawBody, responsesBodyPrepareOptions{
-		preservePreviousResponseID: true,
+		preservePreviousResponseID:   true,
+		deferStructuredStringLengths: true,
 	})
 }
 
@@ -2337,7 +2391,11 @@ func prepareResponsesBodyWithOptions(rawBody []byte, opts responsesBodyPrepareOp
 			delete(body, "service_tier")
 		}
 	}
-	normalizeResponsesStructuredOutputFormat(body)
+	// Native WS payload rules may enable Lite after this preparation step.
+	// Keep length constraints until ExecuteRequest can decide whether they apply.
+	normalizeResponsesStructuredOutputFormatWithPolicy(body, schemaNormalizationPolicy{
+		preserveStringLengths: opts.deferStructuredStringLengths,
+	})
 	normalizeResponsesFunctionTools(body)
 	normalizeResponsesToolChoice(body)
 	normalizeResponsesWebSearchTools(body)
@@ -2401,14 +2459,6 @@ func prepareResponsesBodyWithOptions(rawBody []byte, opts responsesBodyPrepareOp
 		repairResponsesToolCallPairing(body)
 	}
 
-	// 保存展开后的 input 原始 JSON（用于响应缓存链路）
-	var expandedInputRaw string
-	if inputVal, ok := body["input"]; ok {
-		if b, err := json.Marshal(inputVal); err == nil {
-			expandedInputRaw = string(b)
-		}
-	}
-
 	// 7. 删除 Codex 不支持的字段
 	// 注意：prompt_cache_retention 上游(HTTP 与 WS 路径)均不接受，会返回
 	// 400 Unsupported parameter，因此在此一并剥离，executor / wsrelay 层也各自兜底删除。
@@ -2433,13 +2483,18 @@ func prepareResponsesBodyWithOptions(rawBody []byte, opts responsesBodyPrepareOp
 
 	result, err := json.Marshal(body)
 	if err != nil {
+		var expandedInputRaw string
+		if input, ok := body["input"]; ok {
+			if encoded, inputErr := json.Marshal(input); inputErr == nil {
+				expandedInputRaw = string(encoded)
+			}
+		}
 		return rawBody, expandedInputRaw
 	}
 	result = normalizeCompactionTriggerFinal(result, false)
-	if requestBodyHasCompactionTrigger(result) {
-		expandedInputRaw = gjson.GetBytes(result, "input").Raw
-	}
-	return result, expandedInputRaw
+	// Reuse the serialized input, including any final compaction adjustment.
+	// Serializing the same input tree separately doubles work on long histories.
+	return result, gjson.GetBytes(result, "input").Raw
 }
 
 // PrepareOpenAIResponsesBody keeps native OpenAI Responses requests compatible
@@ -2596,7 +2651,7 @@ func modelSupportsMaxReasoningEffort(model string) bool {
 // isAllowedServiceTier 判断 service_tier 是否在上游允许的范围内
 func isAllowedServiceTier(tier string) bool {
 	switch tier {
-	case "auto", "default", "flex", "priority", "scale", "fast":
+	case "auto", "default", "flex", "priority", "scale", "fast", "ultrafast":
 		return true
 	default:
 		return false
@@ -2604,11 +2659,13 @@ func isAllowedServiceTier(tier string) bool {
 }
 
 // upstreamServiceTier 将客户端 service_tier 映射为上游接受的值。
-// Codex 上游当前只接受 priority；auto/default/flex/scale 都不应显式转发。
+// priority/ultrafast 保留档位；auto/default/flex/scale 沿用现有省略策略。
 func upstreamServiceTier(tier string) (string, bool) {
 	switch tier {
 	case "fast", "priority":
 		return "priority", true
+	case "ultrafast":
+		return "ultrafast", true
 	case "auto", "default", "flex", "scale":
 		return "", false
 	default:
@@ -2619,13 +2676,24 @@ func upstreamServiceTier(tier string) (string, bool) {
 // convertMessagesToInputSlice 将 OpenAI messages 转换为 Codex input 数组（纯内存操作，零中间序列化）
 func convertMessagesToInputSlice(messages []openAIMessage) []any {
 	input := make([]any, 0, len(messages))
-
+	customCalls := make(map[string]bool)
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if call.Type == "custom" {
+				customCalls[call.ID] = true
+			}
+		}
+	}
 	for _, m := range messages {
 		switch m.Role {
 		case "tool":
 			output, images := toolMessageOutputAndImages(m.Content)
+			outputType := "function_call_output"
+			if customCalls[m.ToolCallID] {
+				outputType = "custom_tool_call_output"
+			}
 			input = append(input, map[string]any{
-				"type":    "function_call_output",
+				"type":    outputType,
 				"call_id": m.ToolCallID,
 				"output":  output,
 			})
@@ -2659,6 +2727,14 @@ func convertMessagesToInputSlice(messages []openAIMessage) []any {
 					})
 				}
 				for _, tc := range m.ToolCalls {
+					if tc.Type == "custom" && tc.Custom != nil {
+						item := map[string]any{"type": "custom_tool_call", "call_id": tc.ID, "name": tc.Custom.Name, "input": tc.Custom.Input}
+						if tc.Namespace != "" {
+							item["namespace"] = tc.Namespace
+						}
+						input = append(input, item)
+						continue
+					}
 					input = append(input, map[string]any{
 						"type":      "function_call",
 						"call_id":   tc.ID,
@@ -2852,6 +2928,9 @@ func convertToolsToCodexFormat(rawTools []json.RawMessage) []any {
 			}
 			var passThrough any
 			_ = json.Unmarshal(raw, &passThrough)
+			if tool, ok := passThrough.(map[string]any); ok {
+				passThrough = lowerChatCustomTool(tool)
+			}
 			tools = append(tools, passThrough)
 			continue
 		}
@@ -2873,6 +2952,11 @@ func convertToolsToCodexFormat(rawTools []json.RawMessage) []any {
 		normalizeFunctionToolParameters(item)
 		if parsed.Function.Strict != nil {
 			item["strict"] = *parsed.Function.Strict
+		} else {
+			// Chat Completions 的 strict 默认 false，Responses 默认 true。省略时
+			// 必须显式带 false，否则上游按 strict 校验 schema（可选属性、缺
+			// additionalProperties:false 等）直接 400。Codex CLI 自身的工具也全发 false。
+			item["strict"] = false
 		}
 		tools = append(tools, item)
 	}
@@ -2901,7 +2985,7 @@ func sanitizeServiceTierForUpstream(body []byte) []byte {
 		return body
 	}
 	switch tier {
-	case "auto", "default", "flex", "priority", "scale", "fast":
+	case "auto", "default", "flex", "priority", "scale", "fast", "ultrafast":
 		body, _ = sjson.DeleteBytes(body, "serviceTier")
 		if upstreamTier, ok := upstreamServiceTier(tier); ok {
 			body, _ = sjson.SetBytes(body, "service_tier", upstreamTier)
@@ -2999,7 +3083,7 @@ func billingServiceTierCostRank(tier string) (int, bool) {
 		return 0, true
 	case "", "default", "standard", "auto", "scale":
 		return 1, true
-	case "priority":
+	case "priority", "ultrafast":
 		return 2, true
 	default:
 		return 1, false
@@ -3094,7 +3178,14 @@ func forEachSubSchema(schema map[string]interface{}, visit func(map[string]inter
 
 // stripUnsupportedSchemaKeys 递归删除 schema 中上游不支持的关键字
 func stripUnsupportedSchemaKeys(schema map[string]interface{}) {
+	stripUnsupportedSchemaKeysWithPolicy(schema, schemaNormalizationPolicy{})
+}
+
+func stripUnsupportedSchemaKeysWithPolicy(schema map[string]interface{}, policy schemaNormalizationPolicy) {
 	for key := range unsupportedSchemaKeys {
+		if policy.preserveStringLengths && (key == "minLength" || key == "maxLength") {
+			continue
+		}
 		delete(schema, key)
 	}
 	// 显式写成 null 的 type 上游一律拒收（Codex Desktop 的 automation_update
@@ -3104,22 +3195,33 @@ func stripUnsupportedSchemaKeys(schema map[string]interface{}) {
 	if rawType, exists := schema["type"]; exists && rawType == nil {
 		delete(schema, "type")
 	}
-	forEachSubSchema(schema, stripUnsupportedSchemaKeys)
+	forEachSubSchema(schema, func(child map[string]any) { stripUnsupportedSchemaKeysWithPolicy(child, policy) })
 }
 
 func sanitizeSchemaForUpstream(schema map[string]interface{}) {
+	simplifyConstUnionSchemas(schema)
 	stripUnsupportedSchemaKeys(schema)
 	normalizeSchemaRequiredFields(schema)
 	ensureArrayItems(schema)
 }
 
 func sanitizeStructuredOutputSchemaForUpstream(schema map[string]interface{}) {
-	sanitizeSchemaForUpstream(schema)
+	sanitizeStructuredOutputSchemaWithPolicy(schema, schemaNormalizationPolicy{})
+}
+
+func sanitizeStructuredOutputSchemaWithPolicy(schema map[string]interface{}, policy schemaNormalizationPolicy) {
+	stripUnsupportedSchemaKeysWithPolicy(schema, policy)
+	normalizeSchemaRequiredFields(schema)
+	ensureArrayItems(schema)
 	ensureObjectAdditionalPropertiesFalse(schema)
 	alignRequiredWithProperties(schema)
 }
 
 func normalizeResponsesStructuredOutputFormat(body map[string]any) bool {
+	return normalizeResponsesStructuredOutputFormatWithPolicy(body, schemaNormalizationPolicy{})
+}
+
+func normalizeResponsesStructuredOutputFormatWithPolicy(body map[string]any, policy schemaNormalizationPolicy) bool {
 	if len(body) == 0 {
 		return false
 	}
@@ -3137,7 +3239,7 @@ func normalizeResponsesStructuredOutputFormat(body map[string]any) bool {
 				modified = true
 			}
 		}
-		if sanitizeStructuredOutputSchema(responseFormat) {
+		if sanitizeStructuredOutputFormatWithPolicy(responseFormat, policy) {
 			modified = true
 		}
 	}
@@ -3150,7 +3252,7 @@ func normalizeResponsesStructuredOutputFormat(body map[string]any) bool {
 	if !ok {
 		return modified
 	}
-	if sanitizeStructuredOutputSchema(format) {
+	if sanitizeStructuredOutputFormatWithPolicy(format, policy) {
 		modified = true
 	}
 	if ensureJSONModeInputMentionsJSON(body, format) {
@@ -3273,14 +3375,18 @@ func responsesTextFormatFromResponseFormat(responseFormat map[string]any) map[st
 }
 
 func sanitizeStructuredOutputSchema(format map[string]any) bool {
+	return sanitizeStructuredOutputFormatWithPolicy(format, schemaNormalizationPolicy{})
+}
+
+func sanitizeStructuredOutputFormatWithPolicy(format map[string]any, policy schemaNormalizationPolicy) bool {
 	modified := false
 	if schema, ok := format["schema"].(map[string]any); ok && schema != nil {
-		sanitizeStructuredOutputSchemaForUpstream(schema)
+		sanitizeStructuredOutputSchemaWithPolicy(schema, policy)
 		modified = true
 	}
 	if jsonSchema, ok := format["json_schema"].(map[string]any); ok && jsonSchema != nil {
 		if schema, ok := jsonSchema["schema"].(map[string]any); ok && schema != nil {
-			sanitizeStructuredOutputSchemaForUpstream(schema)
+			sanitizeStructuredOutputSchemaWithPolicy(schema, policy)
 			modified = true
 		}
 	}
@@ -3515,13 +3621,16 @@ type TokenDetails struct {
 }
 
 type UsageInfo struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-	InputTokens      int `json:"input_tokens,omitempty"`
-	OutputTokens     int `json:"output_tokens,omitempty"`
-	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
-	CachedTokens     int `json:"cached_tokens,omitempty"`
+	ImageInputTokens       int `json:"image_input_tokens,omitempty"`
+	ImageOutputTokens      int `json:"image_output_tokens,omitempty"`
+	CachedImageInputTokens int `json:"cached_image_input_tokens,omitempty"`
+	PromptTokens           int `json:"prompt_tokens"`
+	CompletionTokens       int `json:"completion_tokens"`
+	TotalTokens            int `json:"total_tokens"`
+	InputTokens            int `json:"input_tokens,omitempty"`
+	OutputTokens           int `json:"output_tokens,omitempty"`
+	ReasoningTokens        int `json:"reasoning_tokens,omitempty"`
+	CachedTokens           int `json:"cached_tokens,omitempty"`
 	// CacheWrite* 是 Anthropic 提示缓存写入 token（cache_creation_input_tokens 及其 5m/1h 细分）。
 	CacheWriteTokens   int `json:"cache_write_tokens,omitempty"`
 	CacheWrite5mTokens int `json:"cache_write_5m_tokens,omitempty"`
@@ -3619,7 +3728,7 @@ func newToolCallAnnouncementChunk(id, model string, created int64, tcIndex int, 
 					Index: tcIndex,
 					ID:    callID,
 					Type:  "function",
-					Function: toolCallFuncDelta{
+					Function: &toolCallFuncDelta{
 						Name:      funcName,
 						Arguments: "",
 					},
@@ -3640,7 +3749,7 @@ func newToolCallDeltaChunk(id, model string, created int64, tcIndex int, argsDel
 			Delta: &streamDelta{
 				ToolCalls: []toolCallDelta{{
 					Index:    tcIndex,
-					Function: toolCallFuncDelta{Arguments: argsDelta},
+					Function: &toolCallFuncDelta{Arguments: argsDelta},
 				}},
 			},
 		}},
@@ -3656,6 +3765,11 @@ func newToolCallDeltaChunk(id, model string, created int64, tcIndex int, argsDel
 // (Rust/serde 系)把 delta 当必填字段,缺失会直接报
 // "missing field `delta`" 并让整轮对话失败。
 func newFinalChunk(id, model string, created int64, finishReason string, usage *UsageInfo) []byte {
+	return newFinalChunkWithTier(id, model, created, finishReason, usage, "")
+}
+
+// newFinalChunkWithTier 在终结块上附带上游实际 service_tier（空则省略）。
+func newFinalChunkWithTier(id, model string, created int64, finishReason string, usage *UsageInfo, serviceTier string) []byte {
 	chunk := openAIStreamChunk{
 		ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
 		Choices: []streamChoice{{
@@ -3663,7 +3777,8 @@ func newFinalChunk(id, model string, created int64, finishReason string, usage *
 			Delta:        &streamDelta{},
 			FinishReason: &finishReason,
 		}},
-		Usage: usage,
+		Usage:       usage,
+		ServiceTier: strings.TrimSpace(serviceTier),
 	}
 	b, _ := json.Marshal(chunk)
 	return b
@@ -3727,13 +3842,13 @@ func TranslateStreamChunk(eventData []byte, model string, chunkID string, create
 
 	case "response.completed":
 		usage := extractUsage(eventData)
-		return newFinalChunk(chunkID, model, created, "stop", usage), true
+		return newFinalChunkWithTier(chunkID, model, created, "stop", usage, gjson.GetBytes(eventData, "response.service_tier").String()), true
 
 	// max_output_tokens 截断的正常终态：Chat 侧对应 finish_reason=length。
 	case "response.incomplete":
 		usage := extractUsage(eventData)
 		reason := gjson.GetBytes(eventData, "response.incomplete_details.reason").String()
-		return newFinalChunk(chunkID, model, created, responsesIncompleteFinishReason(eventType, reason), usage), true
+		return newFinalChunkWithTier(chunkID, model, created, responsesIncompleteFinishReason(eventType, reason), usage, gjson.GetBytes(eventData, "response.service_tier").String()), true
 
 	case "response.failed":
 		errMsg := gjson.GetBytes(eventData, "response.error.message").String()
@@ -3769,6 +3884,8 @@ type ToolCallResult struct {
 	ID        string
 	Name      string
 	Arguments string
+	Type      string
+	Namespace string
 }
 
 // StreamTranslator 有状态的流式响应翻译器，跟踪 function_call 索引映射
@@ -3782,9 +3899,20 @@ type StreamTranslator struct {
 	toolCallTypes         map[int]string
 	toolCallNames         map[int]string
 	toolCallArguments     map[int]string
+	customToolInputs      map[int]*strings.Builder
 	toolCallFinalized     map[int]bool
 	invalidToolArguments  error
 	nextIdx               int
+	// toolNameRestore 上游名 → 客户端原名（codex_tool_names.go），nil 表示无改写。
+	toolNameRestore map[string]string
+}
+
+// SetToolNameRestore 注册工具名还原映射；请求侧未改写任何名字时可传 nil。
+func (st *StreamTranslator) SetToolNameRestore(restore map[string]string) {
+	if st == nil {
+		return
+	}
+	st.toolNameRestore = restore
 }
 
 // NewStreamTranslator 创建流式翻译器实例
@@ -3798,6 +3926,7 @@ func NewStreamTranslator(chunkID, model string, created int64) *StreamTranslator
 		toolCallTypes:         make(map[int]string),
 		toolCallNames:         make(map[int]string),
 		toolCallArguments:     make(map[int]string),
+		customToolInputs:      make(map[int]*strings.Builder),
 		toolCallFinalized:     make(map[int]bool),
 	}
 }
@@ -3858,7 +3987,11 @@ func (st *StreamTranslator) failToolArguments(idx int, reason string) ([]byte, b
 		if name == "" {
 			name = "unknown"
 		}
-		st.invalidToolArguments = fmt.Errorf("upstream function call %q arguments %s", name, reason)
+		if st.toolCallTypes[idx] == "custom_tool_call" {
+			st.invalidToolArguments = fmt.Errorf("upstream custom tool call %q input %s", name, reason)
+		} else {
+			st.invalidToolArguments = fmt.Errorf("upstream function call %q arguments %s", name, reason)
+		}
 	}
 	return newErrorResponse(st.invalidToolArguments.Error()), true
 }
@@ -3946,7 +4079,7 @@ func (st *StreamTranslator) TranslateParsed(parsed gjson.Result) ([]byte, bool) 
 		if callID == "" {
 			callID = parsed.Get("item.id").String()
 		}
-		name := parsed.Get("item.name").String()
+		name := restoreCodexToolName(st.toolNameRestore, parsed.Get("item.name").String())
 		itemID := parsed.Get("item.id").String()
 		if itemID == "" {
 			itemID = callID
@@ -3965,6 +4098,9 @@ func (st *StreamTranslator) TranslateParsed(parsed gjson.Result) ([]byte, bool) 
 		st.toolCallTypes[tcIdx] = itemType
 		st.toolCallNames[tcIdx] = name
 
+		if itemType == "custom_tool_call" {
+			return newCustomToolChunk(st.ChunkID, st.Model, st.Created, tcIdx, callID, name, "", parsed.Get("item.namespace").String()), false
+		}
 		return newToolCallAnnouncementChunk(st.ChunkID, st.Model, st.Created, tcIdx, callID, name), false
 
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -3973,6 +4109,9 @@ func (st *StreamTranslator) TranslateParsed(parsed gjson.Result) ([]byte, bool) 
 			return nil, false
 		}
 		delta := parsed.Get("delta").String()
+		if st.toolCallTypes[tcIdx] == "custom_tool_call" {
+			return st.appendCustomToolInput(tcIdx, delta)
+		}
 		if eventType == "response.function_call_arguments.delta" && st.toolCallTypes[tcIdx] == "function_call" {
 			if st.toolCallFinalized[tcIdx] {
 				return st.failToolArguments(tcIdx, "continued after the done event")
@@ -3989,9 +4128,18 @@ func (st *StreamTranslator) TranslateParsed(parsed gjson.Result) ([]byte, bool) 
 		return st.finalizeOrdinaryToolArguments(tcIdx, parsed.Get("arguments").String())
 
 	case "response.custom_tool_call_input.done":
-		return nil, false
+		tcIdx, ok := st.toolCallIndex(parsed)
+		if !ok || st.toolCallTypes[tcIdx] != "custom_tool_call" {
+			return nil, false
+		}
+		return st.finalizeCustomToolInput(tcIdx, parsed.Get("input"))
 
 	case "response.output_item.done":
+		if parsed.Get("item.type").String() == "custom_tool_call" {
+			if idx, ok := st.toolCallIndex(parsed); ok {
+				return st.finalizeCustomToolInput(idx, parsed.Get("item.input"))
+			}
+		}
 		if parsed.Get("item.type").String() != "function_call" {
 			return nil, false
 		}
@@ -4015,7 +4163,7 @@ func (st *StreamTranslator) TranslateParsed(parsed gjson.Result) ([]byte, bool) 
 		if override := responsesIncompleteFinishReason(eventType, parsed.Get("response.incomplete_details.reason").String()); override != "" {
 			finishReason = override
 		}
-		return newFinalChunk(st.ChunkID, st.Model, st.Created, finishReason, usage), true
+		return newFinalChunkWithTier(st.ChunkID, st.Model, st.Created, finishReason, usage, parsed.Get("response.service_tier").String()), true
 
 	case "response.failed":
 		errMsg := parsed.Get("response.error.message").String()
@@ -4123,6 +4271,12 @@ func BuildCompactResponse(id, model string, created int64, content, reasoning st
 // 上游按 max_output_tokens 截断时终态是 response.incomplete，推导值 stop /
 // tool_calls 会把截断响应说成正常收尾，需要覆盖成 length。空串表示不覆盖。
 func BuildCompactResponseWithFinishReason(id, model string, created int64, content, reasoning string, toolCalls []ToolCallResult, usage *UsageInfo, finishReasonOverride string) []byte {
+	return BuildCompactChatResponse(id, model, created, content, reasoning, toolCalls, usage, finishReasonOverride, "")
+}
+
+// BuildCompactChatResponse 在 BuildCompactResponseWithFinishReason 基础上附带上游
+// 实际 service_tier（空则省略）。
+func BuildCompactChatResponse(id, model string, created int64, content, reasoning string, toolCalls []ToolCallResult, usage *UsageInfo, finishReasonOverride string, serviceTier string) []byte {
 	finishReason := "stop"
 	msg := compactMessage{
 		Role:    "assistant",
@@ -4145,8 +4299,13 @@ func BuildCompactResponseWithFinishReason(id, model string, created int64, conte
 				ID:   tc.ID,
 				Type: "function",
 			}
-			msg.ToolCalls[i].Function.Name = tc.Name
-			msg.ToolCalls[i].Function.Arguments = tc.Arguments
+			msg.ToolCalls[i].Namespace = tc.Namespace
+			if tc.Type == "custom_tool_call" || tc.Type == "custom" {
+				msg.ToolCalls[i].Type = "custom"
+				msg.ToolCalls[i].Custom = &customToolCallData{Name: tc.Name, Input: tc.Arguments}
+			} else {
+				msg.ToolCalls[i].Function = &toolCallFuncDelta{Name: tc.Name, Arguments: tc.Arguments}
+			}
 		}
 	}
 	if finishReasonOverride != "" {
@@ -4163,7 +4322,8 @@ func BuildCompactResponseWithFinishReason(id, model string, created int64, conte
 			Message:      msg,
 			FinishReason: finishReason,
 		}},
-		Usage: usage,
+		Usage:       usage,
+		ServiceTier: strings.TrimSpace(serviceTier),
 	}
 	b, _ := json.Marshal(resp)
 	return b
@@ -4185,7 +4345,11 @@ func extractUsageFromResult(usage gjson.Result) *UsageInfo {
 	outputTokens := int(usage.Get("output_tokens").Int())
 	reasoningTokens := int(usage.Get("output_tokens_details.reasoning_tokens").Int())
 	cachedTokens := int(usage.Get("input_tokens_details.cached_tokens").Int())
-	return newUsageInfo(inputTokens, outputTokens, reasoningTokens, cachedTokens)
+	result := newUsageInfo(inputTokens, outputTokens, reasoningTokens, cachedTokens)
+	result.ImageInputTokens = min(max(0, int(usage.Get("input_tokens_details.image_tokens").Int())), max(0, inputTokens))
+	result.ImageOutputTokens = min(max(0, int(usage.Get("output_tokens_details.image_tokens").Int())), max(0, outputTokens))
+	result.CachedImageInputTokens = min(max(0, int(usage.Get("input_tokens_details.cached_tokens_details.image_tokens").Int())), min(result.ImageInputTokens, max(0, cachedTokens)))
+	return result
 }
 
 // ExtractToolCallsFromOutputValidated extracts completed tool calls and rejects
@@ -4221,6 +4385,8 @@ func ExtractToolCallsFromOutputValidated(eventData []byte) ([]ToolCallResult, er
 			}
 			toolCalls = append(toolCalls, ToolCallResult{
 				ID:        callID,
+				Type:      itemType,
+				Namespace: item.Get("namespace").String(),
 				Name:      item.Get("name").String(),
 				Arguments: arguments,
 			})

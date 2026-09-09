@@ -61,7 +61,7 @@ func TestCodexCapacityGatewayAttemptsAndFinalError(test *testing.T) {
 						test.Cleanup(store.Stop)
 						store.AddAccount(&auth.Account{DBID: 1, AccessToken: "test-token", AccountID: "test-account", PlanType: "pro"})
 						handler := NewHandler(store, nil, nil, nil)
-						body := `{"type":"response.create","model":"gpt-5.4","input":"hello","stream":` + fmt.Sprint(ingress != "http-nonstream") + `}`
+						body := `{"type":"response.create","model":"gpt-5.5","input":"hello","stream":` + fmt.Sprint(ingress != "http-nonstream") + `}`
 						visiblePartial := upstream == "partial-stream" && !continuous && ingress != "http-nonstream"
 						if ingress == "ws" {
 							router := gin.New()

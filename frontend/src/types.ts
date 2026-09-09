@@ -3,16 +3,69 @@ export type ISODateString = string
 export type UpstreamChannel = 'codex' | 'grok' | 'antigravity' | 'claude'
 
 // 管理台可见渠道设置（GET/PUT /settings/visible-channels）
+export interface ChannelTestSettings {
+  test_model: string
+  test_content: string
+  // 0 = 沿用全局 test_concurrency
+  test_concurrency: number
+}
+
+export interface ChannelTestSettingsResponse {
+  antigravity: ChannelTestSettings
+  claude: ChannelTestSettings
+  default_test_content: string
+  default_test_concurrency: number
+  model_choices?: Partial<Record<'antigravity' | 'claude', string[]>>
+}
+
+export interface AntigravityRedirectChoice {
+  model: string
+  default_level: string
+  tiers: string[]
+}
+
+export interface AntigravitySettingsResponse {
+  model_redirects: Record<string, string>
+  redirect_overrides_effort: boolean
+  choices: AntigravityRedirectChoice[]
+}
+
 export interface VisibleChannelsSettings {
   channels: UpstreamChannel[]
   all: UpstreamChannel[]
   fallback: UpstreamChannel
 }
 
+/** Claude 凭据形态:oauth=可刷新 OAuth;setup_token=长效 Setup Token(仅推理,1 年,无 RT)。 */
+export type ClaudeAuthKind = 'oauth' | 'setup_token' | 'api_key'
+
 /** Claude Code OAuth：第一步返回授权 URL 与 state。 */
 export interface ClaudeAuthURLResponse {
   auth_url: string
   state: string
+  mode?: ClaudeAuthKind
+  redirect_uri?: string
+}
+
+/** Claude sessionKey(cookie)一键换号请求。 */
+export interface ClaudeSessionKeyExchangeRequest {
+  session_key: string
+  mode?: ClaudeAuthKind
+  name?: string
+  proxy_url?: string
+  use_proxy_pool?: boolean
+  timezone?: string
+}
+
+/** Claude Setup Token 批量粘贴导入请求。 */
+export interface ClaudeSetupTokenImportRequest {
+  text?: string
+  tokens?: string[]
+  name?: string
+  proxy_url?: string
+  use_proxy_pool?: boolean
+  timezone?: string
+  group_refs?: Array<{ name: string; channel: 'claude' }>
 }
 
 /** Claude Code OAuth：第二步用 state+code 换取 token 并入库。 */
@@ -27,8 +80,12 @@ export interface ClaudeExchangeCodeRequest {
 
 /** Claude Code：直接导入 cmd/claude_login 产出的 token JSON。 */
 export interface ClaudeImportTokenRequest {
-  access_token: string
-  refresh_token: string
+  access_token?: string
+  api_key?: string
+  auth_kind?: ClaudeAuthKind
+  base_url?: string
+  /** OAuth 凭据必填;Setup Token(auth_kind=setup_token)没有 RT。 */
+  refresh_token?: string
   email?: string
   account_id?: string
   expires_at?: string
@@ -36,14 +93,19 @@ export interface ClaudeImportTokenRequest {
   proxy_url?: string
   use_proxy_pool?: boolean
   timezone?: string
+  /** API Key 账号:账号级自定义出站请求头,最后套用;网关保留头(鉴权/Content-Type/Accept 等)会被拒绝。 */
+  custom_headers?: Record<string, string> | null
+  /** API Key 账号:可选的 Claude Code 客户端身份仿真;空=透传(默认)。OAuth 账号沿用指纹替换语义。 */
+  claude_fingerprint_mode?: 'preserve' | 'force' | ''
 }
 
 /** Versioned, provider-scoped Claude OAuth export. Secret-bearing fields are
  * only returned by the administrator-only Claude export endpoint. */
 export interface ClaudeCredentialExportEntry extends ClaudeImportTokenRequest {
+  access_token: string
   type: 'claude'
   version: number
-  auth_kind: 'oauth'
+  auth_kind: ClaudeAuthKind
   plan_type?: string
   models?: string[]
   claude_fingerprint_mode?: 'preserve' | 'force' | ''
@@ -82,6 +144,8 @@ export interface ToastState {
 
 export type AccountStatus = 'active' | 'ready' | 'cooldown' | 'error' | 'refreshing' | 'paused' | 'quota_paused' | string
 export type CodexClientMetadataMode = 'auto' | 'always' | 'off'
+/** OpenAI Responses 中转账号的 Codex 身份透传档位，默认 off（不透传）。 */
+export type CodexPassthroughMode = 'off' | 'auto' | 'always'
 /** Codex 官方出站请求的设备指纹收敛档位，默认 off（不收敛）。 */
 export type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
 export type ModelCooldownMode = 'off' | 'fixed' | 'adaptive'
@@ -172,6 +236,7 @@ export interface GrokPlanInfo {
 }
 
 export interface AccountRow {
+  upstream_request_id_header?: string | null
   detail_loaded?: boolean
   id: number
   name: string
@@ -192,6 +257,9 @@ export interface AccountRow {
   grok_api?: boolean
   antigravity_api?: boolean
   claude_api?: boolean
+  /** Claude 凭据形态(仅 Claude 账号有值)。 */
+  claude_auth_kind?: ClaudeAuthKind | string
+  claude_base_url?: string
   antigravity_auth_kind?: 'oauth' | 'api_key' | string
   agent_identity?: boolean
   grok_auth_kind?: string
@@ -216,6 +284,7 @@ export interface AccountRow {
   models?: string[]
   model_mapping?: string
   codex_client_metadata_mode?: CodexClientMetadataMode
+  codex_passthrough_mode?: CodexPassthroughMode
   codex_fingerprint_mode?: CodexFingerprintMode
   codex_installation_id?: string
   session_capacity_enabled?: boolean
@@ -374,6 +443,8 @@ export interface AccountListSummary {
   risky: number
   oauth: number
   api_key: number
+  /** Claude 渠道:长效 Setup Token 账号数。 */
+  setup_token?: number
   subscription_unlocked: number
   unauthorized_24h: number
   rate_limited_1h: number
@@ -850,6 +921,7 @@ export interface AddOpenAIResponsesAccountRequest {
   models: string[]
   model_mapping?: string
   codex_client_metadata_mode?: CodexClientMetadataMode
+  codex_passthrough_mode?: CodexPassthroughMode
   proxy_url: string
   custom_headers?: Record<string, string> | null
 }
@@ -862,6 +934,7 @@ export interface UpdateOpenAIResponsesAccountRequest {
   models: string[]
   model_mapping?: string
   codex_client_metadata_mode?: CodexClientMetadataMode
+  codex_passthrough_mode?: CodexPassthroughMode
   proxy_url: string
   custom_headers?: Record<string, string> | null
 }
@@ -1341,6 +1414,7 @@ export interface GrokBatchImportResponse {
 }
 
 export interface UpdateAccountSchedulerRequest {
+  upstream_request_id_header?: string | null
   score_bias_override?: number | null
   base_concurrency_override?: number | null
   skip_warm_tier?: boolean
@@ -1453,6 +1527,26 @@ export interface WhamDailyUsageSplit {
   text_total_tokens?: number
 }
 
+// 单个 (model, speed) 在某一天的份额（wham daily-token-usage-breakdown 落库后按天换算）。
+// share 是当天内部的占比（0~1），只对这一天有意义，不能跨天相加；
+// credits/usd 是后端已按 share 分摊好的当天官方成本，跨天累加用这两个。
+// free 套餐 credits 恒为 0，但 share 仍然有效。speed 为 fast 即 priority 档。
+export interface WhamDailyUsageBreakdownEntry {
+  model: string
+  speed: 'standard' | 'fast' | string
+  share: number
+  credits: number
+  usd: number
+}
+
+// 按产品入口（cli / desktop_app / vscode / exec / web …）的当天份额，语义同上。
+export interface WhamDailyUsageSurfaceEntry {
+  surface: string
+  share: number
+  credits: number
+  usd: number
+}
+
 export interface WhamDailyUsageItem {
   day: string
   credits: number
@@ -1464,10 +1558,39 @@ export interface WhamDailyUsageItem {
   cached_input_tokens: number
   output_tokens: number
   total_tokens: number
-  // 当天的记录在上游结算前不含 token 明细，settled=false 时 token 数还不可信。
+  // settled=false 表示这天还在结算（当天 UTC 的行恒为未结算）：token 与 credits 可能
+  // 已经有值，但全天都在变，隔天回补后才稳定。
   settled: boolean
   clients: WhamDailyUsageSplit[]
   models: WhamDailyUsageSplit[]
+  // 模型×速度拆分是否已同步到这一天；旧快照没有这三个字段。
+  breakdown_available?: boolean
+  breakdown?: WhamDailyUsageBreakdownEntry[]
+  surfaces?: WhamDailyUsageSurfaceEntry[]
+}
+
+// 当前重置周期的官方成本与额度估算。估算 = 本周期已用官方成本 ÷ 实时已用百分比；
+// 百分比是整数，区间按 ±0.5% 推算，低于 10% 时不可靠。
+export interface WhamDailyUsageCycle {
+  // 窗口信息与实时百分比都拿到了；false 时看 reason。
+  available: boolean
+  reason?: 'no_window' | 'window_stale' | 'no_percent' | 'no_credits' | 'percent_too_low' | string
+  start_at?: string
+  reset_at?: string
+  window_seconds?: number
+  window_kind?: 'weekly' | 'monthly' | ''
+  used_percent?: number
+  used_percent_updated_at?: string
+  used_credits: number
+  used_usd: number
+  // 本周期内有官方结算数据的天数。
+  days: number
+  estimate?: {
+    usd: number
+    usd_low: number
+    usd_high: number
+    reliable: boolean
+  }
 }
 
 export interface WhamDailyUsageResponse {
@@ -1480,9 +1603,15 @@ export interface WhamDailyUsageResponse {
     turns: number
   }
   credits_per_usd: number
+  // 上游可回溯的天数（首次同步的深回补窗口），更早的历史只存在于本地快照。
   retention_days: number
   last_synced_at?: string
+  // counts 端点刷新失败的原因（此时展示的是已存快照）。
   refresh_error?: string
+  // 仅模型拆分端点刷新失败：counts 已刷新成功，只是按模型的成本可能落后一轮。
+  breakdown_refresh_error?: string
+  // 当前重置周期（7d 或月窗）的已用官方成本与额度估算；只有拿到窗口信息的 Codex OAuth 账号才有。
+  cycle?: WhamDailyUsageCycle
 }
 
 export interface AccountUsageDayStat {
@@ -1651,6 +1780,7 @@ export interface OpsOverviewResponse {
     max_bytes: number
     high_water_bytes: number
     largest_entry_bytes: number
+    shared_payload_bytes?: number
     local_hits: number
     local_misses: number
     remote_hits: number
@@ -2020,6 +2150,8 @@ export interface SystemSettings {
   prompt_filter_review_fail_closed: boolean
   client_compat_mode: 'preserve' | 'auto' | 'force' | string
   codex_min_cli_version: string
+  codex_images_main_model: string
+  codex_images_default_main_model?: string
   codex_cli_version_sync_enabled: boolean
   codex_cli_version_sync_interval_hours: number
   codex_synced_cli_version?: string
@@ -2266,6 +2398,7 @@ export interface PromptPolicyAuditHealth {
 export interface PromptPolicyIncidentDetailResponse {
 	incident: PromptPolicyIncident
 	matches: PromptFilterMatch[]
+	risk_subjects?: PromptRiskIncidentSubject[]
 	candidate?: {
 		id: number
 		status: string
@@ -2890,6 +3023,8 @@ export interface PromptIntelligenceEvidence {
   api_key_id?: number
   api_key_name?: string
   observed_at: string
+  incident_id?: string
+  risk_subjects?: PromptRiskIncidentSubject[]
 }
 
 export interface PromptIntelligenceEvidenceResponse {
@@ -2948,10 +3083,136 @@ export interface PromptIntelligenceAIAnalysisResponse {
   analysis_evidence_id: number
   provider: PromptIntelligenceAIProvider
   model: string
+  evidence_basis?: 'prompt' | 'context_only'
   decision: PromptIntelligenceAIDecision
   rule_candidate?: PromptIntelligenceCandidate
   rule_error?: string
   identity_update: PromptIdentityUpdateResult
+}
+
+export interface PromptRiskIncidentSubject {
+	subject_type: PromptRiskSubjectType
+	subject_key: string
+	subject_display: string
+	platform?: string
+	is_person: boolean
+	identity_confidence: number
+	newapi_user_id?: string
+	newapi_user_name?: string
+	newapi_user_email?: string
+	newapi_user_group?: string
+	event_count: number
+}
+
+export interface PromptIntelligenceDraftSuggestion {
+  provider: PromptIntelligenceAIProvider
+  model: string
+  evidence_basis: 'prompt' | 'context_only'
+  confidence: number
+  reason: string
+  rule: { name: string; pattern: string; weight: number; category: string; strict: boolean; rationale: string }
+  validation_error?: string
+  evidence_matched: number
+  evidence_total: number
+}
+
+export interface ProxyRiskScoreSnapshot {
+  id: number
+  proxy_id: number
+  profile_id: number
+  provider: string
+  resolved_ip: string
+  score: number | null
+  risk_level: string
+  recommendation: string
+  proxy_type?: string
+  is_vpn: boolean
+  is_tor: boolean
+  is_datacenter: boolean
+  is_blacklisted: boolean
+  blacklist_sources?: string[]
+  isp?: string
+  country?: string
+  latency_ms: number
+  status: string
+  error?: string
+  features_json?: string
+  raw_response_json?: string
+  checked_at: ISODateString
+  expires_at?: ISODateString | null
+}
+
+export interface ProxyRiskScoringProfile {
+  id: number
+  name: string
+  provider: string
+  engine?: string
+  enabled: boolean
+  priority: number
+  scamalytics_host: string
+  scamalytics_user: string
+  scamalytics_key_configured?: boolean
+  scamalytics_key_masked?: string
+  timeout_seconds: number
+  concurrency: number
+  request_delay_ms: number
+  cache_ttl_seconds: number
+  max_checks_per_job: number
+  daily_check_limit: number
+  credit_reserve: number
+  allow_force_refresh: boolean
+  resolve_hostnames: boolean
+  allow_private_targets: boolean
+  docs_url: string
+  tutorial_url: string
+  daily_used_date?: string
+  daily_used_count?: number
+  credits_remaining?: number | null
+  credits_used?: number | null
+  credit_reset_at?: ISODateString | null
+  last_quota_checked_at?: ISODateString | null
+  last_error?: string
+  created_at: ISODateString
+  updated_at: ISODateString
+}
+
+export interface PromptLogRetention {
+  retention_days: number
+  running: boolean
+  last_run_at?: string
+  last_deleted_logs: number
+  last_deleted_events: number
+  last_deleted_sources: number
+  last_duration_ms: number
+  last_error?: string
+}
+
+export interface ProxyRiskScoringJobItem {
+  seq: number
+  proxy_id: number
+  label: string
+  status: 'success' | 'error' | 'skipped' | 'cached' | string
+  error?: string
+  snapshot?: ProxyRiskScoreSnapshot | null
+  checked_at: ISODateString
+}
+
+export interface ProxyRiskScoringJob {
+  job_id: string
+  current?: string
+  items: ProxyRiskScoringJobItem[]
+  last_seq: number
+  profile_id: number
+  status: string
+  total: number
+  done: number
+  success: number
+  failed: number
+  skipped: number
+  cache_hits: number
+  error?: string
+  created_at: ISODateString
+  updated_at: ISODateString
 }
 
 export interface PromptIntelligenceHistoryResponse {
@@ -3195,6 +3456,10 @@ export interface APIKeyAccountStatsResponse {
 
 export interface UsageLog {
 	request_type?: string
+  request_id?: string
+  upstream_request_id?: string
+  upstream_proxy_id?: number
+  upstream_proxy_name?: string
   id: number
   account_id: number
   // 上游渠道(codex/grok),写入时固化;历史行回填,可能为空
@@ -3226,6 +3491,13 @@ export interface UsageLog {
   has_compaction_history: boolean
   via_websocket?: boolean
   cached_tokens: number
+  image_input_tokens?: number
+  image_output_tokens?: number
+  cached_image_input_tokens?: number
+  image_input_cost?: number
+  image_cache_read_cost?: number
+  image_input_price_per_mtoken?: number
+  cached_image_input_price_per_mtoken?: number
   cache_write_5m_tokens: number
   cache_write_1h_tokens: number
   service_tier: string
@@ -3310,6 +3582,8 @@ export interface ChartAggregation {
 }
 
 export interface ModelPricingOverride {
+  image_input?: number
+  cached_image_input?: number
   source?: string
   input?: number
   cached_input?: number
@@ -3842,6 +4116,60 @@ export interface ObservedInstructionsSample {
   length: number
   truncated: boolean
   observed_at: string
+}
+
+// Codex User-Agent 形态目录(设置页搭配选择)与出站身份预览。
+export interface CodexUserAgentCatalogOption {
+  value: string
+  weight: number
+}
+
+export interface CodexUserAgentCatalogPlatform {
+  os_name: string
+  os_version: string
+  arch: string
+  weight: number
+}
+
+export interface CodexUserAgentCatalogVersionPair {
+  cli_version: string
+  app_version: string
+  weight: number
+}
+
+export interface CodexUserAgentCatalogKind {
+  kind: string
+  client_name: string
+  app_follows_cli: boolean
+  default_app_name: string
+  default_platform: CodexUserAgentCatalogPlatform
+  default_terminal: string
+  app_names: CodexUserAgentCatalogOption[] | null
+  terminals: CodexUserAgentCatalogOption[] | null
+  platforms: CodexUserAgentCatalogPlatform[] | null
+  version_pairs: CodexUserAgentCatalogVersionPair[] | null
+}
+
+export interface CodexUserAgentCatalog {
+  kinds: CodexUserAgentCatalogKind[]
+  default_pool_mix: Record<string, number>
+}
+
+export interface CodexUserAgentPersona {
+  label?: string
+  account_id?: number
+  user_agent: string
+  originator: string
+  version: string
+}
+
+export interface CodexUserAgentPreview {
+  mode: string
+  kind?: string
+  persona?: CodexUserAgentPersona
+  samples?: CodexUserAgentPersona[]
+  warnings?: string[]
+  normalized: string
 }
 
 export interface ObservedInstructionsResponse {

@@ -123,6 +123,10 @@ func (h *Handler) buildAccountResponse(
 	if isOpenAIResponsesAccount && includeDetails {
 		codexClientMetadataMode = auth.NormalizeCodexClientMetadataMode(row.GetCredential("codex_client_metadata_mode"))
 	}
+	codexPassthroughMode := ""
+	if isOpenAIResponsesAccount && includeDetails {
+		codexPassthroughMode = auth.NormalizeCodexPassthroughMode(row.GetCredential("codex_passthrough_mode"))
+	}
 	balanceQueryURL := ""
 	if isOpenAIResponsesAccount && includeDetails {
 		balanceQueryURL = row.GetCredential(openAIResponsesBalanceQueryURLCredential)
@@ -216,7 +220,14 @@ func (h *Handler) buildAccountResponse(
 	}
 	if includeDetails {
 		modelMapping = row.GetCredential("model_mapping")
-		if isClaudeAccount {
+		if isClaudeAccount && claudeAuthKindForRow(row, true) == auth.ClaudeAuthKindAPIKey {
+			// API Key custom_headers are operator configuration (never a generated
+			// fingerprint) and can't contain gateway-owned secrets (reserved names
+			// are rejected on write), so they are shown in full like Codex relay
+			// accounts. The UA preview reflects custom header > identity emulation.
+			customHeaders = headers
+			claudeUserAgent = auth.ClaudeAPIKeyUpstreamUserAgent(headers, claudeFingerprintMode)
+		} else if isClaudeAccount {
 			// Claude detail responses may be consumed by admin tooling, but must
 			// never expose arbitrary historical custom headers such as
 			// Authorization/Cookie/x-api-key. Keep only the provider identity
@@ -310,6 +321,10 @@ func (h *Handler) buildAccountResponse(
 		ClaudeUsageWindows:             parseClaudeUsageWindows(row.GetCredential(auth.ClaudeUsageWindowsCredentialKey)),
 		UsageLimitOverride:             ignoreUsageLimitStatusOverride,
 		UsageLimitEffective:            ignoreUsageLimitStatusEffective,
+		ClaudeAuthKind:                 claudeAuthKindForRow(row, isClaudeAccount),
+		ClaudeBaseURL:                  row.GetCredential(auth.ClaudeBaseURLCredentialKey),
+		CodexPassthroughMode:           codexPassthroughMode,
+		UpstreamRequestIDHeader:        row.GetCredential(auth.UpstreamRequestIDHeaderCredentialKey),
 	}
 	// 凭据里只要存在 usage 窗口键(哪怕是空数组)就代表 OAuth usage 采样跑过。
 	resp.ClaudeUsageWindowsProbed = strings.TrimSpace(row.GetCredential(auth.ClaudeUsageWindowsCredentialKey)) != ""
@@ -533,6 +548,7 @@ func stripAccountDetailFields(resp *accountResponse) {
 	}
 	resp.ModelMapping = ""
 	resp.CodexClientMetadataMode = ""
+	resp.CodexPassthroughMode = ""
 	resp.CustomHeaders = nil
 	resp.AllowedAPIKeyIDs = nil
 	resp.Usage5hDetail = nil

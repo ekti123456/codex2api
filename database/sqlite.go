@@ -183,6 +183,9 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				has_compaction_history INTEGER DEFAULT 0,
 				via_websocket INTEGER DEFAULT 0,
 				cached_tokens INTEGER DEFAULT 0,
+				image_input_tokens INTEGER DEFAULT 0,
+				image_output_tokens INTEGER DEFAULT 0,
+				cached_image_input_tokens INTEGER DEFAULT 0,
 				cache_write_5m_tokens INTEGER DEFAULT 0,
 				cache_write_1h_tokens INTEGER DEFAULT 0,
 				service_tier TEXT DEFAULT '',
@@ -277,9 +280,11 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 					antigravity_oauth_config TEXT DEFAULT '{}',
 					invite_guide_config TEXT DEFAULT '{}',
 					visible_channels_config TEXT DEFAULT '{}',
+					channel_test_config TEXT DEFAULT '{}',
+					antigravity_config TEXT DEFAULT '{}',
 					max_concurrency INTEGER DEFAULT 2,
 				global_rpm INTEGER DEFAULT 0,
-				test_model TEXT DEFAULT 'gpt-5.4',
+				test_model TEXT DEFAULT 'gpt-5.5',
 				test_content TEXT DEFAULT 'hi',
 				test_concurrency INTEGER DEFAULT 50,
 				proxy_url TEXT DEFAULT '',
@@ -307,6 +312,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				client_compat_mode TEXT DEFAULT 'preserve',
 				codex_min_cli_version TEXT DEFAULT '0.153.3',
 				codex_user_agent_config TEXT DEFAULT '{}',
+				codex_images_main_model TEXT DEFAULT '',
 				usage_log_mode TEXT DEFAULT 'full',
 				usage_log_batch_size INTEGER DEFAULT 200,
 				usage_log_flush_interval_seconds INTEGER DEFAULT 5,
@@ -382,6 +388,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 					oauth_model_cooldown_seconds INTEGER NOT NULL DEFAULT 300,
 					oauth_model_cooldown_backoff_enabled INTEGER NOT NULL DEFAULT 1
 				);`,
+		modelCapabilitiesSchema,
 		`CREATE TABLE IF NOT EXISTS model_registry (
 			id TEXT PRIMARY KEY,
 			enabled INTEGER DEFAULT 1,
@@ -550,6 +557,10 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"usage_logs", "compact", "INTEGER DEFAULT 0"},
 		{"usage_logs", "has_compaction_history", "INTEGER DEFAULT 0"},
 		{"usage_logs", "cached_tokens", "INTEGER DEFAULT 0"},
+		{"usage_logs", "image_input_tokens", "INTEGER DEFAULT 0"},
+		{"usage_logs", "image_output_tokens", "INTEGER DEFAULT 0"},
+		{"usage_logs", "cached_image_input_tokens", "INTEGER DEFAULT 0"},
+
 		{"usage_logs", "cache_write_5m_tokens", "INTEGER DEFAULT 0"},
 		{"usage_logs", "cache_write_1h_tokens", "INTEGER DEFAULT 0"},
 		{"usage_logs", "service_tier", "TEXT DEFAULT ''"},
@@ -567,6 +578,10 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"usage_logs", "parent_request_id", "TEXT DEFAULT ''"},
 		{"usage_logs", "request_type", "TEXT DEFAULT ''"},
 		{"usage_logs", "request_diagnostics", "TEXT DEFAULT ''"},
+		{"usage_logs", "request_id", "TEXT DEFAULT ''"},
+		{"usage_logs", "upstream_request_id", "TEXT DEFAULT ''"},
+		{"usage_logs", "upstream_proxy_id", "INTEGER DEFAULT 0"},
+		{"usage_logs", "upstream_proxy_name", "TEXT DEFAULT ''"},
 		{"usage_logs", "image_count", "INTEGER DEFAULT 0"},
 		{"usage_logs", "image_width", "INTEGER DEFAULT 0"},
 		{"usage_logs", "image_height", "INTEGER DEFAULT 0"},
@@ -607,6 +622,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "antigravity_oauth_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "invite_guide_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "visible_channels_config", "TEXT DEFAULT '{}'"},
+		{"system_settings", "channel_test_config", "TEXT DEFAULT '{}'"},
+		{"system_settings", "antigravity_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "test_content", "TEXT DEFAULT 'hi'"},
 		{"system_settings", "pg_max_conns", "INTEGER DEFAULT 50"},
 		{"system_settings", "redis_pool_size", "INTEGER DEFAULT 30"},
@@ -724,6 +741,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "client_compat_mode", "TEXT DEFAULT 'preserve'"},
 		{"system_settings", "codex_min_cli_version", "TEXT DEFAULT '0.153.3'"},
 		{"system_settings", "codex_user_agent_config", "TEXT DEFAULT '{}'"},
+		{"system_settings", "codex_images_main_model", "TEXT DEFAULT ''"},
 		{"system_settings", "usage_log_mode", "TEXT DEFAULT 'full'"},
 		{"system_settings", "usage_log_batch_size", "INTEGER DEFAULT 200"},
 		{"system_settings", "usage_log_flush_interval_seconds", "INTEGER DEFAULT 5"},
@@ -800,6 +818,16 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		return err
 	}
 
+	// gpt-5.4 全系已下线(2026-09 上游 ChatGPT 账号 manifest 不再包含):仍指向它的
+	// 连通性测试模型改回出厂默认,否则测连必 400。
+	if _, err := db.conn.ExecContext(ctx, `
+		UPDATE system_settings
+		SET test_model = 'gpt-5.5'
+		WHERE LOWER(COALESCE(test_model, '')) IN ('gpt-5.4', 'gpt-5.4-mini')
+	`); err != nil {
+		return err
+	}
+
 	indexStatements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_accounts_platform ON accounts(platform);`,
@@ -809,6 +837,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_accounts_created_id ON accounts(created_at, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_accounts_updated_id ON accounts(updated_at, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_request_id ON usage_logs(request_id) WHERE request_id <> '';`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_upstream_request_id ON usage_logs(upstream_request_id) WHERE upstream_request_id <> '';`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_account_id ON usage_logs(account_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_account_created_at ON usage_logs(account_id, created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_account_generation_created_at ON usage_logs(account_id, credential_generation, created_at);`,

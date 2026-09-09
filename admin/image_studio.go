@@ -1537,14 +1537,15 @@ func imageAssetDir() string {
 	return defaultImageAssetDir
 }
 
+// normalizeImageStudioModel 生图台只接受 Codex 生图模型族(gpt-image-2 及 -2k/-4k 档位
+// 别名、带日期快照名);其他名字回落到 gpt-image-2。
+// Flare/Sunburst、日期快照和尺寸别名均按 gpt-image-* 前缀准入。
 func normalizeImageStudioModel(model string) string {
 	model = strings.TrimSpace(model)
-	switch model {
-	case "", "gpt-image-2", "gpt-image-2-2k", "gpt-image-2-4k":
+	if model == "" || proxy.IsGPTImageModel(model) {
 		return model
-	default:
-		return "gpt-image-2"
 	}
+	return "gpt-image-2"
 }
 
 func normalizeImageJobUpscale(model, size, upscale string) (string, error) {

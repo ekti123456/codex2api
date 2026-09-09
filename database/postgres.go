@@ -250,7 +250,7 @@ const (
 	maxUsageLogFlushIntervalSeconds     = 300
 
 	postgresMaxBindParams       = 65535
-	usageLogInsertColumnCount   = 55
+	usageLogInsertColumnCount   = 62
 	maxUsageLogInsertRowsPerSQL = 1000
 
 	// usageLogBufferHardLimit 内存缓冲的硬上限。PG 长时间不可用时（维护、主从切换、
@@ -361,6 +361,13 @@ type usageLogEntry struct {
 	SessionWindowExpiresAt   time.Time
 	CacheWrite5mTokens       int
 	CacheWrite1hTokens       int
+	RequestID                string
+	UpstreamRequestID        string
+	UpstreamProxyID          int64
+	UpstreamProxyName        string
+	ImageInputTokens         int
+	ImageOutputTokens        int
+	CachedImageInputTokens   int
 }
 
 // New 创建数据库连接并自动建表。
@@ -495,6 +502,9 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	if err := db.ensureUsageAccountBillingWindowRollupsTable(ctx); err != nil {
 		return nil, fmt.Errorf("创建账号成本窗口归档表失败: %w", err)
 	}
+	if err := db.ensureProxyRiskScoringTables(ctx); err != nil {
+		return nil, fmt.Errorf("创建代理风险评分表失败: %w", err)
+	}
 
 	// 启动批量写入后台协程
 	db.startLogFlusher()
@@ -565,31 +575,59 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 // CONCURRENTLY 构建被中断会留下 INVALID 索引且使 IF NOT EXISTS 误判存在，
 // 所以先探测有效性，无效则先删再建。
 func (db *DB) ensureUsageLogsGenerationIndex(parent context.Context) error {
-	const indexName = "idx_usage_logs_account_generation_created_at"
 	ctx, cancel := context.WithTimeout(parent, 60*time.Minute)
 	defer cancel()
+	conn, err := db.conn.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// Serialize builders across instances without delaying service startup.
+	var locked bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtext('codex2api:usage-log-indexes'))`).Scan(&locked); err != nil {
+		return err
+	}
+	if !locked {
+		return nil
+	}
+	defer func() {
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer unlockCancel()
+		if _, err := conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock(hashtext('codex2api:usage-log-indexes'))`); err != nil {
+			log.Printf("释放 usage_logs 索引构建锁失败: %v", err)
+		}
+	}()
+	for _, index := range []struct{ name, definition string }{
+		{"idx_usage_logs_account_generation_created_at", "(account_id, credential_generation, created_at)"},
+		{"idx_usage_logs_request_id", "(request_id) WHERE request_id <> ''"},
+		{"idx_usage_logs_upstream_request_id", "(upstream_request_id) WHERE upstream_request_id <> ''"},
+	} {
+		if err := ensureUsageLogsOnlineIndex(ctx, conn, index.name, index.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+func ensureUsageLogsOnlineIndex(ctx context.Context, conn *sql.Conn, indexName, definition string) error {
 	var exists, valid bool
-	err := db.conn.QueryRowContext(ctx, `
-		SELECT to_regclass($1) IS NOT NULL,
-		       COALESCE((SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)), FALSE)
-	`, indexName).Scan(&exists, &valid)
+	err := conn.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL,
+ COALESCE((SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)), FALSE)`, indexName).Scan(&exists, &valid)
 	if err != nil {
 		return fmt.Errorf("探测索引 %s 状态失败: %w", indexName, err)
 	}
 	if exists && valid {
 		return nil
 	}
-	if exists && !valid {
-		if _, err := db.conn.ExecContext(ctx, `DROP INDEX `+quotePostgresIdent(indexName)); err != nil {
+	if exists {
+		if _, err := conn.ExecContext(ctx, `DROP INDEX CONCURRENTLY IF EXISTS `+quotePostgresIdent(indexName)); err != nil {
 			return fmt.Errorf("清理无效索引 %s 失败: %w", indexName, err)
 		}
 	}
-	// CONCURRENTLY 不能在事务块内执行；单条 ExecContext 走 autocommit，满足要求。
-	if _, err := db.conn.ExecContext(ctx, `CREATE INDEX CONCURRENTLY IF NOT EXISTS `+quotePostgresIdent(indexName)+` ON usage_logs(account_id, credential_generation, created_at)`); err != nil {
+	if _, err := conn.ExecContext(ctx, `CREATE INDEX CONCURRENTLY IF NOT EXISTS `+quotePostgresIdent(indexName)+` ON usage_logs`+definition); err != nil {
 		return fmt.Errorf("在线创建索引 %s 失败: %w", indexName, err)
 	}
-	log.Printf("usage_logs 代际索引 %s 已就绪", indexName)
+	log.Printf("usage_logs 索引 %s 已就绪", indexName)
 	return nil
 }
 
@@ -1188,6 +1226,9 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS has_compaction_history BOOLEAN DEFAULT false;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS cached_tokens INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS cache_write_5m_tokens INT DEFAULT 0;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS image_input_tokens INT DEFAULT 0;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS image_output_tokens INT DEFAULT 0;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS cached_image_input_tokens INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS cache_write_1h_tokens INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS service_tier VARCHAR(100) DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS requested_service_tier VARCHAR(100) DEFAULT '';
@@ -1204,6 +1245,10 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS parent_request_id VARCHAR(128) DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS request_type VARCHAR(32) DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS request_diagnostics TEXT DEFAULT '';
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS request_id VARCHAR(128) DEFAULT '';
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_request_id VARCHAR(128) DEFAULT '';
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_proxy_id BIGINT DEFAULT 0;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_proxy_name VARCHAR(255) DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS image_count INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS image_width INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS image_height INT DEFAULT 0;
@@ -1266,9 +1311,11 @@ func (db *DB) migrate(ctx context.Context) error {
 				antigravity_oauth_config TEXT DEFAULT '{}',
 				invite_guide_config TEXT DEFAULT '{}',
 				visible_channels_config TEXT DEFAULT '{}',
+				channel_test_config TEXT DEFAULT '{}',
+				antigravity_config TEXT DEFAULT '{}',
 				max_concurrency    INT DEFAULT 2,
 			global_rpm         INT DEFAULT 0,
-			test_model         VARCHAR(100) DEFAULT 'gpt-5.4',
+			test_model         VARCHAR(100) DEFAULT 'gpt-5.5',
 			test_content       TEXT DEFAULT 'hi',
 			test_concurrency   INT DEFAULT 50,
 			proxy_url          VARCHAR(500) DEFAULT '',
@@ -1334,6 +1381,8 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS antigravity_oauth_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS invite_guide_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS visible_channels_config TEXT DEFAULT '{}';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS channel_test_config TEXT DEFAULT '{}';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS antigravity_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS test_content TEXT DEFAULT 'hi';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
@@ -1397,10 +1446,17 @@ func (db *DB) migrate(ctx context.Context) error {
 	  AND COALESCE(prompt_filter_review_enabled, FALSE) = FALSE
 	  AND COALESCE(prompt_filter_review_base_url, '') = 'https://api.openai.com'
 	  AND COALESCE(prompt_filter_review_model, '') = 'omni-moderation-latest';
+	-- gpt-5.4 全系已下线(2026-09 上游 ChatGPT 账号 manifest 不再包含):仍指向它的
+	-- 连通性测试模型改回出厂默认,否则测连必 400。
+	ALTER TABLE system_settings ALTER COLUMN test_model SET DEFAULT 'gpt-5.5';
+	UPDATE system_settings
+	SET test_model = 'gpt-5.5'
+	WHERE LOWER(COALESCE(test_model, '')) IN ('gpt-5.4', 'gpt-5.4-mini');
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS client_compat_mode VARCHAR(20) DEFAULT 'preserve';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_min_cli_version VARCHAR(32) DEFAULT '0.153.3';
 	ALTER TABLE system_settings ALTER COLUMN codex_min_cli_version SET DEFAULT '0.153.3';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_user_agent_config TEXT DEFAULT '{}';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_images_main_model TEXT DEFAULT '';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_log_mode VARCHAR(20) DEFAULT 'full';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_log_batch_size INT DEFAULT 200;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_log_flush_interval_seconds INT DEFAULT 5;
@@ -1552,7 +1608,13 @@ func (db *DB) migrate(ctx context.Context) error {
 			CREATE INDEX IF NOT EXISTS idx_prompt_filter_logs_source_id ON prompt_filter_logs(source, id DESC);
 			CREATE INDEX IF NOT EXISTS idx_prompt_filter_logs_reviewed_id ON prompt_filter_logs(reviewed, id DESC);
 			DROP TABLE IF EXISTS prompt_filter_secrets;
-			CREATE TABLE IF NOT EXISTS model_registry (
+			CREATE TABLE IF NOT EXISTS model_capability_snapshots (
+ account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+ credential_generation BIGINT NOT NULL,
+ observed_at BIGINT NOT NULL,
+ models_json TEXT NOT NULL
+ );
+ CREATE TABLE IF NOT EXISTS model_registry (
 				id                     VARCHAR(100) PRIMARY KEY,
 				enabled                BOOLEAN DEFAULT TRUE,
 				category               VARCHAR(50) DEFAULT 'codex',
@@ -2344,20 +2406,21 @@ type SystemSettings struct {
 	ShowFullUsageNumbers                bool
 	PublicKeyUsagePageEnabled           bool
 	PublicImageStudioPageEnabled        bool
-	PublicAccountPortalPageEnabled      bool // 账号自助添加公开门户开关，默认 false
-	CodexForceWebsocket                 bool // 强制 Codex 上游走 WebSocket（复用连接池），默认 false
-	CodexRequestCompression             bool // HTTP /responses 请求体 zstd 压缩（对齐真实客户端），默认 true
-	CodexWSWeakNetworkMode              bool // WS 弱网保守复用模式，默认 false
-	CodexWSKeepaliveEnabled             bool // 启用上游 WS 空闲连接保活（仅 Ping，不发业务帧），默认 false
-	CodexWSKeepaliveIntervalSec         int  // WS 保活 Ping 间隔（秒），默认 60
-	CodexWSHideUpstreamErrors           bool // 隐藏上游 WS 原始错误，默认 true
-	CodexWSSilentRetryEnabled           bool // 首包前 WS 上游错误静默换号重试，默认 true
-	CodexWSSilentMaxRetries             int  // WS 静默换号最大重试次数，默认 2
-	CodexWSSizeRouterEnabled            bool // 1009 自学习体积路由：超大请求直接首发 HTTP，默认 true
-	CodexWSBusyAcquireMaxWaitSec        int  // busy session/容量等待的累计上限（秒），默认 30（issue #413）
-	CodexWSBusyOverflowEnabled          bool // busy session 溢出到同账号兄弟连接，默认 false（issue #413）
-	CodexWSBusyPatienceSec              int  // 触发溢出前的短等待（秒），默认 2（issue #413）
-	CodexWSStatelessSlots               int  // 无状态请求每 (账号, cacheKey) 的持久连接槽位数，默认 8，范围 1-32（issue #522）
+	PublicAccountPortalPageEnabled      bool   // 账号自助添加公开门户开关，默认 false
+	CodexForceWebsocket                 bool   // 强制 Codex 上游走 WebSocket（复用连接池），默认 false
+	CodexRequestCompression             bool   // HTTP /responses 请求体 zstd 压缩（对齐真实客户端），默认 true
+	CodexWSWeakNetworkMode              bool   // WS 弱网保守复用模式，默认 false
+	CodexWSKeepaliveEnabled             bool   // 启用上游 WS 空闲连接保活（仅 Ping，不发业务帧），默认 false
+	CodexWSKeepaliveIntervalSec         int    // WS 保活 Ping 间隔（秒），默认 60
+	CodexWSHideUpstreamErrors           bool   // 隐藏上游 WS 原始错误，默认 true
+	CodexWSSilentRetryEnabled           bool   // 首包前 WS 上游错误静默换号重试，默认 true
+	CodexWSSilentMaxRetries             int    // WS 静默换号最大重试次数，默认 2
+	CodexWSSizeRouterEnabled            bool   // 1009 自学习体积路由：超大请求直接首发 HTTP，默认 true
+	CodexWSBusyAcquireMaxWaitSec        int    // busy session/容量等待的累计上限（秒），默认 30（issue #413）
+	CodexWSBusyOverflowEnabled          bool   // busy session 溢出到同账号兄弟连接，默认 false（issue #413）
+	CodexWSBusyPatienceSec              int    // 触发溢出前的短等待（秒），默认 2（issue #413）
+	CodexWSStatelessSlots               int    // 无状态请求每 (账号, cacheKey) 的持久连接槽位数，默认 8，范围 1-32（issue #522）
+	CodexImagesMainModel                string // 空值沿用部署默认的生图文本驱动模型
 	// GithubToken 用于 api.github.com 请求的 Personal Access Token（提升限流配额，
 	// 只发给 api.github.com，绝不发给镜像/其他主机；空表示未配置，issue #522）。
 	GithubToken string
@@ -2649,7 +2712,8 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(models_list_read_max_bytes, 8388608),
 		       COALESCE(auto_activate_5h_window_enabled, false),
 		       COALESCE(claude_config, '{}'),
-		       COALESCE(codex_capacity_retry_enabled, false)
+		       COALESCE(codex_capacity_retry_enabled, false),
+		       COALESCE(codex_images_main_model, '')
 			FROM system_settings WHERE id = 1
 		`).Scan(
 		&s.SiteName, &s.SiteLogo,
@@ -2735,6 +2799,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.AutoActivate5hWindowEnabled,
 		&s.ClaudeConfig,
 		&s.CodexCapacityRetryEnabled,
+		&s.CodexImagesMainModel,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -2985,9 +3050,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					auto_activate_5h_window_enabled,
 					codex_unlinked_account_fallback_enabled,
 					codex_unlinked_account_fallback_seconds,
-					codex_capacity_retry_enabled
+					codex_capacity_retry_enabled,
+					codex_images_main_model
 					)
-						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124)
+						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125)
 				ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -3027,10 +3093,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				prompt_filter_log_matches = EXCLUDED.prompt_filter_log_matches,
 				prompt_filter_max_text_length = EXCLUDED.prompt_filter_max_text_length,
 				prompt_filter_sensitive_words = EXCLUDED.prompt_filter_sensitive_words,
-				prompt_filter_custom_patterns = CASE WHEN $125 THEN system_settings.prompt_filter_custom_patterns ELSE EXCLUDED.prompt_filter_custom_patterns END,
+				prompt_filter_custom_patterns = CASE WHEN $126 THEN system_settings.prompt_filter_custom_patterns ELSE EXCLUDED.prompt_filter_custom_patterns END,
 				prompt_filter_disabled_patterns = EXCLUDED.prompt_filter_disabled_patterns,
 				prompt_filter_review_enabled = EXCLUDED.prompt_filter_review_enabled,
-				prompt_filter_review_api_key = CASE WHEN $126 THEN system_settings.prompt_filter_review_api_key ELSE EXCLUDED.prompt_filter_review_api_key END,
+				prompt_filter_review_api_key = CASE WHEN $127 THEN system_settings.prompt_filter_review_api_key ELSE EXCLUDED.prompt_filter_review_api_key END,
 				prompt_filter_review_base_url = EXCLUDED.prompt_filter_review_base_url,
 				prompt_filter_review_model = EXCLUDED.prompt_filter_review_model,
 				prompt_filter_review_timeout_seconds = EXCLUDED.prompt_filter_review_timeout_seconds,
@@ -3038,6 +3104,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				client_compat_mode = EXCLUDED.client_compat_mode,
 				codex_min_cli_version = EXCLUDED.codex_min_cli_version,
 				codex_user_agent_config = EXCLUDED.codex_user_agent_config,
+				codex_images_main_model = EXCLUDED.codex_images_main_model,
 				usage_log_mode = EXCLUDED.usage_log_mode,
 				usage_log_batch_size = EXCLUDED.usage_log_batch_size,
 				usage_log_flush_interval_seconds = EXCLUDED.usage_log_flush_interval_seconds,
@@ -3164,6 +3231,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.CodexUnlinkedAccountFallbackEnabled,
 		NormalizeCodexUnlinkedAccountFallbackSeconds(s.CodexUnlinkedAccountFallbackSeconds),
 		s.CodexCapacityRetryEnabled,
+		strings.TrimSpace(s.CodexImagesMainModel),
 		s.PreservePromptFilterCustomPatterns,
 		s.PreservePromptFilterReviewAPIKey)
 	return err
@@ -3488,7 +3556,8 @@ type ProxyRow struct {
 	TestStatus       string    `json:"test_status"`
 	// BoundCount 是绑定到该代理的账号数,由列表接口按 proxy_url 聚合填充,
 	// 前端据此免拉全量账号(代理页大号池卡死问题)。
-	BoundCount int64 `json:"bound_count"`
+	BoundCount int64                   `json:"bound_count"`
+	RiskScore  *ProxyRiskScoreSnapshot `json:"risk_score,omitempty"`
 }
 
 // SetAccountProxyURLs 在单事务里批量更新账号的 proxy_url(代理均衡绑定)。
@@ -3569,7 +3638,19 @@ func (db *DB) ListProxies(ctx context.Context) ([]*ProxyRow, error) {
 		}
 		proxies = append(proxies, p)
 	}
-	return proxies, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(proxies))
+	for _, proxy := range proxies {
+		ids = append(ids, proxy.ID)
+	}
+	if scores, err := db.ListLatestProxyRiskScores(ctx, ids); err == nil {
+		for _, proxy := range proxies {
+			proxy.RiskScore = scores[proxy.ID]
+		}
+	}
+	return proxies, nil
 }
 
 // GetProxy returns one proxy by ID.
@@ -4137,6 +4218,10 @@ func (db *DB) RebindAccountProxyURLs(ctx context.Context, oldURL, newURL string)
 
 // UsageLog 请求日志行
 type UsageLog struct {
+	RequestID              string    `json:"request_id"`
+	UpstreamRequestID      string    `json:"upstream_request_id"`
+	UpstreamProxyID        int64     `json:"upstream_proxy_id"`
+	UpstreamProxyName      string    `json:"upstream_proxy_name"`
 	ID                     int64     `json:"id"`
 	AccountID              int64     `json:"account_id"`
 	CredentialGeneration   int64     `json:"credential_generation,omitempty"`
@@ -4169,6 +4254,9 @@ type UsageLog struct {
 	HasCompactionHistory   bool      `json:"has_compaction_history"`
 	ViaWebsocket           bool      `json:"via_websocket"`
 	CachedTokens           int       `json:"cached_tokens"`
+	ImageInputTokens       int       `json:"image_input_tokens"`
+	ImageOutputTokens      int       `json:"image_output_tokens"`
+	CachedImageInputTokens int       `json:"cached_image_input_tokens"`
 	CacheWrite5mTokens     int       `json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens     int       `json:"cache_write_1h_tokens"`
 	ServiceTier            string    `json:"service_tier"`
@@ -4189,6 +4277,10 @@ type UsageLog struct {
 	CreatedAt              time.Time `json:"created_at"`
 	AccountBilled          float64   `json:"account_billed"`
 	UserBilled             float64   `json:"user_billed"`
+	ImageInputCost         float64   `json:"image_input_cost"`
+	ImageCacheReadCost     float64   `json:"image_cache_read_cost"`
+	ImageInputPrice        float64   `json:"image_input_price_per_mtoken"`
+	CachedImageInputPrice  float64   `json:"cached_image_input_price_per_mtoken"`
 	InputCost              float64   `json:"input_cost"`
 	OutputCost             float64   `json:"output_cost"`
 	CacheReadCost          float64   `json:"cache_read_cost"`
@@ -4354,6 +4446,13 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 		SessionWindowExpiresAt:   log.SessionWindowExpiresAt,
 		CacheWrite5mTokens:       log.CacheWrite5mTokens,
 		CacheWrite1hTokens:       log.CacheWrite1hTokens,
+		RequestID:                clampUsageLogText(log.RequestID, usageLogRequestIDMaxLen),
+		UpstreamRequestID:        clampUsageLogText(log.UpstreamRequestID, usageLogRequestIDMaxLen),
+		UpstreamProxyID:          log.UpstreamProxyID,
+		UpstreamProxyName:        clampUsageLogText(log.UpstreamProxyName, usageLogAPIKeyNameMaxLen),
+		ImageInputTokens:         log.ImageInputTokens,
+		ImageOutputTokens:        log.ImageOutputTokens,
+		CachedImageInputTokens:   log.CachedImageInputTokens,
 	})
 	db.trimUsageLogBufferLocked()
 	bufLen := len(db.logBuf)
@@ -4371,6 +4470,10 @@ type UsageLogInput struct {
 	RequestType        string
 	RequestDiagnostics string
 	AccountID          int64
+	RequestID          string
+	UpstreamRequestID  string
+	UpstreamProxyID    int64
+	UpstreamProxyName  string
 	// CredentialGeneration attributes internally-generated Grok traffic to the
 	// credential snapshot that issued it. Zero is legacy/unscoped traffic.
 	CredentialGeneration int64
@@ -4433,6 +4536,9 @@ type UsageLogInput struct {
 	SessionWindowExpiresAt   time.Time
 	CacheWrite5mTokens       int
 	CacheWrite1hTokens       int
+	ImageInputTokens         int
+	ImageOutputTokens        int
+	CachedImageInputTokens   int
 }
 
 func (l *UsageLog) populateBillingBreakdown() {
@@ -4444,7 +4550,9 @@ func (l *UsageLog) populateBillingBreakdown() {
 	if billingServiceTier == "" {
 		billingServiceTier = l.ServiceTier
 	}
-	breakdown := CalculateCostBreakdownWithCacheWrites(l.InputTokens, l.OutputTokens, l.CachedTokens, l.CacheWrite5mTokens, l.CacheWrite1hTokens, billingModel, billingServiceTier)
+	breakdown := UsageLogCostBreakdown(&UsageLogInput{Model: billingModel, BillingServiceTier: billingServiceTier, InputTokens: l.InputTokens, OutputTokens: l.OutputTokens, CachedTokens: l.CachedTokens, CacheWrite5mTokens: l.CacheWrite5mTokens, CacheWrite1hTokens: l.CacheWrite1hTokens, ImageInputTokens: l.ImageInputTokens, ImageOutputTokens: l.ImageOutputTokens, CachedImageInputTokens: l.CachedImageInputTokens})
+	l.ImageInputCost, l.ImageCacheReadCost = breakdown.ImageInputCost, breakdown.ImageCacheReadCost
+	l.ImageInputPrice, l.CachedImageInputPrice = breakdown.ImageInputPricePerMToken, breakdown.CacheReadImagePricePerMToken
 	l.InputCost = breakdown.InputCost
 	l.OutputCost = breakdown.OutputCost
 	l.CacheReadCost = breakdown.CacheReadCost
@@ -4466,6 +4574,10 @@ func (l *UsageLog) populateBillingBreakdown() {
 	}
 	if displayTotal > 0 && breakdown.TotalCost > 0 && displayTotal != breakdown.TotalCost {
 		scale := displayTotal / breakdown.TotalCost
+		l.ImageInputCost *= scale
+		l.ImageCacheReadCost *= scale
+		l.ImageInputPrice *= scale
+		l.CachedImageInputPrice *= scale
 		l.InputCost *= scale
 		l.OutputCost *= scale
 		l.CacheReadCost *= scale
@@ -4732,12 +4844,12 @@ func (db *DB) insertSQLiteUsageLogBatch(ctx context.Context, batch []usageLogEnt
 	if len(logsToStore) > 0 {
 		stmt, err := tx.PrepareContext(ctx,
 			`INSERT INTO usage_logs (account_id, credential_generation, channel, client_ip, endpoint, model, effective_model, prompt_tokens, completion_tokens, total_tokens, status_code, duration_ms,
-				  input_tokens, output_tokens, reasoning_tokens, first_token_ms, ws_acquire_ms, reasoning_effort, inbound_endpoint, upstream_endpoint, stream, compact, has_compaction_history, cached_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier,
+				  input_tokens, output_tokens, reasoning_tokens, first_token_ms, ws_acquire_ms, reasoning_effort, inbound_endpoint, upstream_endpoint, stream, compact, has_compaction_history, cached_tokens, image_input_tokens, image_output_tokens, cached_image_input_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier,
 				  requested_service_tier, actual_service_tier, billing_service_tier,
 				  api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
 				  is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
-				  client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55)`)
+				  client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62)`)
 		if err != nil {
 			return fmt.Errorf("准备语句: %w", err)
 		}
@@ -4745,11 +4857,11 @@ func (db *DB) insertSQLiteUsageLogBatch(ctx context.Context, batch []usageLogEnt
 
 		for _, e := range logsToStore {
 			if _, err := stmt.ExecContext(ctx, e.AccountID, e.CredentialGeneration, e.Channel, e.ClientIP, e.Endpoint, e.Model, e.EffectiveModel, e.PromptTokens, e.CompletionTokens, e.TotalTokens, e.StatusCode, e.DurationMs,
-				e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.FirstTokenMs, e.WsAcquireMs, e.ReasoningEffort, e.InboundEndpoint, e.UpstreamEndpoint, e.Stream, e.Compact, e.HasCompactionHistory, e.CachedTokens, e.CacheWrite5mTokens, e.CacheWrite1hTokens, e.ServiceTier,
+				e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.FirstTokenMs, e.WsAcquireMs, e.ReasoningEffort, e.InboundEndpoint, e.UpstreamEndpoint, e.Stream, e.Compact, e.HasCompactionHistory, e.CachedTokens, e.ImageInputTokens, e.ImageOutputTokens, e.CachedImageInputTokens, e.CacheWrite5mTokens, e.CacheWrite1hTokens, e.ServiceTier,
 				e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
 				e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
 				e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
-				e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics); err != nil {
+				e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics, e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName); err != nil {
 				return fmt.Errorf("执行插入: %w", err)
 			}
 		}
@@ -4841,20 +4953,20 @@ func (db *DB) batchInsertLogsChunk(ctx context.Context, execer sqlExecer, batch 
 		}
 		valueStrings = append(valueStrings, "("+strings.Join(placeholders, ", ")+")")
 		valueArgs = append(valueArgs, e.AccountID, e.CredentialGeneration, e.Channel, e.ClientIP, e.Endpoint, e.Model, e.EffectiveModel, e.PromptTokens, e.CompletionTokens, e.TotalTokens, e.StatusCode, e.DurationMs,
-			e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.FirstTokenMs, e.WsAcquireMs, e.ReasoningEffort, e.InboundEndpoint, e.UpstreamEndpoint, e.Stream, e.Compact, e.HasCompactionHistory, e.CachedTokens, e.CacheWrite5mTokens, e.CacheWrite1hTokens, e.ServiceTier,
+			e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.FirstTokenMs, e.WsAcquireMs, e.ReasoningEffort, e.InboundEndpoint, e.UpstreamEndpoint, e.Stream, e.Compact, e.HasCompactionHistory, e.CachedTokens, e.ImageInputTokens, e.ImageOutputTokens, e.CachedImageInputTokens, e.CacheWrite5mTokens, e.CacheWrite1hTokens, e.ServiceTier,
 			e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
 			e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
 			e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
-			e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics)
+			e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics, e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName)
 		argIdx += usageLogInsertColumnCount
 	}
 
 	query := fmt.Sprintf(`INSERT INTO usage_logs (account_id, credential_generation, channel, client_ip, endpoint, model, effective_model, prompt_tokens, completion_tokens, total_tokens, status_code, duration_ms,
-		input_tokens, output_tokens, reasoning_tokens, first_token_ms, ws_acquire_ms, reasoning_effort, inbound_endpoint, upstream_endpoint, stream, compact, has_compaction_history, cached_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier,
+		input_tokens, output_tokens, reasoning_tokens, first_token_ms, ws_acquire_ms, reasoning_effort, inbound_endpoint, upstream_endpoint, stream, compact, has_compaction_history, cached_tokens, image_input_tokens, image_output_tokens, cached_image_input_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier,
 		requested_service_tier, actual_service_tier, billing_service_tier,
 		api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
 		is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
-		client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics)
+		client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name)
 		VALUES %s`, strings.Join(valueStrings, ","))
 
 	_, err := execer.ExecContext(ctx, query, valueArgs...)
@@ -5238,7 +5350,7 @@ func (db *DB) populateUsageBreakdownStats(ctx context.Context, stats *UsageStats
 		SELECT
 			COALESCE(SUM(CASE WHEN stream THEN 1 ELSE 0 END), 0) AS stream_requests,
 			COALESCE(SUM(CASE WHEN NOT stream THEN 1 ELSE 0 END), 0) AS sync_requests,
-				COALESCE(SUM(CASE WHEN LOWER(COALESCE(NULLIF(billing_service_tier, ''), service_tier, '')) IN ('fast', 'priority') THEN 1 ELSE 0 END), 0) AS fast_requests,
+				COALESCE(SUM(CASE WHEN LOWER(COALESCE(NULLIF(billing_service_tier, ''), service_tier, '')) IN ('fast', 'priority', 'ultrafast') THEN 1 ELSE 0 END), 0) AS fast_requests,
 			COALESCE(SUM(CASE WHEN cached_tokens > 0 THEN 1 ELSE 0 END), 0) AS cache_hit_requests,
 			COALESCE(SUM(CASE WHEN reasoning_tokens > 0 OR NULLIF(reasoning_effort, '') IS NOT NULL THEN 1 ELSE 0 END), 0) AS reasoning_requests,
 			COALESCE(SUM(CASE WHEN LOWER(COALESCE(NULLIF(inbound_endpoint, ''), endpoint, '')) LIKE '%/images/%' OR LOWER(COALESCE(model, '')) LIKE 'gpt-image-%' OR image_count > 0 THEN 1 ELSE 0 END), 0) AS image_requests,
@@ -5417,7 +5529,7 @@ func (db *DB) ListRecentUsageLogs(ctx context.Context, limit int) ([]*UsageLog, 
 	query := `SELECT u.id, u.account_id, COALESCE(u.client_ip, ''), u.endpoint, u.model, COALESCE(u.effective_model, ''), u.prompt_tokens, u.completion_tokens, u.total_tokens, u.status_code, u.duration_ms,
 	            COALESCE(u.input_tokens, 0), COALESCE(u.output_tokens, 0), COALESCE(u.reasoning_tokens, 0),
 	            COALESCE(u.first_token_ms, 0), COALESCE(u.ws_acquire_ms, 0), COALESCE(u.reasoning_effort, ''), COALESCE(u.inbound_endpoint, ''),
-	            COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
+	            COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.image_input_tokens, 0), COALESCE(u.image_output_tokens, 0), COALESCE(u.cached_image_input_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
 	            COALESCE(u.requested_service_tier, ''), COALESCE(u.actual_service_tier, ''), COALESCE(u.billing_service_tier, ''),
 	            COALESCE(u.api_key_id, 0), COALESCE(u.api_key_name, ''), COALESCE(u.api_key_masked, ''),
 	            COALESCE(u.image_count, 0), COALESCE(u.image_width, 0), COALESCE(u.image_height, 0), COALESCE(u.image_bytes, 0),
@@ -5425,7 +5537,7 @@ func (db *DB) ListRecentUsageLogs(ctx context.Context, limit int) ([]*UsageLog, 
 	            COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 	            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 	            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''),
+	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''),
 	            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 	           FROM usage_logs u
 	           LEFT JOIN accounts a ON u.account_id = a.id
@@ -5443,11 +5555,11 @@ func (db *DB) ListRecentUsageLogs(ctx context.Context, limit int) ([]*UsageLog, 
 		var credentialRaw interface{}
 		var createdAtRaw interface{}
 		if err := rows.Scan(&l.ID, &l.AccountID, &l.ClientIP, &l.Endpoint, &l.Model, &l.EffectiveModel, &l.PromptTokens, &l.CompletionTokens, &l.TotalTokens, &l.StatusCode, &l.DurationMs,
-			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens, &l.ServiceTier,
+			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.ImageInputTokens, &l.ImageOutputTokens, &l.CachedImageInputTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens, &l.ServiceTier,
 			&l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier,
 			&l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize, &l.AccountBilled, &l.UserBilled,
 			&l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel,
-			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType,
+			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -5988,7 +6100,7 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 	query := `SELECT u.id, u.account_id, COALESCE(u.client_ip, ''), u.endpoint, u.model, COALESCE(u.effective_model, ''), u.prompt_tokens, u.completion_tokens, u.total_tokens, u.status_code, u.duration_ms,
 	            COALESCE(u.input_tokens, 0), COALESCE(u.output_tokens, 0), COALESCE(u.reasoning_tokens, 0),
 	            COALESCE(u.first_token_ms, 0), COALESCE(u.ws_acquire_ms, 0), COALESCE(u.reasoning_effort, ''), COALESCE(u.inbound_endpoint, ''),
-	            COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
+	            COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.image_input_tokens, 0), COALESCE(u.image_output_tokens, 0), COALESCE(u.cached_image_input_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
 	            COALESCE(u.requested_service_tier, ''), COALESCE(u.actual_service_tier, ''), COALESCE(u.billing_service_tier, ''),
 	            COALESCE(u.api_key_id, 0), COALESCE(u.api_key_name, ''), COALESCE(u.api_key_masked, ''),
 	            COALESCE(u.image_count, 0), COALESCE(u.image_width, 0), COALESCE(u.image_height, 0), COALESCE(u.image_bytes, 0),
@@ -5996,7 +6108,7 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 	            COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 	            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 	            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''),
+	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''),
 	            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 	           FROM usage_logs u
 	           LEFT JOIN accounts a ON u.account_id = a.id
@@ -6015,11 +6127,11 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 		var credentialRaw interface{}
 		var createdAtRaw interface{}
 		if err := rows.Scan(&l.ID, &l.AccountID, &l.ClientIP, &l.Endpoint, &l.Model, &l.EffectiveModel, &l.PromptTokens, &l.CompletionTokens, &l.TotalTokens, &l.StatusCode, &l.DurationMs,
-			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens, &l.ServiceTier,
+			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.ImageInputTokens, &l.ImageOutputTokens, &l.CachedImageInputTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens, &l.ServiceTier,
 			&l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier,
 			&l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize, &l.AccountBilled, &l.UserBilled,
 			&l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel,
-			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType,
+			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -6042,6 +6154,8 @@ type UsageLogPage struct {
 
 // UsageLogFilter 日志查询过滤条件
 type UsageLogFilter struct {
+	RequestID             string
+	UpstreamRequestID     string
 	Start                 time.Time
 	End                   time.Time
 	Page                  int
@@ -6096,6 +6210,12 @@ func (db *DB) buildUsageLogWhere(f UsageLogFilter) (string, []interface{}) {
 			)
 		)`, p))
 	}
+	if f.RequestID != "" {
+		parts = append(parts, "u.request_id = "+addArg(f.RequestID))
+	}
+	if f.UpstreamRequestID != "" {
+		parts = append(parts, "u.upstream_request_id = "+addArg(f.UpstreamRequestID))
+	}
 	if f.Model != "" {
 		p := addArg(f.Model)
 		parts = append(parts, fmt.Sprintf(`(u.model = %s OR COALESCE(u.effective_model, '') = %s)`, p, p))
@@ -6115,9 +6235,9 @@ func (db *DB) buildUsageLogWhere(f UsageLogFilter) (string, []interface{}) {
 	if f.FastOnly != nil {
 		tierExpr := `LOWER(COALESCE(NULLIF(u.billing_service_tier, ''), u.service_tier, ''))`
 		if *f.FastOnly {
-			parts = append(parts, tierExpr+` IN ('fast', 'priority')`)
+			parts = append(parts, tierExpr+` IN ('fast', 'priority', 'ultrafast')`)
 		} else {
-			parts = append(parts, tierExpr+` NOT IN ('fast', 'priority')`)
+			parts = append(parts, tierExpr+` NOT IN ('fast', 'priority', 'ultrafast')`)
 		}
 	}
 	if f.StreamOnly != nil {
@@ -6164,6 +6284,8 @@ func (db *DB) buildUsageLogWhere(f UsageLogFilter) (string, []interface{}) {
 		p := addArg("%" + f.Query + "%")
 		parts = append(parts, fmt.Sprintf(`(
 			LOWER(COALESCE(u.error_message, '')) LIKE LOWER(%[1]s)
+ OR LOWER(COALESCE(u.request_id, '')) LIKE LOWER(%[1]s)
+ OR LOWER(COALESCE(u.upstream_request_id, '')) LIKE LOWER(%[1]s)
 			OR LOWER(COALESCE(u.upstream_error_kind, '')) LIKE LOWER(%[1]s)
 			OR LOWER(COALESCE(u.model, '')) LIKE LOWER(%[1]s)
 			OR LOWER(COALESCE(u.effective_model, '')) LIKE LOWER(%[1]s)
@@ -6255,7 +6377,7 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 	query := `SELECT u.id, u.account_id, COALESCE(u.client_ip, ''), u.endpoint, u.model, COALESCE(u.effective_model, ''), u.prompt_tokens, u.completion_tokens, u.total_tokens, u.status_code, u.duration_ms,
 	            COALESCE(u.input_tokens, 0), COALESCE(u.output_tokens, 0), COALESCE(u.reasoning_tokens, 0),
 	            COALESCE(u.first_token_ms, 0), COALESCE(u.ws_acquire_ms, 0), COALESCE(u.reasoning_effort, ''), COALESCE(u.inbound_endpoint, ''),
-	            COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
+	            COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.image_input_tokens, 0), COALESCE(u.image_output_tokens, 0), COALESCE(u.cached_image_input_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
 	            COALESCE(u.requested_service_tier, ''), COALESCE(u.actual_service_tier, ''), COALESCE(u.billing_service_tier, ''),
 	            COALESCE(u.api_key_id, 0), COALESCE(u.api_key_name, ''), COALESCE(u.api_key_masked, ''),
 	            COALESCE(u.image_count, 0), COALESCE(u.image_width, 0), COALESCE(u.image_height, 0), COALESCE(u.image_bytes, 0),
@@ -6263,7 +6385,7 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 			            COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 			            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 			            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-			            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.newapi_user_name, ''), COALESCE(u.request_type, ''),
+			            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.newapi_user_name, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''),
 			            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at,
 	            COUNT(*) OVER() AS total_count
 	           FROM usage_logs u
@@ -6282,10 +6404,10 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 		var credentialRaw interface{}
 		var createdAtRaw interface{}
 		if err := rows.Scan(&l.ID, &l.AccountID, &l.ClientIP, &l.Endpoint, &l.Model, &l.EffectiveModel, &l.PromptTokens, &l.CompletionTokens, &l.TotalTokens, &l.StatusCode, &l.DurationMs,
-			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens,
+			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.ImageInputTokens, &l.ImageOutputTokens, &l.CachedImageInputTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens,
 			&l.ServiceTier, &l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier, &l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize,
 			&l.AccountBilled, &l.UserBilled, &l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage,
-			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.NewAPIUserName, &l.RequestType,
+			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.NewAPIUserName, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName,
 			&credentialRaw, &l.AccountName, &createdAtRaw, &result.Total); err != nil {
 			return nil, err
 		}
@@ -6311,7 +6433,7 @@ func (db *DB) ListUsageLogsByFilter(ctx context.Context, f UsageLogFilter) ([]*U
 	query := `SELECT u.id, u.account_id, COALESCE(u.client_ip, ''), u.endpoint, u.model, COALESCE(u.effective_model, ''), u.prompt_tokens, u.completion_tokens, u.total_tokens, u.status_code, u.duration_ms,
 			COALESCE(u.input_tokens, 0), COALESCE(u.output_tokens, 0), COALESCE(u.reasoning_tokens, 0),
 			COALESCE(u.first_token_ms, 0), COALESCE(u.ws_acquire_ms, 0), COALESCE(u.reasoning_effort, ''), COALESCE(u.inbound_endpoint, ''),
-			COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
+			COALESCE(u.upstream_endpoint, ''), COALESCE(u.stream, false), COALESCE(u.compact, false), COALESCE(u.has_compaction_history, false), COALESCE(u.via_websocket, false), COALESCE(u.cached_tokens, 0), COALESCE(u.image_input_tokens, 0), COALESCE(u.image_output_tokens, 0), COALESCE(u.cached_image_input_tokens, 0), COALESCE(u.cache_write_5m_tokens, 0), COALESCE(u.cache_write_1h_tokens, 0), COALESCE(u.service_tier, ''),
 			COALESCE(u.requested_service_tier, ''), COALESCE(u.actual_service_tier, ''), COALESCE(u.billing_service_tier, ''),
 			COALESCE(u.api_key_id, 0), COALESCE(u.api_key_name, ''), COALESCE(u.api_key_masked, ''),
 			COALESCE(u.image_count, 0), COALESCE(u.image_width, 0), COALESCE(u.image_height, 0), COALESCE(u.image_bytes, 0),
@@ -6319,7 +6441,7 @@ func (db *DB) ListUsageLogsByFilter(ctx context.Context, f UsageLogFilter) ([]*U
 			COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 			COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 			COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-			COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''),
+			COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''),
 			COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 		FROM usage_logs u
 		LEFT JOIN accounts a ON u.account_id = a.id
@@ -6337,10 +6459,10 @@ func (db *DB) ListUsageLogsByFilter(ctx context.Context, f UsageLogFilter) ([]*U
 		var credentialRaw interface{}
 		var createdAtRaw interface{}
 		if err := rows.Scan(&l.ID, &l.AccountID, &l.ClientIP, &l.Endpoint, &l.Model, &l.EffectiveModel, &l.PromptTokens, &l.CompletionTokens, &l.TotalTokens, &l.StatusCode, &l.DurationMs,
-			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens,
+			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.ImageInputTokens, &l.ImageOutputTokens, &l.CachedImageInputTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens,
 			&l.ServiceTier, &l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier, &l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize,
 			&l.AccountBilled, &l.UserBilled, &l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage,
-			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType,
+			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -8310,6 +8432,9 @@ func (db *DB) PurgeAccount(ctx context.Context, id int64) error {
 	if err := db.deleteGrokAccountStateTx(ctx, tx, "= $1", id); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM model_capability_snapshots WHERE account_id = $1`, id); err != nil {
+		return err
+	}
 	query := `DELETE FROM accounts WHERE id = $1 AND (status = 'deleted' OR COALESCE(error_message, '') = 'deleted')`
 	res, err := tx.ExecContext(ctx, query, id)
 	if err != nil {
@@ -8336,6 +8461,9 @@ func (db *DB) PurgeDeletedAccounts(ctx context.Context) (int64, error) {
 	}
 	defer tx.Rollback()
 	deletedPredicate := `IN (SELECT id FROM accounts WHERE status = 'deleted' OR COALESCE(error_message, '') = 'deleted')`
+	if _, err := tx.ExecContext(ctx, `DELETE FROM model_capability_snapshots WHERE account_id `+deletedPredicate); err != nil {
+		return 0, err
+	}
 	if err := db.deleteGrokAccountStateTx(ctx, tx, deletedPredicate); err != nil {
 		return 0, err
 	}

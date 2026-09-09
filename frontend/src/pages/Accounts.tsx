@@ -16,6 +16,15 @@ import { useVisibleChannels } from "../visibleChannels";
 import ModelLogo from "../components/ModelLogo";
 import OperationResultsModal from "../components/OperationResultsModal";
 import { cn } from "@/lib/utils";
+import TestConnectionModal from "../components/TestConnectionModal";
+import {
+  DEFAULT_TEST_MODEL,
+  exactModelMappingAliases,
+  extractTextModels,
+  formatAccountName,
+  isConnectionTestModel,
+  uniqueTestModels,
+} from "../lib/connectionTestModels";
 import GrokAccounts from "./GrokAccounts";
 import AntigravityAccounts from "./AntigravityAccounts";
 import ClaudeAccounts from "./ClaudeAccounts";
@@ -48,6 +57,7 @@ import type {
   AddATAccountRequest,
   AddOpenAIResponsesAccountRequest,
   CodexClientMetadataMode,
+  CodexPassthroughMode,
   CodexFingerprintMode,
   UpdateOpenAIResponsesAccountRequest,
   APIKeyRow,
@@ -907,29 +917,6 @@ function parseModelMappingText(value: string): ModelMappingParseResult {
   return { ok: true, value: trimmed };
 }
 
-function exactModelMappingAliases(
-  value?: string,
-  supportedModels: string[] = [],
-): string[] {
-  const parsed = parseModelMappingEntries(value ?? "");
-  if (!parsed.ok) return [];
-  const supported = new Set(
-    supportedModels.map((model) => model.trim().toLowerCase()).filter(Boolean),
-  );
-  return parsed.entries
-    .filter((entry) => {
-      const alias = entry.from.trim();
-      const target = entry.to.trim().toLowerCase();
-      return (
-        alias &&
-        !alias.includes("*") &&
-        isConnectionTestModel(alias) &&
-        (supported.size === 0 || supported.has(target))
-      );
-    })
-    .map((entry) => entry.from.trim());
-}
-
 function serializeModelMappingEntries(
   entries: ModelMappingEntry[],
 ): ModelMappingParseResult {
@@ -973,13 +960,6 @@ function mergeModelLists(current: string[], incoming: string[]): string[] {
     result.push(value);
   }
   return result;
-}
-
-function formatAccountName(account: AccountRow): string {
-  if (account.openai_responses_api || account.grok_api) {
-    return account.name?.trim() || `ID ${account.id}`;
-  }
-  return account.email || account.name || `ID ${account.id}`;
 }
 
 function isOAuthAccount(account: AccountRow | null): boolean {
@@ -2080,6 +2060,7 @@ export default function Accounts() {
       balance_query_url: "",
       models: [],
       codex_client_metadata_mode: "auto",
+      codex_passthrough_mode: "off",
       proxy_url: "",
     });
   const [openAIModelDraft, setOpenAIModelDraft] = useState("");
@@ -2178,6 +2159,7 @@ export default function Accounts() {
       balance_query_url: "",
       models: [],
       codex_client_metadata_mode: "auto",
+      codex_passthrough_mode: "off",
       proxy_url: "",
     });
   const [openAIModelMappingText, setOpenAIModelMappingText] = useState("");
@@ -3802,6 +3784,7 @@ export default function Accounts() {
         balance_query_url: "",
         models: [],
         codex_client_metadata_mode: "auto",
+        codex_passthrough_mode: "off",
         proxy_url: "",
       });
       setOpenAIModelDraft("");
@@ -5873,6 +5856,8 @@ export default function Accounts() {
       models: account.models ?? [],
       codex_client_metadata_mode:
         account.codex_client_metadata_mode ?? "auto",
+      codex_passthrough_mode:
+        account.codex_passthrough_mode ?? "off",
       proxy_url: account.proxy_url ?? "",
     });
     setEditOpenAIModelDraft("");
@@ -5930,6 +5915,7 @@ export default function Accounts() {
       balance_query_url: "",
       models: [],
       codex_client_metadata_mode: "auto",
+      codex_passthrough_mode: "off",
       proxy_url: "",
     });
     setEditOpenAIModelDraft("");
@@ -8320,6 +8306,38 @@ export default function Accounts() {
                   />
                 </div>
                 <div>
+                  <label className="block mb-2 text-sm font-semibold text-muted-foreground">
+                    {t("accounts.codexPassthroughMode")}
+                  </label>
+                  <Select
+                    value={openAIForm.codex_passthrough_mode ?? "off"}
+                    onValueChange={(value) =>
+                      setOpenAIForm((form) => ({
+                        ...form,
+                        codex_passthrough_mode:
+                          value as CodexPassthroughMode,
+                      }))
+                    }
+                    options={[
+                      {
+                        value: "off",
+                        label: t("accounts.codexPassthroughOff"),
+                      },
+                      {
+                        value: "auto",
+                        label: t("accounts.codexPassthroughAuto"),
+                      },
+                      {
+                        value: "always",
+                        label: t("accounts.codexPassthroughAlways"),
+                      },
+                    ]}
+                  />
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {t("accounts.codexPassthroughHint")}
+                  </p>
+                </div>
+                <div>
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <label className="text-sm font-semibold text-muted-foreground">
                       {t("accounts.openaiModels")} *
@@ -9449,6 +9467,38 @@ export default function Accounts() {
                           ]}
                         />
                       </div>
+                    </div>
+                    <div>
+                      <label className="block mb-2 text-xs font-semibold text-muted-foreground">
+                        {t("accounts.codexPassthroughMode")}
+                      </label>
+                      <Select
+                        value={editOpenAIForm.codex_passthrough_mode ?? "off"}
+                        onValueChange={(value) =>
+                          setEditOpenAIForm((form) => ({
+                            ...form,
+                            codex_passthrough_mode:
+                              value as CodexPassthroughMode,
+                          }))
+                        }
+                        options={[
+                          {
+                            value: "off",
+                            label: t("accounts.codexPassthroughOff"),
+                          },
+                          {
+                            value: "auto",
+                            label: t("accounts.codexPassthroughAuto"),
+                          },
+                          {
+                            value: "always",
+                            label: t("accounts.codexPassthroughAlways"),
+                          },
+                        ]}
+                      />
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        {t("accounts.codexPassthroughHint")}
+                      </p>
                     </div>
 
                     <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs space-y-4">
@@ -14755,546 +14805,6 @@ function formatHealthTier(healthTier?: string, t?: any) {
     default:
       return t("accounts.unknown");
   }
-}
-
-// ==================== 测试连接弹窗 ====================
-
-interface TestEvent {
-  type: "test_start" | "content" | "test_complete" | "error";
-  text?: string;
-  model?: string;
-  success?: boolean;
-  error?: string;
-}
-
-function formatTestErrorMessage(message: string) {
-  const normalized = message.trim();
-  const jsonStart = normalized.indexOf("{");
-
-  if (jsonStart === -1) {
-    return normalized;
-  }
-
-  const prefix = normalized
-    .slice(0, jsonStart)
-    .trim()
-    .replace(/[：:]\s*$/, "");
-  const jsonText = normalized.slice(jsonStart);
-
-  try {
-    const parsed = JSON.parse(jsonText);
-    const prettyJson = JSON.stringify(parsed, null, 2);
-    return prefix ? `${prefix}\n${prettyJson}` : prettyJson;
-  } catch {
-    return normalized;
-  }
-}
-
-function formatTestOutput(text: string) {
-  try {
-    const parsed = JSON.parse(text);
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return text;
-  }
-}
-
-const DEFAULT_TEST_MODEL = "gpt-5.4";
-
-function isConnectionTestModel(model: string) {
-  const value = model.trim().toLowerCase();
-  return value !== "" && !value.includes("image");
-}
-
-function extractTextModels(
-  modelsResp: Awaited<ReturnType<typeof api.getModels>>,
-) {
-  if (modelsResp.items && modelsResp.items.length > 0) {
-    return modelsResp.items
-      .filter(
-        (item) =>
-          item.enabled &&
-          item.category !== "image" &&
-          !item.id.includes("image"),
-      )
-      .map((item) => item.id);
-  }
-  return (modelsResp.models ?? []).filter(isConnectionTestModel);
-}
-
-function uniqueTestModels(
-  models: string[],
-  preferredModel?: string,
-  includeDefault = true,
-) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  const candidates = [
-    preferredModel ?? "",
-    ...models,
-    ...(includeDefault ? [DEFAULT_TEST_MODEL] : []),
-  ];
-
-  for (const model of candidates) {
-    const value = model.trim();
-    if (!isConnectionTestModel(value) || seen.has(value)) continue;
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
-function TestConnectionModal({
-  account,
-  onClose,
-  onSettled,
-  successHint,
-  restoreOnSuccess,
-}: {
-  account: AccountRow;
-  onClose: () => void;
-  onSettled: () => void;
-  successHint?: string;
-  restoreOnSuccess?: boolean;
-}) {
-  const { t } = useTranslation();
-  const { showToast } = useToast();
-  const [output, setOutput] = useState<string[]>([]);
-  const [status, setStatus] = useState<
-    "connecting" | "streaming" | "success" | "error"
-  >("connecting");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [model, setModel] = useState("");
-  const [selectedModel, setSelectedModel] = useState("");
-  const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [modelOptionsReady, setModelOptionsReady] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const outputEndRef = useRef<HTMLDivElement>(null);
-  const settledRef = useRef(false);
-  const onSettledRef = useRef(onSettled);
-  onSettledRef.current = onSettled;
-
-  const markSettled = useCallback(() => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    onSettledRef.current();
-  }, []);
-
-  const isClaudeAccount = Boolean(account.claude_api);
-  // Grok 与 openai_responses 同属"账号自带模型清单"的 relay 风格账号，
-  // Claude 也使用账号级原生 Messages 模型清单，但走独立分支。
-  const isOpenAIResponsesAccount = Boolean(
-    account.openai_responses_api || account.grok_api,
-  );
-
-  const modelSelectOptions = useMemo(
-    () =>
-      uniqueTestModels(
-        modelOptions,
-        selectedModel,
-        !isOpenAIResponsesAccount && !isClaudeAccount,
-      ).map((item) => ({ label: item, value: item })),
-    [isClaudeAccount, isOpenAIResponsesAccount, modelOptions, selectedModel],
-  );
-
-  useEffect(() => {
-    let active = true;
-
-    const loadModels = async () => {
-      try {
-        const settings = await api.getSettings();
-        if (!active) return;
-
-        if (isClaudeAccount) {
-          const accountModels = (account.models ?? []).filter(
-            (model) => isConnectionTestModel(model) && model.toLowerCase().startsWith("claude-"),
-          );
-          const fallbackModels = uniqueTestModels(
-            accountModels.length > 0 ? accountModels : ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
-            undefined,
-            false,
-          );
-          setModelOptions(fallbackModels);
-          setSelectedModel((current) => current || fallbackModels[0] || "");
-          return;
-        }
-
-        if (isOpenAIResponsesAccount) {
-          const accountModels = (account.models ?? []).filter(
-            isConnectionTestModel,
-          );
-          const mappingAliases = exactModelMappingAliases(
-            account.model_mapping,
-            accountModels,
-          );
-          const testModels = uniqueTestModels(
-            [...mappingAliases, ...accountModels],
-            undefined,
-            false,
-          );
-          const preferredModel =
-            testModels.find(
-              (item) =>
-                item.toLowerCase() === settings.test_model.toLowerCase(),
-            ) ??
-            mappingAliases[0] ??
-            accountModels[0];
-          const nextModels = uniqueTestModels(
-            testModels,
-            preferredModel,
-            false,
-          );
-          setModelOptions(nextModels);
-          setSelectedModel((current) => current || nextModels[0] || "");
-          return;
-        }
-
-        const modelsResp = await api.getModels();
-        if (!active) return;
-        // Keep account-declared entries in the selector even when the global
-        // catalog is scoped, stale, or temporarily unavailable. This is
-        // especially important immediately after a newly published model is
-        // auto-added to an account whitelist.
-        const accountModels = (account.models ?? []).filter(
-          isConnectionTestModel,
-        );
-        const upstreamModels = extractTextModels(modelsResp);
-        const preferredModel = isConnectionTestModel(settings.test_model)
-          ? settings.test_model
-          : DEFAULT_TEST_MODEL;
-        const nextModels = uniqueTestModels(
-          [...accountModels, ...upstreamModels],
-          preferredModel,
-        );
-        setModelOptions(nextModels);
-        setSelectedModel(
-          (current) => current || nextModels[0] || DEFAULT_TEST_MODEL,
-        );
-      } catch {
-        if (!active) return;
-        if (isClaudeAccount) {
-          const accountModels = (account.models ?? []).filter(
-            (model) => isConnectionTestModel(model) && model.toLowerCase().startsWith("claude-"),
-          );
-          const fallbackModels = uniqueTestModels(
-            accountModels.length > 0 ? accountModels : ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
-            undefined,
-            false,
-          );
-          setModelOptions(fallbackModels);
-          setSelectedModel((current) => current || fallbackModels[0] || "");
-        } else if (isOpenAIResponsesAccount) {
-          const accountModels = (account.models ?? []).filter(
-            isConnectionTestModel,
-          );
-          const mappingAliases = exactModelMappingAliases(
-            account.model_mapping,
-            accountModels,
-          );
-          const fallbackModels = uniqueTestModels(
-            [...mappingAliases, ...accountModels],
-            undefined,
-            false,
-          );
-          setModelOptions(fallbackModels);
-          setSelectedModel((current) => current || fallbackModels[0] || "");
-        } else {
-          const fallbackModels = uniqueTestModels(
-            (account.models ?? []).filter(isConnectionTestModel),
-            DEFAULT_TEST_MODEL,
-          );
-          setModelOptions(fallbackModels);
-          setSelectedModel((current) => current || fallbackModels[0]);
-        }
-      } finally {
-        if (active) {
-          setModelOptionsReady(true);
-        }
-      }
-    };
-
-    void loadModels();
-
-    return () => {
-      active = false;
-    };
-  }, [account.claude_api, account.model_mapping, account.models, isClaudeAccount, isOpenAIResponsesAccount]);
-
-  useEffect(() => {
-    if (!modelOptionsReady || !selectedModel) return;
-
-    // 重置状态（StrictMode 二次 mount 时清理上一次的残留）
-    setOutput([]);
-    setStatus("connecting");
-    setErrorMsg("");
-    setModel(selectedModel);
-    settledRef.current = false;
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const run = async () => {
-      if (controller.signal.aborted) return;
-
-      try {
-        const params = new URLSearchParams({ model: selectedModel });
-        if (restoreOnSuccess) {
-          params.set("restore_on_success", "true");
-        }
-        const res = await fetch(
-          `/api/admin/accounts/${account.id}/test?${params.toString()}`,
-          {
-            signal: controller.signal,
-            headers: getAdminKey() ? { "X-Admin-Key": getAdminKey() } : {},
-          },
-        );
-
-        if (!res.ok) {
-          const body = await res.text();
-          let msg = `HTTP ${res.status}`;
-          try {
-            const parsed = JSON.parse(body);
-            if (parsed.error) msg = parsed.error;
-          } catch {
-            /* ignore */
-          }
-          setStatus("error");
-          setErrorMsg(msg);
-          markSettled();
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          setStatus("error");
-          setErrorMsg(t("accounts.browserStreamingUnsupported"));
-          markSettled();
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let receivedTerminalEvent = false;
-
-        const processEventLines = (lines: string[]) => {
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-
-            try {
-              const event: TestEvent = JSON.parse(trimmed.slice(6));
-
-              switch (event.type) {
-                case "test_start":
-                  setModel(event.model || selectedModel);
-                  setStatus("streaming");
-                  break;
-                case "content":
-                  if (event.text) {
-                    setOutput((prev) => [...prev, event.text!]);
-                  }
-                  break;
-                case "test_complete":
-                  receivedTerminalEvent = true;
-                  setStatus(event.success ? "success" : "error");
-                  break;
-                case "error":
-                  receivedTerminalEvent = true;
-                  setStatus("error");
-                  setErrorMsg(event.error || t("accounts.unknownError"));
-                  break;
-              }
-            } catch {
-              /* ignore non-JSON lines */
-            }
-          }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            buffer += decoder.decode();
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          processEventLines(lines);
-        }
-
-        if (buffer.trim()) {
-          processEventLines([buffer]);
-        }
-
-        if (receivedTerminalEvent) {
-          // 等服务端关闭 SSE 后再刷新列表：后端会在连接结束时提交状态并失效
-          // 账号快照，提前刷新会重新读到“未采样”的旧缓存。
-          markSettled();
-        } else {
-          setStatus("error");
-          setErrorMsg(t("accounts.connectionEndedUnexpectedly"));
-          markSettled();
-        }
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setStatus("error");
-        setErrorMsg(
-          err instanceof Error ? err.message : t("accounts.connectionFailed"),
-        );
-        markSettled();
-      }
-    };
-
-    // 延迟 50ms 启动，确保 StrictMode cleanup 有足够时间执行 abort
-    const timer = window.setTimeout(() => {
-      void run();
-    }, 50);
-
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [
-    account.id,
-    markSettled,
-    modelOptionsReady,
-    restoreOnSuccess,
-    selectedModel,
-    t,
-  ]);
-
-  useEffect(() => {
-    outputEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [output]);
-
-  const statusText = {
-    connecting: t("accounts.connecting"),
-    streaming: t("accounts.receivingResponse"),
-    success: t("accounts.testSuccess"),
-    error: t("accounts.testFailed"),
-  }[status];
-  const StatusIcon = {
-    connecting: Loader2,
-    streaming: Loader2,
-    success: CheckCircle,
-    error: XCircle,
-  }[status];
-  const statusIconSpin = status === "connecting" || status === "streaming";
-
-  const statusColor = {
-    connecting: "text-muted-foreground",
-    streaming: "text-blue-500",
-    success: "text-emerald-500",
-    error: "text-red-500",
-  }[status];
-  const formattedErrorMsg = errorMsg ? formatTestErrorMessage(errorMsg) : "";
-  const handleCopyFailureDetails = async () => {
-    try {
-      await copyTextToClipboard(formattedErrorMsg);
-      showToast(t("common.copied"));
-    } catch {
-      showToast(t("common.copyFailed"), "error");
-    }
-  };
-
-  return (
-    <Modal
-      show={true}
-      title={t("accounts.testConnectionTitle", {
-        account: formatAccountName(account),
-      })}
-      onClose={() => {
-        abortRef.current?.abort();
-        onClose();
-      }}
-      footer={
-        <Button
-          variant="outline"
-          onClick={() => {
-            abortRef.current?.abort();
-            onClose();
-          }}
-        >
-          {t("common.close")}
-        </Button>
-      }
-      contentClassName="sm:max-w-[680px]"
-    >
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <span
-            className={`flex items-center gap-1.5 text-sm font-semibold ${statusColor}`}
-          >
-            <StatusIcon
-              className={cn("size-4", statusIconSpin && "animate-spin")}
-            />
-            {statusText}
-          </span>
-          <Select
-            className="w-52 max-w-full"
-            compact
-            value={selectedModel}
-            onValueChange={setSelectedModel}
-            options={modelSelectOptions}
-            placeholder={model || t("settings.testModel")}
-            disabled={!modelOptionsReady || modelSelectOptions.length === 0}
-          />
-        </div>
-
-        {(output.length > 0 ||
-          status === "connecting" ||
-          status === "streaming") && (
-          <div
-            className="min-h-[80px] max-h-[240px] overflow-auto rounded-lg border border-border bg-muted/30 p-3 text-[13px] leading-relaxed whitespace-pre-wrap break-all"
-            style={{ fontFamily: "var(--font-geist-mono)" }}
-          >
-            {output.length === 0 && status === "connecting" && (
-              <span className="text-muted-foreground animate-pulse">
-                {t("accounts.sendingTestRequest")}
-              </span>
-            )}
-            {output.join("")}
-            <div ref={outputEndRef} />
-          </div>
-        )}
-
-        {errorMsg && (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 text-red-600 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <div className="text-sm font-semibold">
-                {t("accounts.failureDetails")}
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 shrink-0 px-2 text-red-600 hover:bg-red-100 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-900/40 dark:hover:text-red-300"
-                onClick={() => void handleCopyFailureDetails()}
-                title={t("common.copy")}
-              >
-                <Copy className="size-3.5" />
-                {t("common.copy")}
-              </Button>
-            </div>
-            <pre
-              className="max-h-[34vh] overflow-auto text-[13px] leading-relaxed whitespace-pre-wrap break-all"
-              style={{ fontFamily: "var(--font-geist-mono)" }}
-            >
-              {formattedErrorMsg}
-            </pre>
-          </div>
-        )}
-
-        {status === "success" && (
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-400">
-            <RotateCcw className="size-4 shrink-0" />
-            {successHint ?? t("accounts.testAutoReset")}
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
 }
 
 interface ResetTimeLabel {

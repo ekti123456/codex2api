@@ -101,6 +101,7 @@ Codex 官方账号在新建或导入落库时生成随机 UUIDv4，保存在账�
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
+| `CODEX_IMAGES_MAIN_MODEL` | 否 | `gpt-5.6-luna` | 生图文本驱动的部署默认值；后台「Codex → 生图设置」选择具体模型后优先使用后台配置 |
 | `IMAGE_ASSET_DIR` | 否 | `/data/images` | 管理台生图工作台保存图片文件的服务器目录；Docker 部署建议持久化 `/data` |
 | `IMAGE_ASSET_PUBLIC_BASE_URL` | 否 | 空 | 图片代理 URL 的公开基址，例如 `https://cdn.example.com`；仅改变返回地址，需由反向代理将 `/p/img/` 转发到 Codex2Api |
 | `IMAGE_ASSET_SIGNING_SECRET` | 否 | 随机值 | 图片代理 URL 的持久化签名密钥；生产环境应配置固定随机值，避免服务重启后历史图片链接失效 |
@@ -150,6 +151,14 @@ Codex 官方账号在新建或导入落库时生成随机 UUIDv4，保存在账�
 ## 系统设置（数据库）
 
 系统设置存储在数据库的 `SystemSettings` 表中，可通过管理后台 `/admin/settings` 实时修改。
+
+### Codex 生图设置
+
+管理后台「系统设置 → Codex → 生图设置」可选择生图使用的文本驱动模型。选择后自动保存，对本实例之后构造的生图请求立即生效，重启后从数据库恢复。
+
+管理 API `PUT /api/admin/settings` 使用 `codex_images_main_model` 字段，空字符串表示「使用部署默认值」。优先级为：后台配置 → `CODEX_IMAGES_MAIN_MODEL` → 内置 `gpt-5.6-luna`。`GET /api/admin/settings` 同时返回只读的 `codex_images_default_main_model`，用于展示部署默认值。模型名称长度不超过 128 字节，不含空白或控制字符，不能填 `gpt-image-*` 图像模型。
+
+设置覆盖管理与公开生图工作台、`/v1/images/generations`、`/v1/images/edits`，以及顶层 `model` 填写图像模型的 `/v1/responses` 请求。原生 Responses 请求若显式填写文本 `model`，则继续使用该模型。图像模型由工作台或 API 请求选择；Images 链路在上游明确拒绝文本驱动时仍会按现有候选顺序重试。
 
 ### 模型列表读取上限
 

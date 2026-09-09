@@ -36,14 +36,15 @@ import type { ModelsResponse, SystemSettings } from "../types";
 
 const FALLBACK_MODELS = [
   "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-  "gpt-5.3-codex",
+  "gpt-5.6-sol",
+  "gpt-5.6-luna",
+  "gpt-6-astra",
   "claude-sonnet-4-5",
 ];
+const DEFAULT_QUICK_START_MODEL = "gpt-5.5";
 type CCSwitchApp = "claude" | "codex" | "gemini";
 type QuickToolTab = "codex-cli" | "claude-code" | "cc-switch" | "cherry-studio";
-type QuickServiceTier = "default" | "fast";
+type QuickServiceTier = "default" | "fast" | "ultrafast";
 type QuickReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "ultra";
 
 const CC_SWITCH_LOGO = "https://ccswitch.io/assets/cc-switch-logo-BPrI77SG.png";
@@ -495,8 +496,8 @@ function buildCCSwitchImportUrl({
   Object.entries(models).forEach(([key, value]) => {
     if (value) params.set(key, value);
   });
-  if (app === "codex" && serviceTier === "fast") {
-    params.set("service_tier", "fast");
+  if (app === "codex" && serviceTier && serviceTier !== "default") {
+    params.set("service_tier", serviceTier);
   }
   if (app === "codex" && reasoningEffort) {
     params.set("model_reasoning_effort", reasoningEffort);
@@ -613,7 +614,7 @@ export default function Docs() {
   const { toast, showToast } = useToast();
   const [selectedKey, setSelectedKey] = useState("");
   const [activeToolTab, setActiveToolTab] = useState<QuickToolTab>("codex-cli");
-  const [quickStartModel, setQuickStartModel] = useState("gpt-5.4");
+  const [quickStartModel, setQuickStartModel] = useState(DEFAULT_QUICK_START_MODEL);
   const [quickServiceTier, setQuickServiceTier] =
     useState<QuickServiceTier>("default");
   const [quickReasoningEffort, setQuickReasoningEffort] =
@@ -623,14 +624,14 @@ export default function Docs() {
   const [ccSwitchName, setCcSwitchName] = useState("");
   const [ccSwitchNameEdited, setCcSwitchNameEdited] = useState(false);
   const [ccSwitchModels, setCcSwitchModels] = useState<Record<string, string>>({
-    model: "gpt-5.4",
+    model: DEFAULT_QUICK_START_MODEL,
   });
   const [cherryProviderId, setCherryProviderId] = useState("");
   const [cherryProviderEdited, setCherryProviderEdited] = useState(false);
   const [activeCurl, setActiveCurl] = useState<
     "responses" | "chat" | "messages"
   >("responses");
-  const [curlModel, setCurlModel] = useState("gpt-5.4");
+  const [curlModel, setCurlModel] = useState(DEFAULT_QUICK_START_MODEL);
   const [models, setModels] = useState(FALLBACK_MODELS);
   const [claudeModels, setClaudeModels] = useState<string[]>([]);
 
@@ -677,8 +678,8 @@ export default function Docs() {
         const preferred =
           configuredModel && unique.includes(configuredModel)
             ? configuredModel
-            : unique.includes("gpt-5.4")
-              ? "gpt-5.4"
+            : unique.includes(DEFAULT_QUICK_START_MODEL)
+              ? DEFAULT_QUICK_START_MODEL
               : unique[0];
         setQuickStartModel((current) =>
           unique.includes(current) ? current : preferred,
@@ -917,7 +918,7 @@ export default function Docs() {
   const activeKey = selectedKey || firstKey || "YOUR_API_KEY";
 
   const codexServiceTierLine =
-    quickServiceTier === "fast" ? '\nservice_tier = "fast"' : "";
+    quickServiceTier === "default" ? "" : `\nservice_tier = "${quickServiceTier}"`;
   const codexConfigToml = `model_provider = "OpenAI"
 model = "${quickStartModel}"
 review_model = "${quickStartModel}"
@@ -1197,6 +1198,7 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`;
                           label: t("docs.clientConfig.fastModeEnabled"),
                           value: "fast",
                         },
+                        { label: "Ultrafast", value: "ultrafast" },
                       ]}
                     />
                   </FieldBox>

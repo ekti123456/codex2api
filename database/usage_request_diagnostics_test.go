@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -125,17 +126,33 @@ func (capture *usageDiagnosticSQLCapture) ExecContext(_ context.Context, query s
 func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	capture := &usageDiagnosticSQLCapture{}
 	db := &DB{}
-	batch := []usageLogEntry{{RequestType: "user", RequestDiagnostics: `{"version":1}`}, {RequestType: "compaction", RequestDiagnostics: `{"version":1,"attempt":2}`}}
+	batch := []usageLogEntry{
+		{RequestType: "user", RequestDiagnostics: `{"version":1}`, NewAPIUserName: "window-user", RequestID: "request-1", UpstreamRequestID: "upstream-1", UpstreamProxyID: 12, UpstreamProxyName: "proxy-1", ImageInputTokens: 7, ImageOutputTokens: 11, CachedImageInputTokens: 3},
+		{RequestType: "compaction", RequestDiagnostics: `{"version":1,"attempt":2}`, RequestID: "request-2", UpstreamRequestID: "upstream-2"},
+	}
 	if err := db.batchInsertLogsChunk(test.Context(), capture, batch); err != nil {
 		test.Fatal(err)
 	}
-	if len(capture.args) != len(batch)*usageLogInsertColumnCount || !strings.Contains(capture.query, "request_type, request_diagnostics)") || !strings.Contains(capture.query, fmt.Sprintf("$%d)", len(capture.args))) {
+	if len(capture.args) != len(batch)*usageLogInsertColumnCount || !strings.Contains(capture.query, "request_type, request_diagnostics,") || !strings.Contains(capture.query, fmt.Sprintf("$%d)", len(capture.args))) {
 		test.Fatalf("invalid batch shape: args=%d, query=%s", len(capture.args), capture.query)
 	}
+	columns := strings.Split(capture.query[strings.Index(capture.query, "(")+1:strings.Index(capture.query, ")")], ",")
+	for index := range columns {
+		columns[index] = strings.TrimSpace(columns[index])
+	}
+	if len(columns) != usageLogInsertColumnCount {
+		test.Fatalf("columns=%d, expected %d", len(columns), usageLogInsertColumnCount)
+	}
 	for index, entry := range batch {
-		end := (index + 1) * usageLogInsertColumnCount
-		if capture.args[end-2] != entry.RequestType || capture.args[end-1] != entry.RequestDiagnostics {
-			test.Fatalf("wrong diagnostic argument position: %v", capture.args[end-2:end])
+		for name, expected := range map[string]interface{}{
+			"request_type": entry.RequestType, "request_diagnostics": entry.RequestDiagnostics, "newapi_user_name": entry.NewAPIUserName,
+			"request_id": entry.RequestID, "upstream_request_id": entry.UpstreamRequestID, "upstream_proxy_id": entry.UpstreamProxyID, "upstream_proxy_name": entry.UpstreamProxyName,
+			"image_input_tokens": entry.ImageInputTokens, "image_output_tokens": entry.ImageOutputTokens, "cached_image_input_tokens": entry.CachedImageInputTokens,
+		} {
+			columnIndex := slices.Index(columns, name)
+			if columnIndex < 0 || capture.args[index*usageLogInsertColumnCount+columnIndex] != expected {
+				test.Fatalf("row %d: column %s was not preserved", index, name)
+			}
 		}
 	}
 }

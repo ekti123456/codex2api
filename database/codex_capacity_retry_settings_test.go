@@ -13,7 +13,7 @@ func TestSQLiteCapacityRetryMigrationDefaultsOff(test *testing.T) {
 		test.Fatal(err)
 	}
 	test.Cleanup(func() { _ = db.Close() })
-	if err := db.UpdateSystemSettings(context.Background(), &SystemSettings{SiteName: "existing installation"}); err != nil {
+	if err := db.UpdateSystemSettings(context.Background(), &SystemSettings{SiteName: "existing installation", CodexImagesMainModel: "gpt-5.6-luna"}); err != nil {
 		test.Fatal(err)
 	}
 	if _, err := db.conn.ExecContext(context.Background(), "ALTER TABLE system_settings DROP COLUMN codex_capacity_retry_enabled"); err != nil {
@@ -30,7 +30,7 @@ func TestSQLiteCapacityRetryMigrationDefaultsOff(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	if settings.CodexCapacityRetryEnabled || settings.SiteName != "existing installation" {
+	if settings.CodexCapacityRetryEnabled || settings.SiteName != "existing installation" || settings.CodexImagesMainModel != "gpt-5.6-luna" {
 		test.Fatal("migration changed existing settings or enabled retries")
 	}
 	for _, enabled := range []bool{true, false} {
@@ -39,7 +39,7 @@ func TestSQLiteCapacityRetryMigrationDefaultsOff(test *testing.T) {
 			test.Fatal(err)
 		}
 		settings, err = db.GetSystemSettings(context.Background())
-		if err != nil || settings.CodexCapacityRetryEnabled != enabled {
+		if err != nil || settings.CodexCapacityRetryEnabled != enabled || settings.CodexImagesMainModel != "gpt-5.6-luna" {
 			test.Fatalf("persisted retry toggle != %t: %v", enabled, err)
 		}
 	}
