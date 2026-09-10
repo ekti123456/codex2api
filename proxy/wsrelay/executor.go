@@ -552,6 +552,7 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 		headers.Set(name, value)
 	}
 
+	proxy.StripCodexProjectMetadataHeaders(headers)
 	// routing hint 由网关按最终 WS 帧体合成，在账号自定义头之后设置。
 	// 握手头逐连接冻结：复用连接沿用建连时的 hint，语义为拨号期软亲和。
 	proxy.ApplyCodexRoutingHint(headers, account, wsBody)

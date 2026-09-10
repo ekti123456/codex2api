@@ -205,6 +205,7 @@ type RiskConfig struct {
 	SessionCreationLimit              int                           `json:"session_creation_limit"`
 	SessionCreationLimitWindowSeconds int                           `json:"session_creation_limit_window_seconds"`
 	SessionCreationCooldown           SessionCreationCooldownConfig `json:"session_creation_cooldown"`
+	SessionContinuityMode             string                        `json:"session_continuity_mode"`
 }
 
 // AdaptiveReviewConfig reduces synchronous model-review latency only after a
@@ -298,7 +299,7 @@ func DefaultAdvancedConfig() AdvancedConfig {
 	return AdvancedConfig{
 		Normalization:   NormalizationConfig{MaxDecodeRuns: 1, MaxDecodedBytes: 32768, MaxEncodedBlocks: 16},
 		ContextDiscount: ContextDiscountConfig{Enabled: true, IntentAware: true, MaxDiscount: 90, OperationalMaxDiscount: 0},
-		Risk:            RiskConfig{WindowSeconds: 600, BlockThreshold: 100, ReviewThreshold: 60, UserWeightPercent: 50, IPWeightPercent: 30, SessionWeightPercent: 20, SessionCreationLimit: 5, SessionCreationLimitWindowSeconds: 3600, SessionCreationCooldown: DefaultSessionCreationCooldownConfig()},
+		Risk:            RiskConfig{WindowSeconds: 600, BlockThreshold: 100, ReviewThreshold: 60, UserWeightPercent: 50, IPWeightPercent: 30, SessionWeightPercent: 20, SessionCreationLimit: 5, SessionCreationLimitWindowSeconds: 3600, SessionCreationCooldown: DefaultSessionCreationCooldownConfig(), SessionContinuityMode: "observe"},
 		AdaptiveReview:  AdaptiveReviewConfig{MinCleanReviews: 10, MinObservationHours: 24, SamplePercent: 5, ForceReviewIntervalMinutes: 360, TrustDurationHours: 168, ReactivationCleanReviews: 5, ReactivationCooldownHours: 24},
 		Sidecar:         SidecarConfig{TimeoutSeconds: 1, FailClosed: false, MinScore: 30, SamplePercent: 5, Mode: GuardModeShadow, MaxTextLength: 8192, CacheTTLSeconds: 60, MaxConcurrent: 16, CircuitBreakerFailures: 3, CircuitBreakerSeconds: 30},
 		Session:         SessionConfig{WindowSeconds: 300, MaxFragments: 3, MaxTextLength: 4096, ShortFragmentMaxChars: 24, RequireSignedIdentity: true},
@@ -408,6 +409,9 @@ func ParseAdvancedConfig(raw string) (AdvancedConfig, error) {
 	}
 	if err := cfg.Risk.SessionCreationCooldown.Validate(); err != nil {
 		return AdvancedConfig{}, err
+	}
+	if mode := cfg.Risk.SessionContinuityMode; mode != "" && mode != "off" && mode != "observe" && mode != "enforce" {
+		return AdvancedConfig{}, fmt.Errorf("session_continuity_mode must be off, observe or enforce")
 	}
 	return NormalizeAdvancedConfig(cfg), nil
 }
@@ -845,6 +849,9 @@ func NormalizeAdvancedConfig(cfg AdvancedConfig) AdvancedConfig {
 	}
 	if cfg.Risk.SessionCreationCooldown.Mode == "" {
 		cfg.Risk.SessionCreationCooldown = DefaultSessionCreationCooldownConfig()
+	}
+	if cfg.Risk.SessionContinuityMode == "" {
+		cfg.Risk.SessionContinuityMode = "observe"
 	}
 	if cfg.Risk.SessionCreationLimit > 100000 {
 		cfg.Risk.SessionCreationLimit = 100000

@@ -136,6 +136,10 @@ func HTTPStatusCode(code ErrorCode) int {
 	case ErrCodeInvalidRequest, ErrCodeInvalidParameter, ErrCodeMissingField, ErrCodeInvalidFieldType,
 		ErrCodeInvalidFieldFormat, ErrCodeContextLengthExceeded, ErrCodeUnsupportedModel,
 		ErrCodeAccountSessionCapacity, ErrCodeRootAccountWaitTimeout, ErrCodeBackgroundRootUnavailable, ErrCodeSessionModelUnavailable,
+		"codex_session_continuity_storage_unavailable", "codex_session_continuity_ownership_unavailable", "codex_session_continuity_owner_conflict",
+		"codex_session_continuity_unbound_nonzero", "codex_session_continuity_window_missing", "codex_session_continuity_window_invalid",
+		"codex_session_continuity_number_conflict", "codex_session_continuity_thread_conflict", "codex_session_continuity_window_regressed", "codex_session_continuity_window_gap",
+		"codex_sticky_account_unavailable", "codex_sticky_expansion_required", "codex_sticky_account_capacity_full",
 		"codex_root_already_named", "window_billing_refresh_required", "window_expansion_invalid":
 		return http.StatusBadRequest
 	case ErrCodeServiceUnavailable:
@@ -150,11 +154,12 @@ func HTTPStatusCode(code ErrorCode) int {
 // SendError sends a standardized error response
 func SendError(c *gin.Context, err *APIError) {
 	status := HTTPStatusCode(err.Code)
-	c.JSON(status, ErrorResponse{Error: *err})
+	SendErrorWithStatus(c, err, status)
 }
 
 // SendErrorWithStatus sends an error response with a specific HTTP status
 func SendErrorWithStatus(c *gin.Context, err *APIError, status int) {
+	ObserveError(c, status, err)
 	c.JSON(status, ErrorResponse{Error: *err})
 }
 

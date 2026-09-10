@@ -23,8 +23,26 @@ type SelectionTrace struct {
 	suspended          int
 	frozen             bool
 	expandedWindow     bool
+	pinnedAccount      int64
 	sessionModelFilter AccountFilter
 	sessionModelDenied bool
+}
+
+func (trace *SelectionTrace) PinAccount(accountID int64) {
+	if trace != nil && accountID > 0 {
+		trace.mu.Lock()
+		trace.pinnedAccount = accountID
+		trace.mu.Unlock()
+	}
+}
+
+func (trace *SelectionTrace) PinnedAccount() int64 {
+	if trace == nil {
+		return 0
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	return trace.pinnedAccount
 }
 
 func (trace *SelectionTrace) SetExpandedWindow(allowed bool) {

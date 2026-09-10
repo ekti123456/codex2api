@@ -14,6 +14,30 @@ export function diagnosticRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+const clientMetadataFields = new Set([
+  'installation_id', 'installationId', 'device_id', 'deviceId',
+  'x-codex-installation-id', 'x_codex_installation_id', 'x-device-id', 'x_device_id',
+  'client_name', 'client_version', 'os_name', 'os_version', 'arch', 'timezone',
+])
+
+const clientHeaderFields = new Set([
+  'X-Codex-Installation-Id', 'X-Installation-Id', 'X-Device-Id', 'Oai-Device-Id',
+  'User-Agent', 'Originator', 'Version', 'X-Stainless-OS', 'X-Stainless-Arch',
+  'X-Stainless-Runtime', 'X-Stainless-Runtime-Version', 'X-Stainless-Package-Version',
+])
+
+export function diagnosticClientInfo(incoming: unknown): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [source, values] of Object.entries(diagnosticRecord(incoming))) {
+    if (source.startsWith('_')) continue
+    const allowed = source === 'headers' ? clientHeaderFields : clientMetadataFields
+    for (const [field, value] of Object.entries(diagnosticRecord(values))) {
+      if (allowed.has(field)) result[`${source}.${field}`] = value
+    }
+  }
+  return result
+}
+
 export function diagnosticEntries(value: unknown, includeMissing = false): [string, unknown][] {
   const record = diagnosticRecord(value)
   const fields = includeMissing

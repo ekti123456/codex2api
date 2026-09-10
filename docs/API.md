@@ -1405,10 +1405,14 @@ data: {"type":"complete","current":10,"total":10,"success":8,"duplicate":1,"fail
 **响应:** SSE 流式进度
 
 ```
-data: {"type":"progress","current":3,"total":3,"success":2,"failed":1}
+data: {"type":"progress","action":"batch_test","account_id":1,"status":"success","http_status":200,"message":"测试通过","test_model":"gpt-5.5","output":"Hello!","current":3,"total":3,"success":2,"failed":1}
 
 data: {"type":"complete","current":3,"total":3,"success":2,"failed":1}
 ```
+
+通过 `?stream=true` 获取逐账号结果。`output` 是本次测试返回的文本预览，最多 4 KiB；超过上限时 `output_truncated=true`。`test_model` 是本次测试使用的模型。输出字段缺省时表示没有可展示的文本（例如只返回 thinking 的探测或旧版本结果），不应将“测试通过”当作模型回答。
+
+前端结果弹窗可逐条展开预览，不额外请求上游，不将预览写入数据库；批量刷新与非流式统计响应保持原有行为。
 
 #### POST /api/admin/accounts/clean-banned
 

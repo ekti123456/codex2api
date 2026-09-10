@@ -39,7 +39,7 @@ func (fingerprint *CodexFingerprint) ApplyHeaders(outbound http.Header) {
 }
 
 func (fingerprint *CodexFingerprint) ApplyBody(body []byte) []byte {
-	return applyCodexFingerprintToBody(body, fingerprint.ids)
+	return StripCodexProjectMetadata(applyCodexFingerprintToBody(body, fingerprint.ids))
 }
 
 func CodexRequestMetadataHeaders(headers http.Header, body []byte) http.Header {

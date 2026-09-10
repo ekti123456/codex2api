@@ -149,6 +149,7 @@ type AccountSessionRelatedSource struct {
 }
 
 type accountSessionState struct {
+	pendingUpgrade        bool
 	reserved              bool
 	sessionID             string
 	usagePeriodID         string
@@ -361,7 +362,7 @@ func (s *Store) persistAccountSessions(accountID int64, now time.Time, reconcile
 	maxRemaining := time.Duration(0)
 	remainingBySession := make(map[string]time.Duration, len(bySession))
 	for _, state := range bySession {
-		if state == nil || isProcessLocalSessionAffinityKey(state.sessionID) || !state.lastSeen.Add(idleTTL).After(now) {
+		if state == nil || state.pendingUpgrade || isProcessLocalSessionAffinityKey(state.sessionID) || !state.lastSeen.Add(idleTTL).After(now) {
 			continue
 		}
 		relatedSources := make([]AccountSessionRelatedSource, 0, len(state.relatedSources))
@@ -505,6 +506,10 @@ func (s *Store) AdmitAccountSession(account *Account, sessionKey string, now tim
 		s.accountSessions[account.DBID] = bySession
 	}
 	if state := bySession[sessionKey]; state != nil {
+		if state.pendingUpgrade {
+			s.accountSessionMu.Unlock()
+			return false
+		}
 		if state.reserved && !selectionTrace(traces).ExpandedWindow() && selectionTrace(traces) != nil {
 			if int64(len(bySession))-reservedCount >= limits.Total-limits.Reserved {
 				s.accountSessionMu.Unlock()
@@ -549,6 +554,9 @@ func (s *Store) CanAdmitAccountSession(account *Account, sessionKey string, now 
 	reservedCount := s.purgeExpiredAccountSessionsLocked(account.DBID, limits.IdleTTL, now)
 	bySession := s.accountSessions[account.DBID]
 	if bySession[sessionKey] != nil {
+		if bySession[sessionKey].pendingUpgrade {
+			return false
+		}
 		if bySession[sessionKey].reserved && !selectionTrace(traces).ExpandedWindow() && selectionTrace(traces) != nil {
 			return int64(len(bySession))-reservedCount < limits.Total-limits.Reserved
 		}

@@ -8,16 +8,19 @@ import (
 )
 
 type UserWindowGrant struct {
-	ID           string    `json:"id"`
-	Root         string    `json:"root"`
-	CreatedAt    time.Time `json:"created_at"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	PendingUntil time.Time `json:"pending_until"`
-	Confirmed    bool      `json:"confirmed"`
-	NoWindow     bool      `json:"no_window,omitempty"`
-	Expanded     bool      `json:"expanded"`
-	Multiplier   float64   `json:"multiplier"`
-	ExtraLimit   int       `json:"extra_limit"`
+	ID             string     `json:"id"`
+	Root           string     `json:"root"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	PendingUntil   time.Time  `json:"pending_until"`
+	Confirmed      bool       `json:"confirmed"`
+	NoWindow       bool       `json:"no_window,omitempty"`
+	Expanded       bool       `json:"expanded"`
+	Multiplier     float64    `json:"multiplier"`
+	ExtraLimit     int        `json:"extra_limit"`
+	OwnerAccountID int64      `json:"owner_account_id,omitempty"`
+	OwnerKey       string     `json:"owner_key,omitempty"`
+	UpgradedAt     *time.Time `json:"upgraded_at,omitempty"`
 }
 
 type UserWindowAdmissionState struct {

@@ -52,6 +52,8 @@ func upstreamErrorConsoleBody(body []byte) string {
 
 // Handler API 路由处理器
 type Handler struct {
+	windowTariffMu              sync.Mutex
+	windowTariffs               map[string]database.UserWindowGrant
 	store                       *auth.Store
 	configKeys                  map[string]bool // 配置文件中的静态 key
 	db                          *database.DB
@@ -75,6 +77,9 @@ type Handler struct {
 	liveStore                   *liveCallStore
 	// Responses WebSocket 同作用域会话的本机抢占注册表；跨实例所有权由 runtime cache 协调。
 	responsesWSSessionPreemptions responsesWSSessionPreemptRegistry
+	continuityMu                  sync.Mutex
+	continuityLocks               [64]sync.Mutex
+	continuityRecords             map[string]sessionContinuityCacheEntry
 	// 指纹重放冷却的存在性闸门缓存(见 hasActiveFingerprintReplayLocks)。
 	fpReplayGateMu     sync.Mutex
 	fpReplayGateAt     time.Time
@@ -379,7 +384,7 @@ func capacityAwareSessionAffinityKey(identity requestSessionIdentity, apiKeyID i
 // the account currently bound to its source session. The target affinity key
 // remains independent, so the fork keeps its own accounting window and can
 // fall back to normal scheduling when the source account is unavailable.
-func (h *Handler) takeForkSourceAccount(identity requestSessionIdentity, targetKey string, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, policy auth.DispatchPolicy) (*auth.Account, string) {
+func (h *Handler) takeForkSourceAccount(identity requestSessionIdentity, targetKey string, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, policy auth.DispatchPolicy, traces ...*auth.SelectionTrace) (*auth.Account, string) {
 	if h == nil || h.store == nil || strings.TrimSpace(targetKey) == "" || strings.TrimSpace(identity.forkSourceAffinityID) == "" {
 		return nil, ""
 	}
@@ -400,11 +405,11 @@ func (h *Handler) takeForkSourceAccount(identity requestSessionIdentity, targetK
 		return nil, ""
 	}
 
-	account := h.store.TakePreferredAccountWithDispatch(accountID, apiKeyID, exclude, filter, policy)
+	account := h.store.TakePreferredAccountWithDispatch(accountID, apiKeyID, exclude, filter, policy, traces...)
 	if account == nil {
 		return nil, ""
 	}
-	if !h.store.AdmitAccountSession(account, targetKey, now) {
+	if !h.store.AdmitAccountSession(account, targetKey, now, traces...) {
 		h.store.Release(account)
 		return nil, ""
 	}
@@ -1829,6 +1834,7 @@ func populateInternalUsageMetaFromContext(c *gin.Context, input *database.UsageL
 }
 
 func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInput) {
+	h.completeSessionContinuity(c, input)
 	populateAPIKeyMetaFromContext(c, input)
 	populateInternalUsageMetaFromContext(c, input)
 	populateClientIPFromRequest(c, input)
@@ -3388,10 +3394,23 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		attachUserAgentAudit(c)
 		attachWsAcquireAudit(c)
-		attachUpstreamTrace(c, h.store)
+		if upstreamTraceFromContext(c.Request.Context()) == nil {
+			attachUpstreamTrace(c, h.store)
+		}
+		finishServiceAudit := h.beginServiceErrorAudit(c)
+		defer func() {
+			if panicValue := recover(); panicValue != nil {
+				api.ObserveError(c, http.StatusInternalServerError, api.NewAPIError(api.ErrCodeServerError, "Service handler panic", api.ErrorTypeServer))
+				panic(panicValue)
+			}
+			finishServiceAudit()
+		}()
 		// 如果没有配置任何密钥
 		if !h.hasAnyKeys() {
 			if allowAnonymous {
+				if audit := serviceErrorAuditForRequest(c); audit != nil {
+					audit.authenticated = true
+				}
 				// 显式允许匿名访问（旧行为，仅在 CODEX_ALLOW_ANONYMOUS=true 时启用）
 				c.Next()
 				return
@@ -3436,6 +3455,9 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if audit := serviceErrorAuditForRequest(c); audit != nil {
+			audit.apiKeyID, audit.apiKeyName = apiKeyRow.ID, apiKeyRow.Name
+		}
 		if !apiKeyRow.Enabled {
 			maskedKey := security.MaskAPIKey(key)
 			security.SecurityAuditLog("AUTH_FAILED_DISABLED_KEY", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
@@ -3463,6 +3485,9 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 		c.Set(contextAPIKeyRow, apiKeyRow)
 		h.attachAPIKeyModelRequestQuota(c, false)
 		c.Set("apiKey", key)
+		if audit := serviceErrorAuditForRequest(c); audit != nil {
+			audit.authenticated = true
+		}
 		if h.enforceRequiredNewAPIIdentityAtIngress(c) {
 			c.Abort()
 			return
@@ -4240,7 +4265,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		accountFilter = accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, allowCodexAccounts)
 	}
 	beginDispatchSelection(c)
-	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, logModel, effectiveModel, nativeRemoteCompactionV2); modelError != nil {
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, logModel, effectiveModel, nativeRemoteCompactionV2, rawBody); modelError != nil {
 		api.SendError(c, modelError)
 		return
 	}
@@ -4331,13 +4356,13 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 			if account == nil && attempt == 0 && compactionAffinity.Known && !turnContinuationPinned {
 				account = h.store.TakePreferredAccountWithDispatch(compactionAffinity.PreferredAccountID, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
-				if account != nil && !h.store.AdmitAccountSession(account, affinityKey, time.Now()) {
+				if account != nil && !h.store.AdmitAccountSession(account, affinityKey, time.Now(), selectionTraceForRequest(c)) {
 					h.store.Release(account)
 					account = nil
 				}
 			}
 			if account == nil && attempt == 0 && !turnContinuationPinned {
-				account, stickyProxyURL = h.takeForkSourceAccount(sessionIdentity, affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy)
+				account, stickyProxyURL = h.takeForkSourceAccount(sessionIdentity, affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
 			}
 			if account != nil {
 				stickyProxyURL = account.GetProxyURL()
@@ -6364,7 +6389,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	// 中转账号会命中上游自身的 /responses/compact，使仅接入中转的用户也能压缩（issue #174）。
 	accountFilter := accountFilterForCompactResponsesModelWithOriginal(routingModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
 	beginDispatchSelection(c)
-	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, routingModel, effectiveModel, true); modelError != nil {
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, routingModel, effectiveModel, true, rawBody); modelError != nil {
 		api.SendError(c, modelError)
 		return
 	}
@@ -6421,7 +6446,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		}
 		if account == nil && attempt == 0 && compactionAffinity.Known && !compactContinuationPinned {
 			account = h.store.TakePreferredAccountWithDispatch(compactionAffinity.PreferredAccountID, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
-			if account != nil && !h.store.AdmitAccountSession(account, affinityKey, time.Now()) {
+			if account != nil && !h.store.AdmitAccountSession(account, affinityKey, time.Now(), selectionTraceForRequest(c)) {
 				h.store.Release(account)
 				account = nil
 			}
@@ -6431,7 +6456,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		}
 		if account == nil {
 			if compactContinuationPinned {
-				account, stickyProxyURL = h.store.NextForContinuationWithDispatch(affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy)
+				account, stickyProxyURL = h.store.NextForContinuationWithDispatch(affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
 			} else {
 				account, stickyProxyURL, affinityGuard = h.nextAccountForSessionWithDispatchGuard(affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
 			}
@@ -7287,7 +7312,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	recordUsageRootAccount(c, priorSessionAccountID, priorSessionAccountID > 0)
 	accountFilter := accountFilterForResponsesModelWithOriginal(logModel, effectiveModel, modelIDInList(effectiveModel, SupportedModelIDs(c.Request.Context(), h.db)))
 	beginDispatchSelection(c)
-	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, logModel, effectiveModel, false); modelError != nil {
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, logModel, effectiveModel, false, rawBody); modelError != nil {
 		api.SendError(c, modelError)
 		return
 	}

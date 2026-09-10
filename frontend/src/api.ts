@@ -1,3 +1,4 @@
+import type { ServiceErrorPage, ServiceErrorQuery } from './lib/serviceErrors'
 import type {
   AccountEventTrendPoint,
   AccountPortalAuthURLResponse,
@@ -531,6 +532,15 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   if (params.viaWebsocket) search.set('via_websocket', params.viaWebsocket)
   if (params.includeCanceled) search.set('include_canceled', params.includeCanceled)
   return search
+}
+
+export function serviceErrorSearchParams(query: ServiceErrorQuery): string {
+  const search = new URLSearchParams({ start: query.start, end: query.end, limit: '20' })
+  for (const key of ['status', 'stage', 'request_id', 'cursor'] as const) {
+    const value = query[key]?.trim()
+    if (value) search.set(key, value)
+  }
+  return search.toString()
 }
 
 export const api = {
@@ -1068,6 +1078,8 @@ export const api = {
     request<MessageResponse>(`/prompt-filter/newapi-bindings/${apiKeyId}`, { method: 'DELETE' }),
   getOpsOverview: (signal?: AbortSignal) => request<OpsOverviewResponse>('/ops/overview', { signal }),
   getRuntimeStatus: () => request<RuntimeStatusResponse>('/runtime-status'),
+  getServiceErrors: (query: ServiceErrorQuery, signal?: AbortSignal) =>
+    request<ServiceErrorPage>(`/ops/service-errors?${serviceErrorSearchParams(query)}`, { signal }),
   getSystemUpdate: () => request<SystemUpdateInfo>('/system/update', { timeoutMs: 20_000 }),
   performSystemUpdate: () =>
     // 后端下载上游二进制最长约 10 分钟,客户端给到 11 分钟兜底:既不会误伤慢下载,

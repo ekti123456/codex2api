@@ -75,6 +75,7 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 					return websocketResponseToHTTP(ctx, response, http.StatusOK, nil), nil
 				}
 				account := &auth.Account{DBID: 902, AccountID: "fixture", AccessToken: "dummy-token", CodexFingerprintMode: mode, DynamicConcurrencyLimit: 1}
+				account.CustomHeaders = map[string]string{"X-Codex-Project-Id": "custom-project", "X-Codex-Workspace-Id": "custom-workspace"}
 				stale := make(http.Header)
 				stale.Set("Originator", "codex_cli_rs")
 				stale.Set("Thread-Id", "stale-thread")
@@ -95,6 +96,7 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 						"window_id": fmt.Sprintf("%s:%d", thread, turn), "window_number": turn,
 						"context_window_id": "context-" + strconv.Itoa(turn), "turn_id": strconv.Itoa(turn),
 						"request_kind": "turn", "thread_source": "user",
+						"project_id": "project", "projectId": "project", "workspace_id": "workspace",
 					}
 					if turn == 0 {
 						canonical["parent_thread_id"] = "root"
@@ -104,7 +106,7 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 						canonical["request_kind"] = "memory"
 					}
 					raw, _ := json.Marshal(canonical)
-					body, _ := json.Marshal(map[string]any{"model": "gpt-6-astra", "input": []any{}, "client_metadata": map[string]any{"x-codex-turn-metadata": string(raw)}})
+					body, _ := json.Marshal(map[string]any{"model": "gpt-6-astra", "input": []any{}, "client_metadata": map[string]any{"x-codex-turn-metadata": string(raw), "project_id": "flat-project", "projectId": "flat-project", "workspace_id": "flat-workspace"}})
 					expected := proxy.NewCodexFingerprint(account, stale, body).ApplyBody(body)
 					sessionID := "gateway-cache"
 					if pooled {
@@ -130,12 +132,17 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 					if sent.connection != 1 {
 						test.Fatalf("connection was not reused: %d", sent.connection)
 					}
-					for _, name := range []string{"X-Codex-Window-Id", "Thread-Id", "X-Client-Request-Id", "X-Codex-Turn-Metadata", "X-Codex-Parent-Thread-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "X-Codex-Turn-State"} {
+					for _, name := range []string{"X-Codex-Window-Id", "Thread-Id", "X-Client-Request-Id", "X-Codex-Turn-Metadata", "X-Codex-Parent-Thread-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "X-Codex-Turn-State", "X-Codex-Project-Id", "X-Codex-Workspace-Id"} {
 						if sent.headers.Get(name) != "" {
 							test.Fatalf("frozen handshake contains per-request field %s", name)
 						}
 					}
 					metadata := gjson.GetBytes(sent.body, codexTurnMetadataClientPath).String()
+					for _, field := range []string{"project_id", "projectId", "workspace_id"} {
+						if gjson.Get(metadata, field).Exists() || gjson.GetBytes(sent.body, "client_metadata."+field).Exists() {
+							test.Fatalf("project metadata survived in WS frame: %s", sent.body)
+						}
+					}
 					if metadata != gjson.GetBytes(expected, codexTurnMetadataClientPath).String() {
 						test.Fatalf("current canonical metadata changed or rehashed: %s, want %s", metadata, expected)
 					}
@@ -154,6 +161,34 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+func TestWebsocketProjectMetadataStrippedFromHeaderOnlyRequest(test *testing.T) {
+	for _, mode := range []string{auth.CodexFingerprintModeOff, auth.CodexFingerprintModeDevice, auth.CodexFingerprintModeSession, auth.CodexFingerprintModeFull} {
+		test.Run(mode, func(test *testing.T) {
+			metadata := `{"thread_id":"thread","window_id":"thread:71","project_id":"project","projectId":"project","workspace_id":"workspace"}`
+			incoming := make(http.Header)
+			incoming.Set("X-Codex-Turn-Metadata", metadata)
+			account := &auth.Account{DBID: 903, CodexFingerprintMode: mode, CustomHeaders: map[string]string{
+				"X-Codex-Turn-Metadata": metadata, "X-Codex-Project-Id": "project", "X-Codex-Workspace-Id": "workspace", "OpenAI-Project": "api-project",
+			}}
+			executor := &Executor{}
+			body := []byte(`{"model":"gpt-6-astra"}`)
+			headers := executor.prepareWebsocketHeaders("dummy-token", account, "account", "session", "key", nil, incoming, body)
+			frame := applyCodexFrameMetadata(body, headers)
+			for _, field := range []string{"project_id", "projectId", "workspace_id"} {
+				if gjson.Get(headers.Get("X-Codex-Turn-Metadata"), field).Exists() || gjson.Get(gjson.GetBytes(frame, codexTurnMetadataClientPath).String(), field).Exists() {
+					test.Fatalf("header-only project metadata survived: %s", frame)
+				}
+			}
+			if headers.Get("X-Codex-Project-Id") != "" || headers.Get("X-Codex-Workspace-Id") != "" || headers.Get("OpenAI-Project") != "api-project" {
+				test.Fatal("project header cleanup crossed API project boundary")
+			}
+			if incoming.Get("X-Codex-Turn-Metadata") != metadata {
+				test.Fatal("incoming metadata changed")
+			}
+		})
 	}
 }
 

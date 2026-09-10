@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import PromptFilterNewAPIBindings from '../components/PromptFilterNewAPIBindings'
 import SessionCreationCooldownControls from '../components/SessionCreationCooldownControls'
+import SessionContinuityControls from '../components/SessionContinuityControls'
 import { defaultSessionCreationCooldown, parseSessionCreationCooldown } from '../lib/sessionCreationCooldown'
 import type { SessionCreationCooldownConfig } from '../lib/sessionCreationCooldown'
 import type { AccountSessionSummary, PromptManualWindowLock } from '../types'
@@ -230,7 +231,7 @@ type AdvancedProtectionConfig = {
     max_encoded_blocks: number
   }
   context_discount: { enabled: boolean; intent_aware: boolean; max_discount: number; operational_max_discount: number }
-  risk: { enabled: boolean; window_seconds: number; block_threshold: number; review_threshold: number; user_weight_percent: number; ip_weight_percent: number; session_weight_percent: number; session_creation_limit_enabled: boolean; session_creation_limit: number; session_creation_limit_window_seconds: number; session_creation_cooldown: SessionCreationCooldownConfig }
+  risk: { enabled: boolean; window_seconds: number; block_threshold: number; review_threshold: number; user_weight_percent: number; ip_weight_percent: number; session_weight_percent: number; session_creation_limit_enabled: boolean; session_creation_limit: number; session_creation_limit_window_seconds: number; session_creation_cooldown: SessionCreationCooldownConfig; session_continuity_mode: string }
   sidecar: {
     enabled: boolean
     base_url: string
@@ -321,7 +322,7 @@ const defaultAdvancedProtection: AdvancedProtectionConfig = {
     max_encoded_blocks: 16,
   },
   context_discount: { enabled: true, intent_aware: true, max_discount: 90, operational_max_discount: 0 },
-  risk: { enabled: false, window_seconds: 600, block_threshold: 100, review_threshold: 60, user_weight_percent: 60, ip_weight_percent: 20, session_weight_percent: 20, session_creation_limit_enabled: false, session_creation_limit: 5, session_creation_limit_window_seconds: 3600, session_creation_cooldown: defaultSessionCreationCooldown() },
+  risk: { enabled: false, window_seconds: 600, block_threshold: 100, review_threshold: 60, user_weight_percent: 60, ip_weight_percent: 20, session_weight_percent: 20, session_creation_limit_enabled: false, session_creation_limit: 5, session_creation_limit_window_seconds: 3600, session_creation_cooldown: defaultSessionCreationCooldown(), session_continuity_mode: 'observe' },
   sidecar: {
     enabled: false,
     base_url: '',
@@ -1258,6 +1259,8 @@ function AdvancedProtectionEditor({
             ) : null}
             <SessionCreationCooldownControls value={config.risk.session_creation_cooldown}
               onChange={(next) => applyPatches(Object.entries(next).map(([key, nextValue]) => ({ path: ['risk', 'session_creation_cooldown', key], value: nextValue })))} />
+            <SessionContinuityControls mode={config.risk.session_continuity_mode}
+              onChange={(mode) => applyPatches([{ path: ['risk', 'session_continuity_mode'], value: mode }])} />
           </div>
         </AdvancedPanel>
 

@@ -8,6 +8,20 @@ import {
   readAdvancedConfigPath,
 } from '../types.ts'
 
+test('continuity mode changes preserve window limits, cooldown and unknown risk fields', () => {
+  let raw = JSON.stringify({ risk: { session_creation_limit: 8, session_creation_cooldown: { mode: 'enforce' }, future_option: true } })
+  for (const mode of ['observe', 'enforce', 'off']) {
+    const result = patchAdvancedConfigDocument(raw, [{ path: ['risk', 'session_continuity_mode'], value: mode }])
+    assert.equal(result.ok, true)
+    const risk = JSON.parse(result.serialized).risk
+    assert.equal(risk.session_continuity_mode, mode)
+    assert.equal(risk.session_creation_limit, 8)
+    assert.equal(risk.session_creation_cooldown.mode, 'enforce')
+    assert.equal(risk.future_option, true)
+    raw = result.serialized
+  }
+})
+
 test('advanced config parsing keeps invalid input distinct from defaults', () => {
   assert.deepEqual(parseAdvancedConfigDocument('{broken'), {
     ok: false,

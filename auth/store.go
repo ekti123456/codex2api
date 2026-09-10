@@ -6919,6 +6919,27 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 	if key == "" {
 		return s.NextExcludingWithDispatch(apiKeyID, exclude, filter, policy, traces...), "", SessionAffinityGuard{}
 	}
+	if accountID := selectionTrace(traces).PinnedAccount(); accountID > 0 {
+		selectionTrace(traces).Bind(accountID)
+		if !selectionTrace(traces).CheckSessionModel(s.FindByID(accountID)) {
+			return nil, "", SessionAffinityGuard{}
+		}
+		account, _ := s.takeByIDModeWithCapacity(accountID, apiKeyID, exclude, filter, true, key, policy, 0, traces...)
+		if account == nil || !s.admitSelectedAccountSession(account, key, time.Now(), traces...) {
+			return nil, "", SessionAffinityGuard{}
+		}
+		proxyURL := account.GetProxyURL()
+		s.sessionMu.RLock()
+		binding, bound := s.sessionBindings[key]
+		s.sessionMu.RUnlock()
+		if !bound {
+			binding, bound = s.getCachedSessionAffinity(key)
+		}
+		if bound && binding.accountID == accountID && s.affinityProxyStillValid(accountID, binding.proxyURL) {
+			proxyURL = binding.proxyURL
+		}
+		return account, proxyURL, SessionAffinityGuard{}
+	}
 	// Keep the caller's explicit continuation requirement separate from the
 	// implicit retry pin below. A failure pin is only a retry hint; if the
 	// account becomes dispatch-ineligible while we are checking it, a fresh root
@@ -7693,6 +7714,10 @@ func (s *Store) takeByIDModeWithConcurrencyAllowance(id int64, apiKeyID int64, e
 }
 
 func (s *Store) takeByIDModeWithCapacity(id int64, apiKeyID int64, exclude map[int64]bool, filter AccountFilter, continuation bool, sessionKey string, policy DispatchPolicy, concurrencyAllowance int64, traces ...*SelectionTrace) (*Account, bool) {
+	if owner := selectionTrace(traces).PinnedAccount(); owner > 0 && owner != id {
+		selectionTrace(traces).Reject("root_owner_mismatch")
+		return nil, false
+	}
 	if s == nil || id == 0 {
 		return nil, false
 	}

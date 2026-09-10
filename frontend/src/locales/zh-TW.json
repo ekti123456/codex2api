@@ -1,4 +1,51 @@
 {
+  "serviceErrors": {
+    "timeRange": "時間範圍",
+    "allStatuses": "全部狀態",
+    "allStages": "全部階段",
+    "search": "搜尋",
+    "page": "第 {{page}} 页",
+    "columns": {
+      "time": "時間",
+      "status": "狀態",
+      "stage": "發生階段",
+      "request": "請求",
+      "identity": "呼叫方 / 請求 ID",
+      "error": "錯誤資訊"
+    },
+    "title": "服務錯誤",
+    "description": "收集 Codex2API 本地攔截與服務異常；上游帳號錯誤仍在「錯誤日誌」中查看。",
+    "total": "服務錯誤總數",
+    "searchPlaceholder": "精確查詢請求 ID / NewAPI 請求 ID",
+    "retention": "保留最近 {{days}} 天、最多約 {{rows}} 筆，定期清理。不計入用量、費用或帳號錯誤統計。",
+    "collector": "採集器（本次啟動）：待寫入 {{pending}} · 佇列丟棄 {{dropped}} · 寫入失敗 {{failed}}",
+    "lossWarning": "存在未寫入的日誌，請檢查服務控制台與資料庫狀態",
+    "empty": "暫無服務錯誤",
+    "emptyDescription": "僅記錄升級後到達 Codex2API 的服務錯誤，不補錄歷史；NewAPI 轉發前的攔截不會出現在這裡。",
+    "unidentified": "未識別呼叫方",
+    "details": "服務錯誤詳情",
+    "detailsDescription": "只保留診斷欄位，不採集請求正文、Authorization 或金鑰。WS 狀態碼是錯誤對應的狀態，不是升級握手狀態。",
+    "copy": "複製 JSON",
+    "stages": {
+      "authentication": "入口鑑權",
+      "rate_limit": "額度 / 並發限制",
+      "root_binding": "主根綁定",
+      "window": "會話視窗",
+      "policy": "策略攔截",
+      "dispatch": "帳號調度",
+      "validation": "請求校驗",
+      "internal": "服務內部"
+    }
+  },
+  "sessionContinuity": {
+    "title": "會話連續性校驗（測試）",
+    "off": "關閉序號校驗",
+    "observe": "僅觀察（不新增攔截）",
+    "enforce": "正式攔截",
+    "confirm": "正式攔截會拒絕無歸屬的非零視窗，以及跳號、回退或不一致的主請求。請先檢查僅觀察診斷。確認啟用？",
+    "description": "有歸屬的主請求允許相同序號或增加 1；首次觀察已有黏性時建立基線。無歸屬的新視窗應從 0 開始。壓縮請求記錄目前序號，不提前遞增。",
+    "protection": "僅觀察將 would_block 寫入請求診斷，不按序號攔截。關閉此項不關閉簽章驗證、原帳號保護或擴容收費。"
+  },
   "common": {
     "success": "成功",
     "failed": "失敗",
@@ -76,6 +123,9 @@
     }
   },
   "accounts": {
+    "operationResultsViewOutput": "查看測試輸出",
+    "operationResultsOutputTruncated": "輸出較長，僅顯示前 4 KiB。",
+    "operationResultsNoOutput": "本次結果未提供輸出文字",
     "codexInstallationIdLabel": "裝置安裝 ID",
     "codexInstallationIdHint": "收斂啟用時使用的固定安裝 ID；關閉收斂不會刪除。若設定了自訂安裝 ID，此處顯示覆寫值。",
     "todayStats": "今日統計",
@@ -1342,7 +1392,8 @@
       "copyFailed": "複製失敗，請手動選取診斷內容",
       "retry": "重新載入",
       "types": { "user": "使用者主請求", "related_internal": "關聯被動", "independent_internal": "獨立背景", "related_unclassified": "關聯請求（未判被動）", "compaction": "壓縮請求", "gateway_internal": "閘道內部", "unknown": "未識別", "not_recorded": "未記錄" },
-      "sections": { "request": "請求資訊", "resolved": "實際解析結果", "audit": "內容審核階段", "dispatch": "模型調度階段", "windows": "視窗處理結果", "routing": "帳號選擇結果", "recent": "無根最近帳號回溯", "incoming": "入口欄位（按來源區分）" }
+      "clientHint": "用戶端入站聲明按來源分別展示，不合併有差異的安裝/裝置 ID，也不等同於上游帳號收斂後的裝置 ID。未傳送或舊日誌未採集的欄位不推測；SDK、版本和系統資訊僅在實際攜帶時顯示。",
+      "sections": { "request": "請求資訊", "client": "用戶端與裝置", "resolved": "實際解析結果", "audit": "內容審核階段", "dispatch": "模型調度階段", "windows": "視窗處理結果", "routing": "帳號選擇結果", "recent": "無根最近帳號回溯", "incoming": "入口欄位（按來源區分）" }
     },
     "searchLogs": "搜尋錯誤、模型、端點、帳號、NewAPI 使用者、IP、用戶端 UA 或 API Key…",
     "tableCached": "快取",

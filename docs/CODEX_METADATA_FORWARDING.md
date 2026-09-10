@@ -9,7 +9,15 @@
 | session | 使用账号持久化设备身份 | 相同原始线程使用同一账号内映射，无论出现在自身、parent 还是 fork 字段 | 映射后的线程 ID + 原窗口序号 |
 | full | 使用账号持久化设备身份 | 保持既有单线程折叠语义，引用也指向折叠后的线程 | 折叠后的线程 ID + 原窗口序号 |
 
-独立 `X-Codex-Installation-Id` 仍不凭空生成。HTTP 转发 `X-Codex-Window-Id`；仅设备模式不改写窗口身份。`Session-Id` 与 `prompt_cache_key` 的既有缓存隔离策略不变；账号自定义请求头仍具有最终覆盖优先级。
+独立 `X-Codex-Installation-Id` 仍不凭空生成。HTTP 转发 `X-Codex-Window-Id`；仅设备模式不改写窗口身份。`Session-Id` 与 `prompt_cache_key` 的既有缓存隔离策略不变；账号自定义请求头仍具有覆盖优先级，但不能绕过出站项目标识清理。
+
+## 出站项目标识清理
+
+所有指纹模式（包括 `off`）均移除客户端元数据中的 `project_id`、`projectId`、`workspace_id`。处理范围为 `client_metadata` 平铺键、内嵌 `x-codex-turn-metadata`（兼容 `x_codex_turn_metadata`，支持 JSON 字符串和对象），以及 `X-Codex-Turn-Metadata` 兼容头。不转发独立的 `X-Codex-Project-Id`、`X-Codex-Workspace-Id`，账号自定义头同样不能重新注入这些出站标识。
+
+清理覆盖原生 HTTP、WS 当前请求帧、compact 与 Responses 中转账号出站。它不是选号条件，不修改入站原始数据、本地项目管理 ID、根会话、线程、窗口序号或缓存键；也不递归删除提示词、工具参数中的同名业务字段。`workspaces` 和正文工作目录沿用既有行为，API 作用域头 `OpenAI-Project` 不属于这三个客户端项目标识，不在此规则中删除。
+
+仅解析元数据局部，未命中时返回原请求字节，不做整包 JSON 重建，不访问数据库或网络。WS 每一帧独立清理，不能把上一帧元数据用作当前帧的项目身份来源。
 
 ## 每次请求的原始快照
 
@@ -26,6 +34,22 @@
 连接池仍按原有账号、路由和线程通道复用，不因轮次或窗口序号变化逐请求重连。`previous_response_id` 的优先连接复用额外校验原始请求通道，不能仅凭相同账号和 API Key 跳入另一显式线程。overflow 连接使用原始通道作为续链作用域；无会话槽位池使用其稳定池作用域。
 
 正常读到响应终止事件后才归还连接；未完成、取消、断连或写出失败仍沿用现有销毁策略，避免残留响应进入下一请求。
+
+## 请求诊断中的设备与客户端信息
+
+使用统计的「请求诊断」新增「客户端与设备」分区，展示入站字段的来源，不选择一个设备 ID 覆盖其他来源：
+
+- 安装/设备标识：`installation_id`、`installationId`、`device_id`、`deviceId`，以及已携带的 `X-Codex-Installation-Id`、`X-Installation-Id`、`X-Device-Id` 等兼容头。
+- 客户端声明：User-Agent、Originator、Version、Stainless SDK 的系统/架构/运行时版本，及元数据里的客户端版本、系统和时区。未提供的字段不从 UA 推断。
+- 关联信息：补记 `context_window_id`、`window_number`、`turn_started_at_unix_ms`，保留零值和类型错误标记。NewAPI 已验证签名元数据中的安装标识、平台、Token ID、渠道 ID 也列在 `signed_newapi` 下；Token ID 是数字标识，不是密钥。
+- 原生 Messages 请求可记录结构化 `metadata.user_id` 中的 `device_id`、`account_uuid`、`session_id`，不记录普通业务用户字符串、邮箱或其他扩展字段。
+- 「请求信息」补充方法、端点、入站传输类型、模型、上游模型、流式标记、上游是否使用 WS、请求追踪 ID、Key ID/名称和已观测到的入站/上游 UA。没有上游 UA 观测时，不把“是否改写”推断为 false。
+
+WS 的 `headers` 是握手来源，`client_metadata` 是当前帧来源。日志按来源保留差异，当前帧不从上一帧补设备信息。这些是客户端声明，不等于 Codex2API 收敛后的账号设备身份，也不会成为新的认证或选号依据。
+
+诊断仅增加白名单采集与展示，不改动转发、指纹收敛、项目字段删除、窗口或计费逻辑。不采集正文/工具参数/工作目录，不额外读取请求 Body 或查询数据库、Redis、远端；复用现有元数据局部解析与 UA 审计结果。文本限长脱敏，UUID 保留，自定义设备身份以 `hash:` 摘要显示，整个用量诊断仍受 12 KiB 上限约束。
+
+服务错误同步保存精简 `client_info`，最多 24 个来源字段、约 4 KiB；沿用有界异步写入。新字段仅对升级后的采集生效，历史缺失数据不补猜。
 
 ## 兼容性与验证
 

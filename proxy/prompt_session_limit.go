@@ -210,6 +210,10 @@ func (h *Handler) checkPromptSessionCreationLimitForSelectedAccountAdmission(c *
 	if blocked || account == nil {
 		return status, blocked
 	}
+	if continuityError := h.commitSessionContinuity(c, account); continuityError != nil {
+		status.AdmissionError, status.AdmissionCode = continuityError.Message, continuityError.Code
+		return status, true
+	}
 	if err := h.claimRequestRootNaming(c, body); err != nil {
 		status.AdmissionError, status.AdmissionCode = err.Message, err.Code
 		return status, true
@@ -221,6 +225,10 @@ func (h *Handler) admitSelectedAccountWindow(c *gin.Context, body []byte, accoun
 	clearAccountSessionObservationContext(c)
 	if account == nil || (c != nil && c.GetBool("prompt_intelligence_internal")) {
 		return promptSessionCreationLimitStatus{}, false
+	}
+	if err := h.bindWindowGrantOwner(c, account.ID(), affinityKey); err != nil {
+		apiErr := requestWindowGrantAPIError(err)
+		return promptSessionCreationLimitStatus{AdmissionError: apiErr.Message, AdmissionCode: apiErr.Code}, true
 	}
 	enabled, _, _ := account.SessionCapacityConfig()
 	if !enabled {

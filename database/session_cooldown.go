@@ -37,6 +37,8 @@ func (db *DB) ReadSessionCooldown(ctx context.Context, subject string) (SessionC
 
 func (db *DB) ensureSessionCooldownTables(ctx context.Context) error {
 	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS codex_session_continuity (root_key VARCHAR(64) PRIMARY KEY, state TEXT NOT NULL, updated_at BIGINT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_session_continuity_updated ON codex_session_continuity(updated_at)`,
 		`CREATE TABLE IF NOT EXISTS prompt_session_cooldowns (subject VARCHAR(255) PRIMARY KEY, state TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS prompt_user_window_grants (subject VARCHAR(255) PRIMARY KEY, state TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS prompt_root_naming_claims (subject VARCHAR(255) NOT NULL, root VARCHAR(64) NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(subject, root))`,

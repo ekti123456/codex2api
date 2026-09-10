@@ -1,4 +1,51 @@
 {
+  "serviceErrors": {
+    "timeRange": "时间范围",
+    "allStatuses": "全部状态",
+    "allStages": "全部阶段",
+    "search": "搜索",
+    "page": "第 {{page}} 页",
+    "columns": {
+      "time": "时间",
+      "status": "状态",
+      "stage": "发生阶段",
+      "request": "请求",
+      "identity": "调用方 / 请求 ID",
+      "error": "错误信息"
+    },
+    "title": "服务错误",
+    "description": "收集 Codex2API 本地拦截与服务异常；上游账号错误仍在「错误日志」中查看。",
+    "total": "服务错误总数",
+    "searchPlaceholder": "精确查询请求 ID / NewAPI 请求 ID",
+    "retention": "保留最近 {{days}} 天、最多约 {{rows}} 条，定期清理。不计入用量、费用或账号错误统计。",
+    "collector": "采集器（本次启动）：待写入 {{pending}} · 队列丢弃 {{dropped}} · 写入失败 {{failed}}",
+    "lossWarning": "存在未落库日志，请检查服务控制台与数据库状态",
+    "empty": "暂无服务错误",
+    "emptyDescription": "仅记录升级后到达 Codex2API 的服务错误，不补录历史；NewAPI 转发前的拦截不会出现在这里。",
+    "unidentified": "未识别调用方",
+    "details": "服务错误详情",
+    "detailsDescription": "只保留诊断字段，不采集请求正文、Authorization 或密钥。WS 状态码是错误对应的状态，不是升级握手状态。",
+    "copy": "复制 JSON",
+    "stages": {
+      "authentication": "入口鉴权",
+      "rate_limit": "额度 / 并发限制",
+      "root_binding": "主根绑定",
+      "window": "会话窗口",
+      "policy": "策略拦截",
+      "dispatch": "账号调度",
+      "validation": "请求校验",
+      "internal": "服务内部"
+    }
+  },
+  "sessionContinuity": {
+    "title": "会话连续性校验（测试）",
+    "off": "关闭序号校验",
+    "observe": "仅观察（不新增拦截）",
+    "enforce": "正式拦截",
+    "confirm": "正式拦截会拒绝无归属的非零窗口，以及跳号、回退或不一致的主请求。请先在使用统计中检查仅观察结果。确认启用？",
+    "description": "有归属的主请求允许相同序号或增加 1；首次观察已有粘性时建立基线。无归属的新窗口应从 0 开始。压缩请求记录当前序号，不提前递增。",
+    "protection": "仅观察将 would_block 写入请求诊断，不按序号拦截。关闭此项不关闭签名校验、原账号保护或扩容收费。"
+  },
   "nav": {
     "dashboard": "仪表盘",
     "accounts": "账号管理",
@@ -1112,6 +1159,9 @@
     "operationResultsStatus": "结果",
     "operationResultsHTTP": "HTTP 状态",
     "operationResultsMessage": "原因",
+    "operationResultsViewOutput": "查看测试输出",
+    "operationResultsOutputTruncated": "输出较长，仅展示前 4 KiB。",
+    "operationResultsNoOutput": "本次结果未提供输出文本",
     "operationResultsEmpty": "本次操作没有可展示的逐账号结果",
     "operationResultsFilterAria": "筛选{{filter}}结果，共 {{count}} 个",
     "operationResultsFilterEmpty": "没有符合“{{filter}}”条件的账号结果",
@@ -2184,7 +2234,8 @@
       "copyFailed": "复制失败，请手动选择诊断内容",
       "retry": "重新加载",
       "types": { "user": "用户主请求", "related_internal": "关联被动", "independent_internal": "独立后台", "related_unclassified": "关联请求（未判被动）", "compaction": "压缩请求", "gateway_internal": "网关内部", "unknown": "未识别", "not_recorded": "未记录" },
-      "sections": { "request": "请求信息", "resolved": "实际解析结果", "audit": "内容审核阶段", "dispatch": "模型调度阶段", "windows": "窗口处理结果", "routing": "账号选择结果", "recent": "无根最近账号回溯", "incoming": "入口字段（按来源分开）" }
+      "clientHint": "客户端入站声明按来源分别展示，不合并有差异的安装/设备 ID，也不等同于上游账号收敛后的设备 ID。未发送或旧日志未采集的字段不推测；SDK、版本和系统信息仅在实际携带时显示。",
+      "sections": { "request": "请求信息", "client": "客户端与设备", "resolved": "实际解析结果", "audit": "内容审核阶段", "dispatch": "模型调度阶段", "windows": "窗口处理结果", "routing": "账号选择结果", "recent": "无根最近账号回溯", "incoming": "入口字段（按来源分开）" }
     },
     "imageInputTokens": "图片输入 token",
     "imageOutputTokens": "图片输出 token",

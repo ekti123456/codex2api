@@ -379,6 +379,12 @@ func main() {
 
 	log.Printf("账号就绪: %d/%d 可用", store.AvailableCount(), store.AccountCount())
 
+	// handler 不再接收 cfg.APIKeys
+	// 从环境变量读取 Codex 画像与 Beta 配置。
+	deviceCfg := proxy.DeviceProfileConfigFromEnv(os.Getenv)
+	handler := proxy.NewHandler(store, db, cfg, deviceCfg)
+	handler.SetRuntimeCache(tc)
+
 	// 6. 启动 HTTP 服务
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -389,6 +395,7 @@ func main() {
 	}
 	r.Use(api.RecoveryMiddleware())
 	r.Use(api.RequestContextMiddleware())
+	r.Use(handler.ServiceErrorMiddleware())
 	r.Use(api.VersionMiddleware())
 	security.MaxRequestBodySize = cfg.MaxRequestBodySize
 	// 账号导入端点(multipart 文件上传)单独放宽体积上限,默认 200MB,可用
@@ -408,12 +415,6 @@ func main() {
 	r.Use(api.SecurityHeadersMiddleware())
 	r.Use(loggerMiddleware())
 	r.Use(security.SecurityHeadersMiddleware())
-
-	// handler 不再接收 cfg.APIKeys
-	// 从环境变量读取 Codex 画像与 Beta 配置。
-	deviceCfg := proxy.DeviceProfileConfigFromEnv(os.Getenv)
-	handler := proxy.NewHandler(store, db, cfg, deviceCfg)
-	handler.SetRuntimeCache(tc)
 
 	// 注册 WebSocket 执行函数（避免 proxy ↔ wsrelay 循环依赖）
 	proxy.WebsocketExecuteFunc = wsrelay.ExecuteRequestWebsocket

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +57,8 @@ type usageRequestDiagnostics struct {
 	CompletedAt           time.Time                    `json:"completed_at"`
 	CorrelationID         string                       `json:"correlation_id"`
 	NewAPIRequestID       string                       `json:"newapi_request_id,omitempty"`
+	Request               *usageRequestInfo            `json:"request,omitempty"`
+	CaptureStatus         string                       `json:"capture_status,omitempty"`
 	Incoming              map[string]map[string]string `json:"incoming"`
 	Resolved              *usageRequestResolution      `json:"resolved,omitempty"`
 	Audit                 *usageRequestAuthorization   `json:"audit,omitempty"`
@@ -67,6 +70,7 @@ type usageRequestDiagnostics struct {
 	RootAccountWaitMillis int64                        `json:"root_account_wait_millis,omitempty"`
 	Naming                string                       `json:"naming,omitempty"`
 	WindowGrant           string                       `json:"window_grant,omitempty"`
+	Continuity            *sessionContinuityDiagnostic `json:"session_continuity,omitempty"`
 	UserWindowKeyHash     string                       `json:"user_window_key_hash,omitempty"`
 	UserWindow            string                       `json:"user_window"`
 	AccountWindow         string                       `json:"account_window"`
@@ -170,7 +174,9 @@ func diagnosticMetadata(raw gjson.Result) map[string]string {
 		return map[string]string{"metadata_status": "invalid_or_too_large"}
 	}
 	result := make(map[string]string)
-	for _, field := range []string{"session_id", "thread_id", "parent_thread_id", "forked_from_thread_id", "window_id", "turn_id", "parent_turn_id", "root_turn_id", "thread_source", "request_kind", "subagent_kind", "client_request_id", "x-client-request-id", "x_client_request_id", "x-codex-window-id", "x_codex_window_id", "x-codex-parent-thread-id", "x_codex_parent_thread_id", "x-codex-forked-from-thread-id", "x_codex_forked_from_thread_id", "x-openai-subagent", "x_openai_subagent"} {
+	fields := []string{"session_id", "thread_id", "parent_thread_id", "forked_from_thread_id", "window_id", "context_window_id", "turn_id", "parent_turn_id", "root_turn_id", "thread_source", "request_kind", "subagent_kind", "client_request_id", "x-client-request-id", "x_client_request_id", "x-codex-window-id", "x_codex_window_id", "x-codex-parent-thread-id", "x_codex_parent_thread_id", "x-codex-forked-from-thread-id", "x_codex_forked_from_thread_id", "x-openai-subagent", "x_openai_subagent", "account_uuid"}
+	fields = append(fields, diagnosticDeviceFields...)
+	for _, field := range fields {
 		value := raw.Get(field)
 		if !value.Exists() {
 			continue
@@ -181,8 +187,19 @@ func diagnosticMetadata(raw gjson.Result) map[string]string {
 		}
 		if field == "thread_source" || field == "request_kind" || field == "subagent_kind" || field == "x-openai-subagent" || field == "x_openai_subagent" {
 			result[field] = diagnosticLabel(value.String())
+		} else if field == "client_name" || field == "client_version" || field == "os_name" || field == "os_version" || field == "arch" || field == "timezone" {
+			result[field] = diagnosticClientText(value.String())
 		} else {
 			result[field] = diagnosticIdentifier(value.String())
+		}
+	}
+	for _, field := range []string{"window_number", "turn_started_at_unix_ms"} {
+		if number := raw.Get(field); number.Exists() {
+			if _, err := strconv.ParseUint(number.Raw, 10, 64); number.Type == gjson.Number && err == nil {
+				result[field] = number.Raw
+			} else {
+				result[field] = "invalid_type"
+			}
 		}
 	}
 	return result
@@ -212,22 +229,8 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 		return
 	}
 	state.rootCaptured = true
-	headers := make(map[string]string)
+	c.Set(sessionContinuityContextKey, nil)
 	if c.Request != nil {
-		for _, name := range []string{"Session-Id", "Session_id", "Conversation-Id", "Thread-Id", "X-Client-Request-Id", "X-Codex-Window-Id", "X-Codex-Parent-Thread-Id", "X-Codex-Forked-From-Thread-Id", "X-OpenAI-Subagent"} {
-			values := c.Request.Header.Values(name)
-			if len(values) > 0 {
-				value := values[0]
-				if name == "X-OpenAI-Subagent" {
-					headers[name] = diagnosticLabel(value)
-				} else {
-					headers[name] = diagnosticIdentifier(value)
-				}
-				if len(values) > 1 {
-					headers[name+"_multiple"] = "true"
-				}
-			}
-		}
 		if raw := c.GetHeader(codexTurnMetadataHeader); raw != "" {
 			if len(raw) <= 16384 {
 				state.Incoming["turn_metadata_header"] = diagnosticMetadata(gjson.Parse(raw))
@@ -236,9 +239,15 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 			}
 		}
 	}
-	state.Incoming["headers"] = headers
+	state.Incoming["headers"] = captureUsageDiagnosticHeaders(c)
 	if len(body) > 0 {
+		if c.GetString("x-model") == "" {
+			c.Set("x-model", diagnosticLabel(gjson.GetBytes(body, "model").String()))
+		}
 		captureUsageDiagnosticMetadata(state, "client_metadata", gjson.GetBytes(body, "client_metadata"), 0)
+		if c.Request != nil && strings.HasSuffix(c.Request.URL.Path, "/messages") {
+			captureUsageDiagnosticMetadata(state, "metadata.user_id", gjson.GetBytes(body, "metadata.user_id"), 0)
+		}
 	}
 }
 
@@ -289,6 +298,18 @@ func (h *Handler) captureUsageRequestResolution(c *gin.Context, body []byte, ide
 			"root_relation": policy.Meta.RootSessionRelation, "root_fingerprint": policy.Meta.RootSessionFingerprint,
 			"session_fingerprint": policy.Meta.SessionFingerprint, "session_accounting": policy.Meta.SessionAccounting,
 			"passive_feature": policy.Meta.PassiveFeature,
+		}
+		if policy.Meta.InstallationID != "" {
+			state.Incoming["signed_newapi"]["installation_id"] = diagnosticIdentifier(policy.Meta.InstallationID)
+		}
+		if policy.Meta.TokenID > 0 {
+			state.Incoming["signed_newapi"]["token_id"] = strconv.Itoa(policy.Meta.TokenID)
+		}
+		if policy.Meta.ChannelID > 0 {
+			state.Incoming["signed_newapi"]["channel_id"] = strconv.Itoa(policy.Meta.ChannelID)
+		}
+		if policy.Platform != "" {
+			state.Incoming["signed_newapi"]["platform"] = diagnosticLabel(policy.Platform)
 		}
 	}
 	if h != nil && h.store != nil {
@@ -348,6 +369,11 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		return
 	}
 	snapshot := *state
+	snapshot.Request = usageRequestInfoSnapshot(c, input)
+	snapshot.CaptureStatus = "partial"
+	if state.rootCaptured {
+		snapshot.CaptureStatus = "captured"
+	}
 	snapshot.CompletedAt = time.Now().UTC()
 	snapshot.SelectedAccountID = input.AccountID
 	if input.AttemptIndex > 0 {

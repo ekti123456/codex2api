@@ -115,6 +115,7 @@ func (handler *Handler) dispatchFailureForRequest(ctx *gin.Context) dispatchFail
 
 func (handler *Handler) sendDispatchUnavailable(ctx *gin.Context, stream bool, chat bool) {
 	if modelError := sessionModelErrorForRequest(ctx); modelError != nil {
+		api.ObserveError(ctx, api.HTTPStatusCode(modelError.Code), modelError)
 		if stream && ctx.Writer.Written() {
 			if chat && writeCommittedChatRetryError(ctx, modelError.Message) {
 				return
@@ -136,6 +137,7 @@ func (handler *Handler) sendDispatchUnavailable(ctx *gin.Context, stream bool, c
 		}
 	}
 	failure := handler.dispatchFailureForRequest(ctx)
+	api.ObserveError(ctx, http.StatusServiceUnavailable, api.NewAPIError(api.ErrCodeServiceUnavailable, dispatchPublicMessage, api.ErrorTypeServer))
 	if !ctx.Writer.Written() {
 		ctx.Header("X-Request-ID", failure.RequestID)
 		if failure.Envelope != "" {

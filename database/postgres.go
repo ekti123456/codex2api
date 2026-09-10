@@ -202,6 +202,7 @@ type DB struct {
 	driver string
 
 	promptFilterAudit *promptFilterAuditQueue
+	serviceErrors     *serviceErrorQueue
 
 	backgroundTaskMu      sync.Mutex
 	backgroundTaskWg      sync.WaitGroup
@@ -483,6 +484,9 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 		if err := db.ensurePromptConversationLocksTable(ctx); err != nil {
 			return nil, fmt.Errorf("创建提示词会话锁表失败: %w", err)
 		}
+		if err := db.ensureServiceErrorSchema(ctx); err != nil {
+			return nil, fmt.Errorf("创建服务错误日志表失败: %w", err)
+		}
 	}
 	if err := db.ensurePromptSessionLimitOverridesTable(ctx); err != nil {
 		return nil, fmt.Errorf("创建用户会话限制覆盖表失败: %w", err)
@@ -552,6 +556,8 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	}
 	db.promptFilterAudit = newPromptFilterAuditQueue(db)
 	db.promptFilterAudit.start()
+	db.serviceErrors = newServiceErrorQueue(db)
+	go db.serviceErrors.run()
 	db.RunBackgroundTask(func(taskCtx context.Context) {
 		if err := db.backfillPromptRiskEvents(taskCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("回填提示词风险画像失败，将在下次启动继续: %v", err)
@@ -893,6 +899,9 @@ func (db *DB) Close() error {
 	db.FlushUsageLogs() // 最后一次 flush，刷完整个缓冲
 	if db.promptFilterAudit != nil {
 		db.promptFilterAudit.close(2 * time.Second)
+	}
+	if db.serviceErrors != nil {
+		db.serviceErrors.close()
 	}
 	return db.conn.Close()
 }

@@ -1156,22 +1156,25 @@ func (h *Handler) persistRecycleBinTestResult(id int64, status string) {
 }
 
 type batchOperationEvent struct {
-	Type         string `json:"type"` // start | progress | complete
-	Action       string `json:"action"`
-	Status       string `json:"status,omitempty"`
-	HTTPStatus   int    `json:"http_status,omitempty"`
-	Current      int    `json:"current"`
-	Total        int    `json:"total"`
-	Success      int64  `json:"success"`
-	Failed       int64  `json:"failed"`
-	Banned       int64  `json:"banned,omitempty"`
-	RateLimited  int64  `json:"rate_limited,omitempty"`
-	Deleted      int64  `json:"deleted,omitempty"`
-	AccountID    int64  `json:"account_id,omitempty"`
-	AccountName  string `json:"account_name,omitempty"`
-	AccountEmail string `json:"account_email,omitempty"`
-	Message      string `json:"message,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Type            string `json:"type"` // start | progress | complete
+	Action          string `json:"action"`
+	Status          string `json:"status,omitempty"`
+	HTTPStatus      int    `json:"http_status,omitempty"`
+	Current         int    `json:"current"`
+	Total           int    `json:"total"`
+	Success         int64  `json:"success"`
+	Failed          int64  `json:"failed"`
+	Banned          int64  `json:"banned,omitempty"`
+	RateLimited     int64  `json:"rate_limited,omitempty"`
+	Deleted         int64  `json:"deleted,omitempty"`
+	AccountID       int64  `json:"account_id,omitempty"`
+	AccountName     string `json:"account_name,omitempty"`
+	AccountEmail    string `json:"account_email,omitempty"`
+	Message         string `json:"message,omitempty"`
+	Error           string `json:"error,omitempty"`
+	Output          string `json:"output,omitempty"`
+	OutputTruncated bool   `json:"output_truncated,omitempty"`
+	TestModel       string `json:"test_model,omitempty"`
 }
 
 func runtimeAccountOperationIdentity(account *auth.Account) (string, string) {
@@ -1397,7 +1400,7 @@ func (h *Handler) streamBatchTest(c *gin.Context, accounts []*auth.Account, miss
 		return
 	}
 
-	events := make(chan batchOperationEvent, len(accounts)+2)
+	events := make(chan batchOperationEvent, min(len(accounts)+2, 64))
 	ctx := c.Request.Context()
 	go func() {
 		counts := h.runBatchTest(ctx, accounts, missingCount, testFn, func(event batchOperationEvent) {
@@ -1460,12 +1463,18 @@ func (h *Handler) runBatchTest(ctx context.Context, accounts []*auth.Account, mi
 			case sem <- struct{}{}:
 			case <-ctx.Done():
 				atomic.AddInt64(&failedCount, 1)
-				h.emitBatchTestProgress(onProgress, acc.DBID, total, &completedCount, &successCount, &failedCount, &bannedCount, &rateLimitCount, "failed", "测试已取消")
+				h.emitBatchTestProgress(onProgress, acc.DBID, total, &completedCount, &successCount, &failedCount, &bannedCount, &rateLimitCount, "failed", "测试已取消", nil)
 				return
 			}
 			defer func() { <-sem }()
 
-			status, message := testFn(ctx, acc)
+			testCtx := ctx
+			var output *batchTestOutput
+			if onProgress != nil {
+				output = &batchTestOutput{}
+				testCtx = context.WithValue(ctx, batchTestOutputContextKey{}, output)
+			}
+			status, message := testFn(testCtx, acc)
 			switch status {
 			case "success":
 				atomic.AddInt64(&successCount, 1)
@@ -1476,7 +1485,7 @@ func (h *Handler) runBatchTest(ctx context.Context, accounts []*auth.Account, mi
 			default:
 				atomic.AddInt64(&failedCount, 1)
 			}
-			h.emitBatchTestProgress(onProgress, acc.DBID, total, &completedCount, &successCount, &failedCount, &bannedCount, &rateLimitCount, status, message)
+			h.emitBatchTestProgress(onProgress, acc.DBID, total, &completedCount, &successCount, &failedCount, &bannedCount, &rateLimitCount, status, message, output)
 		}(account)
 	}
 
@@ -1501,6 +1510,7 @@ func (h *Handler) emitBatchTestProgress(
 	rateLimitCount *int64,
 	status string,
 	message string,
+	output *batchTestOutput,
 ) {
 	if onProgress == nil {
 		return
@@ -1525,6 +1535,11 @@ func (h *Handler) emitBatchTestProgress(
 	}
 	if status == "failed" {
 		event.Error = message
+	}
+	if output != nil {
+		event.Output = string(output.text)
+		event.OutputTruncated = output.truncated
+		event.TestModel = output.model
 	}
 	onProgress(event)
 }
@@ -1562,6 +1577,9 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 		h.store.MarkError(acc, "批量测试失败: "+modelErr.Error())
 		return "failed", modelErr.Error()
 	}
+	if output := batchTestOutputFromContext(testCtx); output != nil {
+		output.model = testModel
+	}
 	securityCfg := h.store.ClaudeSecurityConfig()
 	payload := h.buildAccountConnectionTestPayload(testCtx, acc, testModel, securityCfg)
 	start := time.Now()
@@ -1593,7 +1611,7 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 	case http.StatusOK:
 		if acc.IsClaudeOAuth() {
 			proxy.SyncClaudeUsageState(h.store, acc, resp)
-			status, msg := readClaudeMessagesStream(testCtx, resp, nil)
+			status, msg := readClaudeMessagesStream(testCtx, resp, batchTestOutputFromContext(testCtx).append)
 			if status != "success" {
 				applyClaudeConnectionStreamFailure(h, acc, testModel, status, msg, resp)
 			}
@@ -1706,6 +1724,9 @@ func (h *Handler) runRecycleBinSingleTest(ctx context.Context, acc *auth.Account
 		}
 		return "failed", modelErr.Error()
 	}
+	if output := batchTestOutputFromContext(testCtx); output != nil {
+		output.model = testModel
+	}
 	claudeSecurityCfg := h.store.ClaudeSecurityConfig()
 	payload := h.buildAccountConnectionTestPayload(testCtx, acc, testModel, claudeSecurityCfg)
 
@@ -1734,7 +1755,7 @@ func (h *Handler) runRecycleBinSingleTest(ctx context.Context, acc *auth.Account
 		if acc.IsClaudeOAuth() {
 			// Recycle-bin tests are intentionally read-only. Inspect the native
 			// response headers without mutating the transient account snapshot.
-			status, msg := readClaudeMessagesStream(testCtx, resp, nil)
+			status, msg := readClaudeMessagesStream(testCtx, resp, batchTestOutputFromContext(testCtx).append)
 			if status == "success" && claudeConnectionTestShouldPreserveUsageCooldown(acc, resp) {
 				return "rate_limited", "Claude 上游返回了有效响应，但账号仍处于配额/限流状态"
 			}
@@ -1768,6 +1789,7 @@ func (h *Handler) runRecycleBinSingleTest(ctx context.Context, acc *auth.Account
 // readRecycleBinTestStream 读取测试 SSE 流并判定结果；与
 // readBatchTestStreamResult 等价，但不回写任何账号状态。
 func readRecycleBinTestStream(ctx context.Context, resp *http.Response) (string, string) {
+	output := batchTestOutputFromContext(ctx)
 	hasContent := false
 	gotTerminal := false
 	resultStatus := ""
@@ -1776,6 +1798,7 @@ func readRecycleBinTestStream(ctx context.Context, resp *http.Response) (string,
 
 	readErr := proxy.ReadSSEStream(resp.Body, func(data []byte) bool {
 		lastUpstreamEvent = append(lastUpstreamEvent[:0], data...)
+		output.observeResponses(data)
 		switch gjson.GetBytes(data, "type").String() {
 		case "response.output_text.delta":
 			if gjson.GetBytes(data, "delta").String() != "" {
@@ -1904,6 +1927,7 @@ func (h *Handler) batchTestWhamPreflight(ctx context.Context, acc *auth.Account)
 }
 
 func (h *Handler) readBatchTestStreamResult(ctx context.Context, acc *auth.Account, resp *http.Response, model string) (string, string) {
+	output := batchTestOutputFromContext(ctx)
 	hasContent := false
 	gotTerminal := false
 	resultStatus := ""
@@ -1913,6 +1937,7 @@ func (h *Handler) readBatchTestStreamResult(ctx context.Context, acc *auth.Accou
 	readErr := proxy.ReadSSEStream(resp.Body, func(data []byte) bool {
 		lastUpstreamEvent = append(lastUpstreamEvent[:0], data...)
 		eventType := gjson.GetBytes(data, "type").String()
+		output.observeResponses(data)
 
 		switch eventType {
 		case "response.output_text.delta":

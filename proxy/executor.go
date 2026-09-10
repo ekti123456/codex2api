@@ -793,6 +793,7 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 
 	client := getPooledClient(account, proxyURL)
 	send := func(body []byte) (*http.Response, error) {
+		body = StripCodexProjectMetadata(body)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, ErrInternalError("创建请求失败", err)
@@ -938,6 +939,7 @@ func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Acc
 	}
 
 	endpoint := auth.OpenAIResponsesEndpoint(baseURL, "/v1/responses/compact")
+	requestBody = StripCodexProjectMetadata(requestBody)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, ErrInternalError("创建请求失败", err)
@@ -1262,6 +1264,7 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 	// 可整体退回旧的 Session_id 形态。
 	ApplyCodexSessionHeaders(req.Header, account, cacheKey, downstreamHeaders, false, fingerprints...)
 	applyAccountCustomHeaders(req, account)
+	StripCodexProjectMetadataHeaders(req.Header)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
 }
 
@@ -1331,6 +1334,7 @@ func applyOpenAIResponsesRequestHeaders(req *http.Request, account *auth.Account
 		}
 	}
 	applyAccountCustomHeaders(req, account)
+	StripCodexProjectMetadataHeaders(req.Header)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
 }
 

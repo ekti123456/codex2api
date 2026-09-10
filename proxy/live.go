@@ -418,6 +418,7 @@ func (h *Handler) applyLiveUpstreamHeaders(req *http.Request, account *auth.Acco
 	applyCodexAllowedForwardHeaders(req, downstream)
 	ApplyCodexFingerprintHeaders(req.Header, account, downstream)
 	applyAccountCustomHeaders(req, account)
+	StripCodexProjectMetadataHeaders(req.Header)
 	req.Header.Set("OpenAI-Alpha", "quicksilver=v2")
 	req.Header.Del("OpenAI-Beta")
 	if strings.TrimSpace(req.Header.Get("session-id")) == "" {

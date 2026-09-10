@@ -1079,6 +1079,9 @@ interface BatchOperationEvent {
   action: BatchOperationAction;
   status?: string;
   http_status?: number;
+  output?: string;
+  output_truncated?: boolean;
+  test_model?: string;
   current?: number;
   total?: number;
   success?: number;

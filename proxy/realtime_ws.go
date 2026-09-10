@@ -80,15 +80,16 @@ func (h *Handler) RealtimeWebSocket(c *gin.Context) {
 			return
 		}
 		_ = conn.SetReadDeadline(time.Time{})
+		resetServiceErrorFrame(c)
 		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
-			_ = writeResponsesWSError(conn, api.NewAPIError(api.ErrCodeInvalidRequest, "unsupported websocket message type", api.ErrorTypeInvalidRequest))
+			_ = writeAuditedResponsesWSError(c, conn, api.NewAPIError(api.ErrCodeInvalidRequest, "unsupported websocket message type", api.ErrorTypeInvalidRequest))
 			continue
 		}
 		payload, forwardedEventID := stripNewAPIPolicyWebSocketEventID(payload)
 
 		ack, forward, apiErr := normalizeRealtimeTextClientEvent(&state, payload)
 		if apiErr != nil {
-			_ = writeResponsesWSError(conn, apiErr)
+			_ = writeAuditedResponsesWSError(c, conn, apiErr)
 			continue
 		}
 		if len(ack) > 0 {

@@ -47,15 +47,19 @@ type windowControlRequest struct {
 	Multiplier     float64 `json:"multiplier"`
 	GrantID        string  `json:"grant_id,omitempty"`
 	ReservationID  string  `json:"reservation_id,omitempty"`
+	Root           string  `json:"root,omitempty"`
 }
 
 type personalWindow struct {
-	ID         string    `json:"id"`
-	CreatedAt  time.Time `json:"created_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Model      string    `json:"model,omitempty"`
-	Expanded   bool      `json:"expanded"`
-	Multiplier float64   `json:"multiplier"`
+	ID         string     `json:"id"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	Model      string     `json:"model,omitempty"`
+	Expanded   bool       `json:"expanded"`
+	Multiplier float64    `json:"multiplier"`
+	GrantID    string     `json:"grant_id,omitempty"`
+	CanUpgrade bool       `json:"can_upgrade"`
+	UpgradedAt *time.Time `json:"upgraded_at,omitempty"`
 }
 
 func windowGrantMAC(secret, payload string) []byte {
@@ -154,9 +158,24 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 	subject := cache.PromptSessionLimitSubject(identity.Platform, identity.Identity.UserID)
 	limit, seconds := handler.userWindowControlLimits(request, identity)
 	windows := handler.userWindowControlSnapshot(subject, now)
+	if input.Operation == "upgrade" {
+		handler.upgradePersonalWindow(request, identity, input, windows)
+		return
+	}
 	if input.Operation == "list" {
+		lookup, stop := context.WithTimeout(request.Request.Context(), time.Second)
+		grants, readErr := handler.db.ReadUserWindowAdmissions(lookup, subject)
+		stop()
+		if readErr != nil {
+			request.JSON(http.StatusServiceUnavailable, gin.H{"message": "窗口授权服务暂时不可用"})
+			return
+		}
 		items := make([]personalWindow, 0, len(windows))
 		for _, window := range windows {
+			if grant := grants.Windows[window.ID]; grant != nil && grant.Confirmed && grant.ExpiresAt.After(now) {
+				window.GrantID, window.Expanded, window.Multiplier, window.UpgradedAt = grant.ID, grant.Expanded, grant.Multiplier, grant.UpgradedAt
+				window.CanUpgrade = !grant.Expanded && grant.OwnerAccountID > 0 && grant.OwnerKey != ""
+			}
 			items = append(items, window)
 		}
 		sort.Slice(items, func(left, right int) bool { return items[left].CreatedAt.After(items[right].CreatedAt) })
@@ -190,6 +209,19 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		return
 	}
 	root := hashRiskIdentity(identity.Meta.RootSessionFingerprint)
+	var ownerAccountID int64
+	var ownerKey string
+	if input.Operation == "quote" {
+		ownerAccountID, ownerKey, err = handler.windowQuoteOwner(request, identity)
+		if err != nil {
+			request.JSON(http.StatusServiceUnavailable, gin.H{"message": "会话账号归属暂时无法确认，请稍后重试"})
+			return
+		}
+	}
+	ownerNeedsExpansion := false
+	if ownerAccountID > 0 {
+		ownerNeedsExpansion = !handler.store.CanAdmitAccountSession(handler.store.FindByID(ownerAccountID), ownerKey, now)
+	}
 	ctx, cancel := context.WithTimeout(request.Request.Context(), 2*time.Second)
 	defer cancel()
 	var granted *database.UserWindowGrant
@@ -282,7 +314,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 				ordinary++
 			}
 		}
-		useExpansion := ordinary >= limit
+		useExpansion := ordinary >= limit || ownerNeedsExpansion
 		if useExpansion && (!input.AllowExpansion || input.ExtraLimit <= expanded || input.Multiplier <= 1) {
 			for _, window := range windows {
 				if deniedRecovery.IsZero() || window.ExpiresAt.Before(deniedRecovery) {
@@ -304,7 +336,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		if useExpansion {
 			multiplier = input.Multiplier
 		}
-		granted = &database.UserWindowGrant{ID: uuid.NewString(), Root: root, CreatedAt: now, ExpiresAt: now.Add(time.Duration(seconds) * time.Second), PendingUntil: now.Add(30 * time.Second), Expanded: useExpansion, Multiplier: multiplier, ExtraLimit: input.ExtraLimit}
+		granted = &database.UserWindowGrant{ID: uuid.NewString(), Root: root, CreatedAt: now, ExpiresAt: now.Add(time.Duration(seconds) * time.Second), PendingUntil: now.Add(30 * time.Second), Expanded: useExpansion, Multiplier: multiplier, ExtraLimit: input.ExtraLimit, OwnerAccountID: ownerAccountID, OwnerKey: ownerKey}
 		state.Windows[root] = granted
 		return nil
 	})
@@ -314,6 +346,12 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		if errors.Is(err, errWindowAdmissionDenied) {
 			statusCode = http.StatusBadRequest
 			message = promptSessionCreationLimitMessage(promptSessionCreationLimitStatus{NextRecoveryAt: deniedRecovery, RetryAfter: max(1, int(time.Until(deniedRecovery).Seconds()))})
+			if ownerNeedsExpansion {
+				message = "当前窗口绑定账号的普通会话容量已满，请在「窗口管理」开启扩容后重试；本次未切换账号。"
+				if input.AllowExpansion {
+					message = "你的扩容窗口额度已用尽，请等待恢复或使用已有窗口；本次未切换账号。"
+				}
+			}
 		}
 		request.JSON(statusCode, gin.H{"message": message, "code": "window_admission_failed"})
 		return
@@ -322,6 +360,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		request.JSON(http.StatusOK, gin.H{"version": 1, "ticket": "", "multiplier": 1, "reason": quoteReason})
 		return
 	}
+	handler.cacheWindowTariff(subject, *granted)
 	signed := signedWindowGrant{Version: 1, Platform: identity.Platform, UserID: identity.Identity.UserID, APIKeyID: identity.APIKeyID, Fingerprint: identity.Meta.RootSessionFingerprint, Grant: *granted, ReservationID: input.ReservationID}
 	ticket, err := encodeWindowGrant(identity.VerificationSecret, signed)
 	if err != nil {
@@ -368,6 +407,19 @@ func (handler *Handler) validateRequestWindowGrant(request *gin.Context) error {
 	wasConfirmed := grant.Grant.Confirmed
 	if grant.Platform != identity.Platform || grant.UserID != identity.Identity.UserID || grant.APIKeyID != identity.APIKeyID || grant.Fingerprint != identity.Meta.RootSessionFingerprint || grant.Grant.Root != root {
 		return errors.New("window grant scope or expiry mismatch")
+	}
+	if request.Request.Context().Err() != nil {
+		return errWindowGrantStorage
+	}
+	current, found, readErr := handler.currentWindowTariff(request.Request.Context(), subject, grant.Grant.Root)
+	if readErr != nil {
+		return errWindowGrantStorage
+	}
+	if found && (current.ID != grant.Grant.ID || current.Expanded != grant.Grant.Expanded || current.Multiplier != grant.Grant.Multiplier) {
+		return errWindowGrantRefresh
+	}
+	if found {
+		grant.Grant.OwnerAccountID, grant.Grant.OwnerKey = current.OwnerAccountID, current.OwnerKey
 	}
 	if !grant.Grant.ExpiresAt.After(now) {
 		return errWindowGrantRefresh
@@ -467,6 +519,7 @@ func (handler *Handler) confirmRequestWindowGrant(request *gin.Context) error {
 		return errWindowGrantRefresh
 	}
 	grant.Grant = confirmed
+	handler.cacheWindowTariff(subject, confirmed)
 	handler.publishRequestWindowGrant(request, grant)
 	return nil
 }
