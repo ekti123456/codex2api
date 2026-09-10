@@ -483,13 +483,16 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 	// Beta header 启用 WebSocket 响应 API
 	headers.Set("OpenAI-Beta", responsesWebsocketBetaHeader)
 
-	usedGeneratedHeaders := false
+	originator := proxy.Originator
+	if incoming := strings.TrimSpace(ginHeaders.Get("Originator")); incoming != "" && proxy.IsCodexOfficialClientByHeaders("", incoming) {
+		originator = incoming
+	}
 	if shouldSendWebsocketUserAgent() {
 		if account == nil {
 			account = &auth.Account{AccountID: accountID}
 		}
 		var userAgent, version string
-		userAgent, version, usedGeneratedHeaders = proxy.ResolveCodexOutboundClientHeadersWithDecision(account, apiKey, deviceCfg, ginHeaders)
+		userAgent, version, originator = proxy.ResolveCodexOutboundClientIdentity(account, apiKey, deviceCfg, ginHeaders)
 		headers.Set("User-Agent", userAgent)
 		if version != "" {
 			headers.Set("Version", version)
@@ -510,13 +513,7 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 
 	// Originator：与 HTTP 路径同规则——生成 UA 时跟随生成的客户端前缀，
 	// 透传官方客户端时沿用下游值。
-	if usedGeneratedHeaders {
-		headers.Set("Originator", proxy.CodexOriginatorForGeneratedUserAgent(headers.Get("User-Agent")))
-	} else if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" && proxy.IsCodexOfficialClientByHeaders("", originator) {
-		headers.Set("Originator", originator)
-	} else {
-		headers.Set("Originator", proxy.Originator)
-	}
+	headers.Set("Originator", originator)
 	// X-Oai-Attestation：DeviceCheck 设备认证头（上游 openai/codex#20619），
 	// 仅在下游携带时透传，本代理不伪造（假 token 服务端验证必败，反而暴露）。
 	for _, name := range []string{"X-Codex-Turn-State", "X-Codex-Turn-Metadata", "X-Codex-Window-Id", "X-Client-Request-Id", "X-Codex-Parent-Thread-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "X-Responsesapi-Include-Timing-Metrics", "X-Oai-Attestation"} {

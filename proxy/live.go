@@ -395,7 +395,6 @@ func (h *Handler) applyLiveUpstreamHeaders(req *http.Request, account *auth.Acco
 		return
 	}
 	accessToken := account.GetAccessToken()
-	userAgent, version := ResolveCodexOutboundClientHeaders(account, apiKey, h.deviceCfg, downstream)
 	if account.IsCodexAgentIdentity() {
 		if assertion, err := account.BuildCodexAgentAssertion(time.Now()); err == nil {
 			req.Header.Set("Authorization", assertion)
@@ -407,11 +406,7 @@ func (h *Handler) applyLiveUpstreamHeaders(req *http.Request, account *auth.Acco
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/sdp")
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Originator", Originator)
-	if version != "" {
-		req.Header.Set("Version", version)
-	}
+	applyCodexAuxiliaryClientHeaders(req, account, apiKey, h.deviceCfg, downstream, "")
 	if accountID := account.EffectiveAccountID(); accountID != "" {
 		req.Header.Set("chatgpt-account-id", accountID)
 	}

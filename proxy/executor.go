@@ -1208,7 +1208,7 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 		account.Mu().RUnlock()
 	}
 
-	userAgent, version, usedGeneratedHeaders := resolveCodexOutboundClientHeaders(account, apiKey, deviceCfg, downstreamHeaders)
+	userAgent, version, originator := ResolveCodexOutboundClientIdentity(account, apiKey, deviceCfg, downstreamHeaders)
 	req.Header.Set("User-Agent", userAgent)
 
 	// Agent Identity 账号用动态签名的 AgentAssertion 头替代 Bearer（task 已由调用方确保就绪）。
@@ -1229,13 +1229,7 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 	}
 	// Originator 必须与出站 UA 的客户端前缀一致：网关自行生成 UA 时跟随生成结果
 	// （模拟 "Codex Desktop" 就发 "Codex Desktop"），透传官方客户端时沿用下游值。
-	if usedGeneratedHeaders {
-		req.Header.Set("Originator", CodexOriginatorForGeneratedUserAgent(userAgent))
-	} else if originator := strings.TrimSpace(downstreamHeaders.Get("Originator")); originator != "" && IsCodexOfficialClientByHeaders("", originator) {
-		req.Header.Set("Originator", originator)
-	} else {
-		req.Header.Set("Originator", Originator)
-	}
+	req.Header.Set("Originator", originator)
 	applyCodexAllowedForwardHeaders(req, downstreamHeaders)
 	// 会话级 beta-features:真实 Codex 每个 /responses 请求、WS 握手与 compact 都带
 	// x-codex-beta-features,默认恰为 remote_compaction_v2(codex-rs

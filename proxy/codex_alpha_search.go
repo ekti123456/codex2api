@@ -143,15 +143,10 @@ func ForwardCodexAlphaSearch(ctx context.Context, account *auth.Account, proxyUR
 	if deviceCfg == nil {
 		deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
 	}
-	userAgent, version := ResolveCodexOutboundClientHeaders(account, apiKey, deviceCfg, downstreamHeaders)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Originator", Originator)
-	if version != "" {
-		req.Header.Set("Version", version)
-	}
+	applyCodexAuxiliaryClientHeaders(req, account, apiKey, deviceCfg, downstreamHeaders, "")
 	if accountID := account.EffectiveAccountID(); accountID != "" {
 		req.Header.Set("chatgpt-account-id", accountID)
 	}

@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -515,15 +514,9 @@ func fetchCodexModelsManifestWithURL(ctx context.Context, account *auth.Account,
 		return nil, fmt.Errorf("account has no access token")
 	}
 
-	clientVersion = strings.TrimSpace(clientVersion)
-	if clientVersion == "" {
-		clientVersion = effectiveLatestCodexCLIVersion()
-	}
-	requestURL := endpoint + "?client_version=" + url.QueryEscape(clientVersion)
-
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, requestURL, nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build codex models request: %w", err)
 	}
@@ -531,9 +524,10 @@ func fetchCodexModelsManifestWithURL(ctx context.Context, account *auth.Account,
 	req.Header.Set("Accept", "application/json")
 	// UA 版本段与 Version 头、client_version query 三者保持同一版本，
 	// 避免出站身份自相矛盾（UA 钉内置常量、Version 跟随同步值）。
-	req.Header.Set("User-Agent", replaceCodexUserAgentVersion(defaultCodexCLIUserAgent, clientVersion))
-	req.Header.Set("Originator", Originator)
-	req.Header.Set("Version", clientVersion)
+	applyCodexAuxiliaryClientHeaders(req, account, "", nil, nil, clientVersion)
+	query := req.URL.Query()
+	query.Set("client_version", req.Header.Get("Version"))
+	req.URL.RawQuery = query.Encode()
 	if ifNoneMatch = strings.TrimSpace(ifNoneMatch); ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
