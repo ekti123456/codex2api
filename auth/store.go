@@ -6924,7 +6924,7 @@ func (s *Store) nextForSessionWithFilter(key string, apiKeyID int64, exclude map
 		if !selectionTrace(traces).CheckSessionModel(s.FindByID(accountID)) {
 			return nil, "", SessionAffinityGuard{}
 		}
-		account, _ := s.takeByIDModeWithCapacity(accountID, apiKeyID, exclude, filter, true, key, policy, 0, traces...)
+		account, _ := s.takeByIDModeWithCapacity(accountID, apiKeyID, exclude, filter, preserveBinding, key, policy, 0, traces...)
 		if account == nil || !s.admitSelectedAccountSession(account, key, time.Now(), traces...) {
 			return nil, "", SessionAffinityGuard{}
 		}
@@ -7916,8 +7916,11 @@ func (s *Store) hasContinuationCandidateWithFilter(key string, apiKeyID int64, e
 }
 
 func (s *Store) hasContinuationCandidateWithDispatch(key string, apiKeyID int64, exclude map[int64]bool, filter AccountFilter, policy DispatchPolicy, traces ...*SelectionTrace) bool {
-	accountID, ok := s.SessionAffinityAccountID(key)
-	if !ok || accountID == 0 || (exclude != nil && exclude[accountID]) {
+	accountID := selectionTrace(traces).PinnedAccount()
+	if accountID == 0 {
+		accountID, _ = s.SessionAffinityAccountID(key)
+	}
+	if accountID == 0 || (exclude != nil && exclude[accountID]) {
 		return false
 	}
 
@@ -7991,6 +7994,13 @@ func (s *Store) waitForSessionAvailableWithFilter(ctx context.Context, key strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	pinnedOwner := selectionTrace(traces).PinnedAccount()
+	if pinnedOwner > 0 {
+		originalFilter := filter
+		filter = func(account *Account) bool {
+			return account != nil && account.ID() == pinnedOwner && (originalFilter == nil || originalFilter(account))
+		}
+	}
 	hasCandidate := func() bool {
 		if preserveBinding {
 			return s.hasContinuationCandidateWithDispatch(key, apiKeyID, exclude, filter, policy, traces...)
@@ -8011,7 +8021,7 @@ func (s *Store) waitForSessionAvailableWithFilter(ctx context.Context, key strin
 	// engines rely on durable outbox notifications, so they register a waiter
 	// even when the current snapshot is empty; an account created by another
 	// replica can then wake the request without database polling.
-	if s.SchedulerEngine() == "legacy" && !hasCandidate() {
+	if (pinnedOwner > 0 || s.SchedulerEngine() == "legacy") && !hasCandidate() {
 		return nil, "", SessionAffinityGuard{}
 	}
 	if timeout <= 0 {
@@ -8053,7 +8063,7 @@ func (s *Store) waitForSessionAvailableWithFilter(ctx context.Context, key strin
 		if selectionTrace(traces).SessionModelDenied() {
 			return nil, "", SessionAffinityGuard{}
 		}
-		if s.SchedulerEngine() == "legacy" && !hasCandidate() {
+		if (pinnedOwner > 0 || s.SchedulerEngine() == "legacy") && !hasCandidate() {
 			return nil, "", SessionAffinityGuard{}
 		}
 

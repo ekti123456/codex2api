@@ -589,11 +589,14 @@ func (g *scopeBudgetGate) concurrencyFullFor(account *auth.Account, allowance in
 	if g == nil || account == nil || len(g.concurrencyScopes) == 0 {
 		return false
 	}
+	g.concurrencyMu.Lock()
+	ownedLeases := append([]scopeConcurrencyLease(nil), g.leases...)
+	g.concurrencyMu.Unlock()
 	for _, scope := range g.concurrencyScopes {
 		if !scopeMatchesAccount(scope, account) {
 			continue
 		}
-		if scopeConcurrencyFull(g.apiKeyID, scope, allowance) {
+		if scopeConcurrencyFull(g.apiKeyID, scope, allowance, ownedLeases...) {
 			g.noteConcurrencyBlock(scopeConcurrencyMessage(scopeLabelForMessage(scope), scope.MaxConcurrency))
 			return true
 		}

@@ -736,7 +736,7 @@ func TestResponsesWebSocketContinuousRetryDeadlineWritesOneErrorAndCloses1013(t 
 		Limits: database.APIKeyLimits{
 			MaxConcurrency: 1,
 			ScopeLimits: []database.APIKeyScopeLimit{{
-				ScopeType: database.APIKeyScopeTypeAccount, ScopeID: 2, MaxConcurrency: 1,
+				ScopeType: database.APIKeyScopeTypeAccount, ScopeID: 1, MaxConcurrency: 1,
 			}},
 		},
 	})
@@ -787,10 +787,13 @@ func TestResponsesWebSocketContinuousRetryDeadlineWritesOneErrorAndCloses1013(t 
 		t.Fatal("continuous retry did not reach the active websocket stream read")
 	}
 	account := <-activeAccount
+	if account.ID() != accounts[0].ID() {
+		t.Fatalf("retry used account %d, want original account %d", account.ID(), accounts[0].ID())
+	}
 	if got := atomic.LoadInt64(&handler.apiKeyConcurrencyLimiter().counter(apiKeyID).inflight); got != 1 {
 		t.Fatalf("API key inflight during websocket retry = %d, want 1", got)
 	}
-	if got := APIKeyScopeInflight(apiKeyID, database.APIKeyScopeTypeAccount, 2); got != 1 {
+	if got := APIKeyScopeInflight(apiKeyID, database.APIKeyScopeTypeAccount, 1); got != 1 {
 		t.Fatalf("scope inflight during websocket retry = %d, want 1", got)
 	}
 	if got := atomic.LoadInt64(&account.ActiveRequests); got != 1 {
@@ -834,7 +837,7 @@ func TestResponsesWebSocketContinuousRetryDeadlineWritesOneErrorAndCloses1013(t 
 	if got := atomic.LoadInt64(&handler.apiKeyConcurrencyLimiter().counter(apiKeyID).inflight); got != 0 {
 		t.Fatalf("API key inflight after websocket deadline = %d, want 0", got)
 	}
-	if got := APIKeyScopeInflight(apiKeyID, database.APIKeyScopeTypeAccount, 2); got != 0 {
+	if got := APIKeyScopeInflight(apiKeyID, database.APIKeyScopeTypeAccount, 1); got != 0 {
 		t.Fatalf("scope inflight after websocket deadline = %d, want 0", got)
 	}
 }

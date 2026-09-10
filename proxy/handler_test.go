@@ -1012,9 +1012,7 @@ func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousRespon
 	}
 }
 
-// 绑定账号被本次请求硬排除（限流等）后，续链请求不应死等它 30 秒再整轮失败：
-// 剥离 previous_response_id 后换号继续。
-func TestResponsesWebSocketContinuationDegradesWhenBoundAccountExcluded(t *testing.T) {
+func TestResponsesWebSocketContinuationCannotChangeExcludedSessionOwner(t *testing.T) {
 	resetResponseCacheForTest()
 	t.Cleanup(resetResponseCacheForTest)
 	setResponseCache("anon", "resp_stale", []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"earlier context"}`)})
@@ -1076,23 +1074,22 @@ func TestResponsesWebSocketContinuationDegradesWhenBoundAccountExcluded(t *testi
 		t.Fatalf("write request: %v", err)
 	}
 
-	// 降级必须在等待窗口（30s）之前发生，否则这一轮会超时。
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, event, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read event: %v", err)
 	}
-	if eventType := gjson.GetBytes(event, "type").String(); eventType != "response.completed" {
-		t.Fatalf("event type = %q, want response.completed; body=%s", eventType, event)
+	if eventType := gjson.GetBytes(event, "type").String(); eventType != "error" {
+		t.Fatalf("event type = %q, want error; body=%s", eventType, event)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(servedAccounts) != 2 {
-		t.Fatalf("upstream attempts = %v, want 2 (rate-limited bound account + degraded retry)", servedAccounts)
+	if len(servedAccounts) != 1 || servedAccounts[0] != primary.ID() {
+		t.Fatalf("upstream attempts = %v, want only the original account %d", servedAccounts, primary.ID())
 	}
-	if strippedOnAccount == 0 || strippedOnAccount == servedAccounts[0] {
-		t.Fatalf("degraded retry account = %d, want a different account than %d", strippedOnAccount, servedAccounts[0])
+	if strippedOnAccount != 0 {
+		t.Fatalf("excluded session retried on account %d", strippedOnAccount)
 	}
 }
 

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -150,10 +151,10 @@ func TestRequestScoped400RetainsAffinityWithoutRetry(t *testing.T) {
 	}
 }
 
-func TestStickyFailurePermanentAccountErrorStillRotates(t *testing.T) {
+func TestStickyFailurePermanentAccountErrorKeepsSessionOwner(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var callsA, callsB atomic.Int32
-	handler, store, _, accountB, key, cleanup := newStickyFailureHarness(t, 3, 3,
+	handler, _, accountA, _, key, cleanup := newStickyFailureHarness(t, 3, 3,
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callsA.Add(1)
 			w.Header().Set("Content-Type", "application/json")
@@ -167,18 +168,19 @@ func TestStickyFailurePermanentAccountErrorStillRotates(t *testing.T) {
 	)
 	defer cleanup()
 	recorder := runStickyFailureRequest(t, handler)
-	if recorder.Code != http.StatusOK || callsA.Load() != 1 || callsB.Load() != 1 {
+	if recorder.Code == http.StatusOK || callsA.Load() != 1 || callsB.Load() != 0 {
 		t.Fatalf("downstream=%d A=%d B=%d body=%s", recorder.Code, callsA.Load(), callsB.Load(), recorder.Body.String())
 	}
-	if boundID, ok := store.SessionAffinityAccountID(key); !ok || boundID != accountB.ID() {
-		t.Fatalf("final affinity=%v/%d, want B=%d", ok, boundID, accountB.ID())
+	entry, found, err := handler.readSessionContinuity(context.Background(), hashRiskIdentity(key))
+	if err != nil || !found || entry.Record.AccountID != accountA.ID() {
+		t.Fatalf("permanent owner=%+v, found=%v, err=%v, want A=%d", entry.Record, found, err, accountA.ID())
 	}
 }
 
-func TestRotatePolicyStillSwitchesOnTemporaryFailure(t *testing.T) {
+func TestRotatePolicyCannotSwitchStableSessionOnTemporaryFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var callsA, callsB atomic.Int32
-	handler, store, _, accountB, key, cleanup := newStickyFailureHarness(t, 3, 3,
+	handler, store, accountA, _, key, cleanup := newStickyFailureHarness(t, 3, 3,
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callsA.Add(1)
 			w.Header().Set("Content-Type", "application/json")
@@ -190,11 +192,12 @@ func TestRotatePolicyStillSwitchesOnTemporaryFailure(t *testing.T) {
 	defer cleanup()
 	store.SetTransportRetryPolicy("rotate")
 	recorder := runStickyFailureRequest(t, handler)
-	if recorder.Code != http.StatusOK || callsA.Load() != 1 || callsB.Load() != 1 {
+	if recorder.Code == http.StatusOK || callsA.Load() < 1 || callsB.Load() != 0 {
 		t.Fatalf("downstream=%d A=%d B=%d body=%s", recorder.Code, callsA.Load(), callsB.Load(), recorder.Body.String())
 	}
-	if boundID, ok := store.SessionAffinityAccountID(key); !ok || boundID != accountB.ID() {
-		t.Fatalf("final affinity=%v/%d, want B=%d", ok, boundID, accountB.ID())
+	entry, found, err := handler.readSessionContinuity(context.Background(), hashRiskIdentity(key))
+	if err != nil || !found || entry.Record.AccountID != accountA.ID() {
+		t.Fatalf("permanent owner=%+v, found=%v, err=%v, want A=%d", entry.Record, found, err, accountA.ID())
 	}
 }
 

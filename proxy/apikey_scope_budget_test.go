@@ -379,14 +379,17 @@ func TestScopeConcurrencyFilterBlocksWhenFullAndReleasesAfterwards(t *testing.T)
 		t.Fatalf("inflight = %d, want 1", got)
 	}
 
-	// 位满 → 该 scope 的账号被剔除，其它分组不受影响。
-	if filter(premium) {
+	if !filter(premium) {
+		t.Fatal("the request's own live scope lease must not block its same-account retry")
+	}
+	otherGate := newScopeBudgetGate(4242, []database.APIKeyScopeLimit{scope})
+	if otherGate.filter(nil)(premium) {
 		t.Fatal("account must be filtered out once the scope concurrency slot is taken")
 	}
 	if !filter(cheap) {
 		t.Fatal("accounts outside the scope must stay schedulable")
 	}
-	if msg := gate.exhaustedMessage(); msg == "" || !strings.Contains(msg, "concurrency") {
+	if msg := otherGate.exhaustedMessage(); msg == "" || !strings.Contains(msg, "concurrency") {
 		t.Fatalf("exhaustedMessage = %q, want a concurrency explanation", msg)
 	}
 
@@ -399,6 +402,30 @@ func TestScopeConcurrencyFilterBlocksWhenFullAndReleasesAfterwards(t *testing.T)
 	handler.ReleaseAPIKeyScopeConcurrency(c)
 	if got := APIKeyScopeInflight(4242, database.APIKeyScopeTypeGroup, 10); got != 0 {
 		t.Fatalf("inflight after release = %d, want 0", got)
+	}
+}
+
+func TestScopeConcurrencyRetryCannotReuseReleasedOrExpiredLease(test *testing.T) {
+	for _, expired := range []bool{false, true} {
+		scope := database.APIKeyScopeLimit{ScopeType: database.APIKeyScopeTypeAccount, ScopeID: 9101, MaxConcurrency: 1}
+		key := scopeSkipKey{apiKeyID: 9102, scopeType: scope.ScopeType, scopeID: scope.ScopeID}
+		gate := newScopeBudgetGate(key.apiKeyID, []database.APIKeyScopeLimit{scope})
+		owner := &auth.Account{DBID: scope.ScopeID}
+		lease := apiKeyScopeConcurrency.acquire(key)
+		gate.setLeases([]scopeConcurrencyLease{lease})
+		defer gate.releaseLeases()
+		if expired {
+			apiKeyScopeConcurrency.mu.Lock()
+			apiKeyScopeConcurrency.inflight[key][lease.id] = time.Now().Add(-time.Second)
+			apiKeyScopeConcurrency.mu.Unlock()
+		} else {
+			apiKeyScopeConcurrency.release(lease)
+		}
+		other := apiKeyScopeConcurrency.acquire(key)
+		if !gate.concurrencyFullFor(owner, 0) {
+			test.Fatal("a stale own-lease record bypassed another request's occupied scope")
+		}
+		apiKeyScopeConcurrency.release(other)
 	}
 }
 

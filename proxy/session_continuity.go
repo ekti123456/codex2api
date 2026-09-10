@@ -161,7 +161,11 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 		return nil
 	}
 	resolved := usageRequestDiagnosticState(request).Resolved
-	if resolved == nil || resolved.ThreadSource != "user" {
+	if resolved == nil || identity.requiresRootAccount || resolved.SubagentKind != "" {
+		return nil
+	}
+	source := strings.TrimSpace(resolved.ThreadSource)
+	if source != "" && !strings.EqualFold(source, "user") || source == "" && resolved.RootState != "resolved" {
 		return nil
 	}
 	mode := handler.promptFilterConfigForRequest(request).Advanced.Risk.SessionContinuityMode

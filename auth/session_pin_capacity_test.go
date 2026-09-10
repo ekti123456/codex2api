@@ -1,12 +1,94 @@
 package auth
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestPinnedSessionWaitDoesNotWaitForAnotherAccount(test *testing.T) {
+	for _, reason := range []string{"disabled", "paused", "quota", "excluded", "missing"} {
+		test.Run(reason, func(test *testing.T) {
+			store, owner, _ := newHardWindowFallbackTestStore()
+			bindHardWindowFallbackTestRoot(test, store, owner, "permanent-root")
+			excluded := map[int64]bool{}
+			switch reason {
+			case "disabled":
+				atomic.StoreInt32(&owner.Disabled, 1)
+			case "paused":
+				atomic.StoreInt32(&owner.DispatchPaused, 1)
+			case "quota":
+				owner.PlanType, owner.UsagePercent7d, owner.UsagePercent7dValid, owner.Reset7dAt = "free", 100, true, time.Now().Add(time.Hour)
+			case "excluded":
+				excluded[owner.ID()] = true
+			case "missing":
+				store.RemoveAccount(owner.ID())
+			}
+			trace := &SelectionTrace{}
+			trace.PinAccount(owner.ID())
+			requestContext, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			selected, _, _ := store.WaitForSessionAvailableWithDispatchGuard(requestContext, "permanent-root", time.Minute, 0, excluded, nil, DispatchPolicyStandard, trace)
+			require.Nil(test, selected)
+			require.NoError(test, requestContext.Err())
+			require.Equal(test, owner.ID(), trace.PinnedAccount())
+		})
+	}
+}
+
+func TestPinnedSessionWaitCanRestoreOwnerAfterRuntimeBindingWasLost(test *testing.T) {
+	for _, continuation := range []bool{false, true} {
+		store, owner, _ := newHardWindowFallbackTestStore()
+		owner.SessionCapacityEnabled = false
+		store.maxConcurrency = 1
+		held := store.TakePreferredAccountWithDispatch(owner.ID(), 0, nil, nil, DispatchPolicyStandard)
+		require.Same(test, owner, held)
+		trace := &SelectionTrace{}
+		trace.PinAccount(owner.ID())
+		checked := make(chan struct{}, 1)
+		filter := func(account *Account) bool {
+			select {
+			case checked <- struct{}{}:
+			default:
+			}
+			return true
+		}
+		requestContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		result := make(chan *Account, 1)
+		go func() {
+			selected, _, _ := store.waitForSessionAvailableWithFilter(requestContext, "expired-root", time.Minute, 0, nil, filter, continuation, DispatchPolicyStandard, trace)
+			result <- selected
+		}()
+		select {
+		case <-checked:
+		case <-requestContext.Done():
+			test.Fatal("the original account was not checked")
+		}
+		store.Release(held)
+		select {
+		case selected := <-result:
+			require.Same(test, owner, selected)
+			store.Release(selected)
+		case <-requestContext.Done():
+			test.Fatal("the original account did not resume after release")
+		}
+	}
+}
+
+func TestPinnedSessionDoesNotGrantQuotaContinuationToFreshRequest(test *testing.T) {
+	store := NewStore(nil, nil, nil)
+	test.Cleanup(store.Stop)
+	owner := &Account{DBID: 1, AccessToken: "owner-test", Status: StatusReady, PlanType: "plus", UsagePercent5h: 100, UsagePercent5hValid: true, Reset5hAt: time.Now().Add(time.Hour)}
+	store.AddAccount(owner)
+	trace := &SelectionTrace{}
+	trace.PinAccount(owner.ID())
+	selected, _, _ := store.NextForSessionWithDispatchGuard("root", 0, nil, nil, DispatchPolicyStandard, trace)
+	require.Nil(test, selected)
+}
 
 func TestPinnedSessionNeverReassignsUnavailableOwner(test *testing.T) {
 	for _, reason := range []string{"quota", "disabled", "paused", "cooldown", "error", "banned", "missing_credentials", "request_excluded"} {

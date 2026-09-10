@@ -93,7 +93,7 @@ func TestResponsesTurnStateAllowsOnlyBoundTurnPastWHAMLimit(t *testing.T) {
 	}
 }
 
-func TestResponsesTurnStateExpiredBindingUsesBaselineSchedulerWhenContinuousRetryDisabled(t *testing.T) {
+func TestResponsesTurnStateExpiredBindingKeepsOwnerWhenContinuousRetryDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Setenv("CODEX_SESSION_AFFINITY_TTL", "1ns")
 	previousRuntime := CurrentRuntimeSettings()
@@ -140,11 +140,11 @@ func TestResponsesTurnStateExpiredBindingUsesBaselineSchedulerWhenContinuousRetr
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
 	}
-	if got := boundHits.Load(); got != 0 {
-		t.Fatalf("expired bound account received %d request(s), want 0", got)
+	if got := boundHits.Load(); got != 1 {
+		t.Fatalf("original account received %d request(s), want 1", got)
 	}
-	if got := fallbackHits.Load(); got != 1 {
-		t.Fatalf("baseline scheduler fallback requests = %d, want 1", got)
+	if got := fallbackHits.Load(); got != 0 {
+		t.Fatalf("fallback requests = %d, want 0", got)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestResponsesWebSocketTurnStateRetainsLimitedAccountOnlyWithinTurn(t *testi
 	t.Cleanup(server.Close)
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/responses"
 
-	run := func(payload string) {
+	run := func(payload, expectedType string) {
 		t.Helper()
 		conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
@@ -331,23 +331,25 @@ func TestResponsesWebSocketTurnStateRetainsLimitedAccountOnlyWithinTurn(t *testi
 		if err != nil {
 			t.Fatalf("read websocket response: %v", err)
 		}
-		if eventType := gjson.GetBytes(event, "type").String(); eventType != "response.completed" {
-			t.Fatalf("event type = %q, want response.completed; body=%s", eventType, event)
+		if eventType := gjson.GetBytes(event, "type").String(); eventType != expectedType {
+			t.Fatalf("event type = %q, want %s; body=%s", eventType, expectedType, event)
 		}
 	}
 
-	run(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"ws-turn","input":"tool output","client_metadata":{"x-codex-turn-state":"turn-1"}}`)
-	run(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"ws-turn","input":"new turn"}`)
+	run(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"ws-turn","input":"tool output","client_metadata":{"x-codex-turn-state":"turn-1"}}`, "response.completed")
+	run(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"ws-turn","input":"new turn"}`, "error")
 
 	if first := <-served; first != limited.ID() {
 		t.Fatalf("same-turn account = %d, want limited bound account %d", first, limited.ID())
 	}
-	if second := <-served; second != healthy.ID() {
-		t.Fatalf("new-turn account = %d, want healthy account %d", second, healthy.ID())
+	select {
+	case second := <-served:
+		t.Fatalf("fresh turn reached account %d after the bound account exhausted its quota", second)
+	default:
 	}
 }
 
-func TestResponsesWebSocketTurnStateExpiredBindingUsesBaselineSchedulerWhenContinuousRetryDisabled(t *testing.T) {
+func TestResponsesWebSocketTurnStateExpiredBindingKeepsOwnerWhenContinuousRetryDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Setenv("CODEX_SESSION_AFFINITY_TTL", "1ns")
 	previousRuntime := CurrentRuntimeSettings()
@@ -407,8 +409,8 @@ func TestResponsesWebSocketTurnStateExpiredBindingUsesBaselineSchedulerWhenConti
 	}
 	select {
 	case accountID := <-served:
-		if accountID != fallback.ID() {
-			t.Fatalf("selected account = %d, want baseline fallback account %d", accountID, fallback.ID())
+		if accountID != bound.ID() {
+			t.Fatalf("selected account = %d, want original account %d", accountID, bound.ID())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for upstream account selection")
@@ -594,11 +596,13 @@ func TestResponsesWebSocketUpgradeTurnStateDoesNotAuthorizeFreshFrame(t *testing
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	if _, event, err := conn.ReadMessage(); err != nil {
 		t.Fatalf("read websocket response: %v", err)
-	} else if eventType := gjson.GetBytes(event, "type").String(); eventType != "response.completed" {
-		t.Fatalf("event type = %q, want response.completed; body=%s", eventType, event)
+	} else if eventType := gjson.GetBytes(event, "type").String(); eventType != "error" {
+		t.Fatalf("event type = %q, want error; body=%s", eventType, event)
 	}
-	if accountID := <-served; accountID != healthy.ID() {
-		t.Fatalf("fresh frame used account %d, want healthy account %d", accountID, healthy.ID())
+	select {
+	case accountID := <-served:
+		t.Fatalf("fresh frame reached account %d with only a connection-scoped continuation token", accountID)
+	default:
 	}
 }
 
