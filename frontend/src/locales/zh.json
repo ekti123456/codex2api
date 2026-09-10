@@ -1,4 +1,19 @@
 {
+  "sessionErrors": {
+    "lineageInvalid": "派生关系无效",
+    "title": "会话过载统计", "description": "仅统计最终 500 + server_is_overloaded，按用户与主会话 ID 汇总。其他 500 不计入；手动锁定后禁止该会话及已知派生链路继续调用。",
+    "views": "会话统计视图", "statistics": "过载 500", "blacklist": "会话黑名单", "summary": "{{groups}} 个会话 · 累计 {{count}} 次过载 500",
+    "userSearch": "用户 ID（精确匹配）", "sessionSearch": "主会话 ID（精确匹配）",
+    "retention": "仅采集升级后的请求。每个会话累计计数，非时间窗口错误率；无新错误的记录保留 7 天、最多 10 万条。黑名单与已记录的 fork 关系独立保留，不随统计清理。",
+    "selected": "已选择 {{count}} 个会话", "lockSelected": "一键锁定所选会话", "unlockSelected": "解锁所选会话", "selectPage": "选择本页可操作会话", "selectSession": "选择用户 {{user}} 的会话 {{session}}",
+    "allowed": "未锁定", "locked": "长期锁定", "inherited": "继承锁定", "empty": "暂无会话记录", "sessionUnknown": "未提供原始 ID · 根 {{fingerprint}}",
+    "confirmLock": "长期锁定 {{count}} 个会话？", "confirmUnlock": "解锁 {{count}} 个会话？",
+    "lockHint": "仅针对所列用户与会话，不禁用整个用户。后续主请求及可识别的父子 / fork 派生调用均被拒绝，不换账号。正在执行的请求不会被强行中断；只有管理员手动解锁才会解除。",
+    "unlockHint": "解除所列会话的直接黑名单。仍被其他父会话锁定的派生会话不会因此放行。",
+    "lockedSuccess": "已长期锁定 {{count}} 个会话", "unlockedSuccess": "已解锁 {{count}} 个会话", "saving": "正在保存…", "updateFailed": "更新失败，请刷新确认后重试",
+    "detailHint": "最近一次 server_is_overloaded（500）与经身份隔离的会话信息。未知字段不推测，不包含密钥。",
+    "columns": { "user": "用户 / 平台", "session": "主会话 ID", "count": "过载次数", "last": "最近错误", "error": "错误 / 模型 / 账号", "status": "会话状态", "details": "详情" }
+  },
   "serviceErrors": {
     "timeRange": "时间范围",
     "allStatuses": "全部状态",

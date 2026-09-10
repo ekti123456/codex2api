@@ -1,4 +1,19 @@
 {
+  "sessionErrors": {
+    "lineageInvalid": "Invalid lineage",
+    "title": "Session overload statistics", "description": "Only final 500 + server_is_overloaded, grouped by user and root session ID. Other 500 errors are excluded. Manual blacklisting blocks the session and identifiable descendants.",
+    "views": "Session views", "statistics": "Overload 500", "blacklist": "Session blacklist", "summary": "{{groups}} sessions · {{count}} total overload 500 errors",
+    "userSearch": "User ID (exact match)", "sessionSearch": "Root session ID (exact match)",
+    "retention": "Collected after deployment only. Counts are cumulative per retained session, not a time-window error rate. Inactive error records expire after 7 days; up to 100,000 rows. Blacklists and recorded fork links are retained separately.",
+    "selected": "{{count}} sessions selected", "lockSelected": "Blacklist selected sessions", "unlockSelected": "Unlock selected sessions", "selectPage": "Select actionable sessions on this page", "selectSession": "Select session {{session}} for user {{user}}",
+    "allowed": "Not locked", "locked": "Permanently locked", "inherited": "Inherited lock", "empty": "No session records", "sessionUnknown": "Raw ID unavailable · root {{fingerprint}}",
+    "confirmLock": "Permanently lock {{count}} sessions?", "confirmUnlock": "Unlock {{count}} sessions?",
+    "lockHint": "Only the listed users and sessions are affected, not entire users. Subsequent root and identifiable child/fork calls are rejected without switching accounts. In-flight requests are not forcibly canceled. Only an administrator can unlock these sessions.",
+    "unlockHint": "Remove the direct blacklist entries. Descendants still blocked by another ancestor remain blocked.",
+    "lockedSuccess": "Permanently locked {{count}} sessions", "unlockedSuccess": "Unlocked {{count}} sessions", "saving": "Saving…", "updateFailed": "Update failed. Refresh and verify before retrying.",
+    "detailHint": "Latest server_is_overloaded (500) and subject-isolated session metadata. Unknown fields are not inferred; no API secrets are included.",
+    "columns": { "user": "User / platform", "session": "Root session ID", "count": "Overload count", "last": "Latest error", "error": "Error / model / account", "status": "Session status", "details": "Details" }
+  },
   "serviceErrors": {
     "title": "Service errors",
     "description": "Local Codex2API rejections and service failures. Upstream account failures remain in Error logs.",

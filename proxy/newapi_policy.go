@@ -93,6 +93,7 @@ type newAPIPolicyMeta struct {
 	// user-visible Codex task. SessionFingerprint intentionally remains the
 	// exact leaf identity used by CYB conversation locking.
 	RootSessionFingerprint string `json:"root_session_fingerprint,omitempty"`
+	RootSessionID          string `json:"root_session_id,omitempty"`
 	// ForkedFromSessionFingerprint is a signed affinity hint for a user-created
 	// fork. It identifies the source session without merging the fork's root.
 	ForkedFromSessionFingerprint string `json:"forked_from_session_fingerprint,omitempty"`

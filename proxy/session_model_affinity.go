@@ -25,6 +25,9 @@ func sessionModelErrorForRequest(requestContext *gin.Context) *api.APIError {
 }
 
 func (handler *Handler) configureSessionModelAffinity(requestContext *gin.Context, identity requestSessionIdentity, key, originalModel, effectiveModel string, compact bool, bodies ...[]byte) (apiError *api.APIError) {
+	if blocked := handler.sessionBlacklistError(requestContext); blocked != nil {
+		return blocked
+	}
 	defer func() {
 		if apiError != nil && handler.db != nil && len(bodies) > 0 && usageRequestDiagnosticState(requestContext).Continuity != nil {
 			handler.logUsageForRequest(requestContext, &database.UsageLogInput{Endpoint: requestContext.Request.URL.Path, Model: originalModel, EffectiveModel: effectiveModel, StatusCode: 400, ErrorMessage: apiError.Message, Stream: gjson.GetBytes(bodies[0], "stream").Bool(), Compact: compact})

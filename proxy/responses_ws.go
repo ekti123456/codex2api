@@ -316,6 +316,7 @@ func stripNewAPIPolicyWebSocketEventID(payload []byte) ([]byte, string) {
 
 func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.Conn, rawPayload []byte, policyEventID string, options *responsesWSForwardOptions) (returnErr error) {
 	resetServiceErrorFrame(c)
+	defer h.finishSessionErrorAudit(c)
 	defer h.finishSessionCooldown(c)
 	if apiErr := h.refreshNewAPIWebSocketBinding(c, time.Now()); apiErr != nil {
 		_ = writeAuditedResponsesWSError(c, conn, apiErr)

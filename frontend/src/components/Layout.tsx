@@ -30,6 +30,7 @@ const navDefs: NavDef[] = [
   { to: '/prompt-filter/overview', labelKey: 'nav.promptFilter', icon: <ShieldAlert className="size-[18px]" />, activePrefix: '/prompt-filter' },
   { to: '/ops/overview', labelKey: 'nav.ops', icon: <Server className="size-[18px]" />, activePrefix: '/ops' },
   { to: '/usage', labelKey: 'nav.usage', icon: <Activity className="size-[18px]" /> },
+  { to: '/session-errors', labelKey: 'sessionErrors.title', icon: <ShieldAlert className="size-[18px]" /> },
   { to: '/model-pricing', labelKey: 'nav.modelPricing', icon: <CircleDollarSign className="size-[18px]" /> },
   { to: '/payload-rules/editor', labelKey: 'nav.payloadRules', icon: <Braces className="size-[18px]" />, activePrefix: '/payload-rules' },
   { to: '/theme', labelKey: 'nav.theme', icon: <Palette className="size-[18px]" /> },

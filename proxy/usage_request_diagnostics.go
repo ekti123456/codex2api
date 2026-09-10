@@ -229,6 +229,7 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 		return
 	}
 	state.rootCaptured = true
+	c.Set(sessionOperationsContextKey, nil)
 	c.Set(sessionContinuityContextKey, nil)
 	if c.Request != nil {
 		if raw := c.GetHeader(codexTurnMetadataHeader); raw != "" {
@@ -301,6 +302,9 @@ func (h *Handler) captureUsageRequestResolution(c *gin.Context, body []byte, ide
 		}
 		if policy.Meta.InstallationID != "" {
 			state.Incoming["signed_newapi"]["installation_id"] = diagnosticIdentifier(policy.Meta.InstallationID)
+		}
+		if policy.Meta.RootSessionID != "" {
+			state.Incoming["signed_newapi"]["root_session_id"] = diagnosticIdentifier(policy.Meta.RootSessionID)
 		}
 		if policy.Meta.TokenID > 0 {
 			state.Incoming["signed_newapi"]["token_id"] = strconv.Itoa(policy.Meta.TokenID)

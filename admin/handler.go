@@ -1205,6 +1205,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/ops/errors/export", h.ExportOpsErrorLogs)
 	api.GET("/ops/errors/summary", h.GetOpsErrorSummary)
 	api.GET("/ops/service-errors", h.GetServiceErrorLogs)
+	api.GET("/session-errors", h.GetSessionErrors)
+	api.POST("/session-errors/blacklist", h.SetSessionBlacklist)
 	api.GET("/settings", h.GetSettings)
 	api.PUT("/settings", h.UpdateSettings)
 	api.GET("/settings/codex-user-agent/catalog", h.GetCodexUserAgentCatalog)

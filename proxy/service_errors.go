@@ -18,12 +18,16 @@ import (
 const serviceErrorContextKey = "service_error_audit"
 
 type serviceErrorAudit struct {
-	started       time.Time
-	recorded      atomic.Bool
-	authenticated bool
-	websocket     bool
-	apiKeyID      int64
-	apiKeyName    string
+	started         time.Time
+	recorded        atomic.Bool
+	sessionRecorded atomic.Bool
+	usageMu         sync.Mutex
+	usageStatus     int
+	usageError      string
+	authenticated   bool
+	websocket       bool
+	apiKeyID        int64
+	apiKeyName      string
 }
 
 type serviceErrorResponseWriter struct {
@@ -80,6 +84,7 @@ func resetServiceErrorFrame(ctx *gin.Context) {
 	}
 	ctx.Set("x-model", "")
 	ctx.Set(usageRequestDiagnosticsContextKey, nil)
+	ctx.Set(sessionOperationsContextKey, nil)
 }
 
 func (handler *Handler) beginServiceErrorAudit(ctx *gin.Context) func() {
@@ -87,15 +92,13 @@ func (handler *Handler) beginServiceErrorAudit(ctx *gin.Context) func() {
 		return func() {}
 	}
 	ctx.Set(serviceErrorContextKey, &serviceErrorAudit{started: time.Now()})
-	api.SetErrorObserver(ctx, handler.recordServiceError)
+	api.SetErrorObserver(ctx, handler.recordObservedError)
 	writer := &serviceErrorResponseWriter{ResponseWriter: ctx.Writer}
 	ctx.Writer = writer
 	return func() {
 		state := serviceErrorAuditForRequest(ctx)
-		if state.recorded.Load() || writer.Status() < 400 || writer.Status() > 599 || state.websocket {
-			return
-		}
-		if snapshotUpstreamTrace(ctx.Request.Context()).accountID > 0 {
+		if writer.Status() < 400 || writer.Status() > 599 || state.websocket {
+			handler.finishSessionErrorAudit(ctx)
 			return
 		}
 		writer.mu.Lock()
@@ -117,7 +120,14 @@ func (handler *Handler) beginServiceErrorAudit(ctx *gin.Context) func() {
 				errorType = value.String()
 			}
 		}
-		handler.recordServiceError(ctx, writer.Status(), api.NewAPIError(api.ErrorCode(code), message, api.ErrorType(errorType)))
+		failure := api.NewAPIError(api.ErrorCode(code), message, api.ErrorType(errorType))
+		handler.recordSessionError(ctx, writer.Status(), failure)
+		if writer.Status() == http.StatusInternalServerError || code == overloadErrorCode {
+			handler.finishSessionErrorAudit(ctx)
+		}
+		if !state.recorded.Load() && snapshotUpstreamTrace(ctx.Request.Context()).accountID == 0 {
+			handler.recordServiceError(ctx, writer.Status(), failure)
+		}
 	}
 }
 

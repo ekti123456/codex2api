@@ -1834,6 +1834,7 @@ func populateInternalUsageMetaFromContext(c *gin.Context, input *database.UsageL
 }
 
 func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInput) {
+	rememberSessionErrorUsage(c, input)
 	h.completeSessionContinuity(c, input)
 	populateAPIKeyMetaFromContext(c, input)
 	populateInternalUsageMetaFromContext(c, input)

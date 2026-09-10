@@ -1,4 +1,5 @@
 import type { ServiceErrorPage, ServiceErrorQuery } from './lib/serviceErrors'
+import type { SessionErrorPage, SessionErrorQuery } from './lib/sessionErrors'
 import type {
   AccountEventTrendPoint,
   AccountPortalAuthURLResponse,
@@ -532,6 +533,15 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   if (params.viaWebsocket) search.set('via_websocket', params.viaWebsocket)
   if (params.includeCanceled) search.set('include_canceled', params.includeCanceled)
   return search
+}
+
+export function sessionErrorSearchParams(query: SessionErrorQuery): string {
+  const params = new URLSearchParams()
+  if (query.userID) params.set('user_id', query.userID)
+  if (query.sessionID) params.set('session_id', query.sessionID)
+  if (query.lockedOnly) params.set('locked', 'true')
+  if (query.cursor) params.set('cursor', query.cursor)
+  return params.toString()
 }
 
 export function serviceErrorSearchParams(query: ServiceErrorQuery): string {
@@ -1078,8 +1088,12 @@ export const api = {
     request<MessageResponse>(`/prompt-filter/newapi-bindings/${apiKeyId}`, { method: 'DELETE' }),
   getOpsOverview: (signal?: AbortSignal) => request<OpsOverviewResponse>('/ops/overview', { signal }),
   getRuntimeStatus: () => request<RuntimeStatusResponse>('/runtime-status'),
-  getServiceErrors: (query: ServiceErrorQuery, signal?: AbortSignal) =>
-    request<ServiceErrorPage>(`/ops/service-errors?${serviceErrorSearchParams(query)}`, { signal }),
+    getServiceErrors: (query: ServiceErrorQuery, signal?: AbortSignal) =>
+      request<ServiceErrorPage>(`/ops/service-errors?${serviceErrorSearchParams(query)}`, { signal }),
+    getSessionErrors: (query: SessionErrorQuery, signal?: AbortSignal) =>
+      request<SessionErrorPage>(`/session-errors?${sessionErrorSearchParams(query)}`, { signal }),
+    setSessionBlacklist: (keys: string[], locked: boolean) =>
+      request<{ updated: number; locked: boolean }>('/session-errors/blacklist', { method: 'POST', body: JSON.stringify({ keys, locked }) }),
   getSystemUpdate: () => request<SystemUpdateInfo>('/system/update', { timeoutMs: 20_000 }),
   performSystemUpdate: () =>
     // 后端下载上游二进制最长约 10 分钟,客户端给到 11 分钟兜底:既不会误伤慢下载,

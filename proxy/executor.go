@@ -1560,6 +1560,7 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 		identity.affinityID = ""
 	}
 	h.captureUsageRequestResolution(c, body, identity, rootIdentity, policyContext, status)
+	h.captureSessionOperationsIdentity(c, body, rootIdentity, policyContext, verifiedPolicy)
 	return identity
 }
 

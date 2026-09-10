@@ -18,6 +18,9 @@ func requiresBackgroundRootAccount(source string) bool {
 }
 
 func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context, identity requestSessionIdentity) *api.APIError {
+	if blocked := handler.sessionBlacklistError(requestContext); blocked != nil {
+		return blocked
+	}
 	if !identity.requiresRootAccount {
 		return nil
 	}

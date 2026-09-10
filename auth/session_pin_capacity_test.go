@@ -1,11 +1,51 @@
 package auth
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestPinnedSessionNeverReassignsUnavailableOwner(test *testing.T) {
+	for _, reason := range []string{"quota", "disabled", "paused", "cooldown", "error", "banned", "missing_credentials", "request_excluded"} {
+		test.Run(reason, func(test *testing.T) {
+			store, owner, other := newHardWindowFallbackTestStore()
+			bindHardWindowFallbackTestRoot(test, store, owner, "permanent-root")
+			excluded := map[int64]bool{}
+			switch reason {
+			case "quota":
+				owner.PlanType, owner.UsagePercent7d, owner.UsagePercent7dValid, owner.Reset7dAt = "free", 100, true, time.Now().Add(time.Hour)
+			case "disabled":
+				atomic.StoreInt32(&owner.Disabled, 1)
+			case "paused":
+				atomic.StoreInt32(&owner.DispatchPaused, 1)
+			case "cooldown":
+				owner.Status, owner.CooldownUtil = StatusCooldown, time.Now().Add(time.Hour)
+			case "error":
+				owner.Status = StatusError
+			case "banned":
+				owner.HealthTier = HealthTierBanned
+			case "missing_credentials":
+				owner.AccessToken = ""
+			case "request_excluded":
+				excluded[owner.ID()] = true
+			}
+			trace := &SelectionTrace{}
+			trace.PinAccount(owner.ID())
+			selected, _, _ := store.NextForSessionWithDispatchGuard("permanent-root", 0, excluded, nil, DispatchPolicyStandard, trace)
+			if selected != nil {
+				require.Same(test, owner, selected)
+				store.Release(selected)
+			}
+			require.Nil(test, store.TakePreferredAccountWithDispatch(other.ID(), 0, nil, nil, DispatchPolicyStandard, trace))
+			boundID, found := store.SessionAffinityAccountID("permanent-root")
+			require.True(test, found)
+			require.Equal(test, owner.ID(), boundID)
+		})
+	}
+}
 
 func TestPinnedSessionNeverBorrowsAccountWhenSlotOrConcurrencyFull(test *testing.T) {
 	store, owner, other := newHardWindowFallbackTestStore()

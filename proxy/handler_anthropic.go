@@ -542,7 +542,7 @@ func (h *Handler) Messages(c *gin.Context) {
 	affinityKey := capacityAwareSessionAffinityKey(sessionIdentity, apiKeyID)
 	priorSessionAccountID, _ := h.store.AccountSessionAccountID(affinityKey, time.Now())
 	beginDispatchSelection(c)
-	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, effectiveModel, effectiveModel, false); modelError != nil {
+	if modelError := h.configureSessionModelAffinity(c, sessionIdentity, affinityKey, effectiveModel, effectiveModel, false, ingressRequestBody(c, nil)); modelError != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": modelError})
 		return
 	}

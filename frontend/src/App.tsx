@@ -14,6 +14,7 @@ const Accounts = lazy(() => import('./pages/Accounts'))
 const Operations = lazy(() => import('./pages/Operations'))
 const OperationsErrors = lazy(() => import('./pages/OperationsErrors'))
 const ServiceErrors = lazy(() => import('./pages/ServiceErrors'))
+const SessionErrors = lazy(() => import('./pages/SessionErrors'))
 const RuntimeStatus = lazy(() => import('./pages/RuntimeStatus'))
 const Proxies = lazy(() => import('./pages/Proxies'))
 const SchedulerBoard = lazy(() => import('./pages/SchedulerBoard'))
@@ -79,6 +80,7 @@ function AdminApp() {
           <Route path="/ops/service-errors" element={<ServiceErrors />} />
           <Route path="/ops/scheduler" element={<SchedulerBoard />} />
           <Route path="/usage" element={<Usage />} />
+          <Route path="/session-errors" element={<SessionErrors />} />
           <Route path="/model-pricing" element={<ModelPricing />} />
           <Route path="/payload-rules" element={<Navigate to="/payload-rules/editor" replace />} />
           <Route path="/payload-rules/:view" element={<PayloadRules />} />

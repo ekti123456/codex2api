@@ -312,6 +312,9 @@ func (h *Handler) resolveRequestRootSessionIdentityForContext(c *gin.Context, bo
 		switch policyContext.Meta.RootSessionState {
 		case newAPIPolicyRootSessionResolved:
 			fingerprint := strings.TrimSpace(policyContext.Meta.RootSessionFingerprint)
+			if canonical := strings.TrimSpace(policyContext.Meta.RootSessionID); canonical != "" && !equalRootSessionFingerprint(fingerprint, newAPIRootSessionFingerprint(policyContext.Platform, policyContext.Identity.UserID, canonical)) {
+				return requestRootSessionIdentity{conflict: true, authoritative: true}
+			}
 			internalOverride := signedRelatedInternalRootOverride(policyContext.Meta)
 			passiveOverride := internalOverride || signedSystemPassiveRootOverride(policyContext.Meta)
 			signedThreadSource := strings.TrimSpace(policyContext.Meta.ThreadSource)

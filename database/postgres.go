@@ -203,6 +203,8 @@ type DB struct {
 
 	promptFilterAudit *promptFilterAuditQueue
 	serviceErrors     *serviceErrorQueue
+	sessionErrors     *sessionErrorQueue
+	sessionBlacklist  sessionBlacklistCache
 
 	backgroundTaskMu      sync.Mutex
 	backgroundTaskWg      sync.WaitGroup
@@ -497,6 +499,9 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	if err := db.ensureSessionCooldownTables(ctx); err != nil {
 		return nil, fmt.Errorf("创建窗口创建间隔表失败: %w", err)
 	}
+	if err := db.ensureSessionErrorSchema(ctx); err != nil {
+		return nil, fmt.Errorf("创建会话错误统计表失败: %w", err)
+	}
 	if err := db.ensurePromptWindowOperationsTables(ctx); err != nil {
 		return nil, fmt.Errorf("创建会话窗口操作表失败: %w", err)
 	}
@@ -558,6 +563,8 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	db.promptFilterAudit.start()
 	db.serviceErrors = newServiceErrorQueue(db)
 	go db.serviceErrors.run()
+	db.sessionErrors = newSessionErrorQueue(db)
+	go db.sessionErrors.run()
 	db.RunBackgroundTask(func(taskCtx context.Context) {
 		if err := db.backfillPromptRiskEvents(taskCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("回填提示词风险画像失败，将在下次启动继续: %v", err)
@@ -902,6 +909,9 @@ func (db *DB) Close() error {
 	}
 	if db.serviceErrors != nil {
 		db.serviceErrors.close()
+	}
+	if db.sessionErrors != nil {
+		db.sessionErrors.close()
 	}
 	return db.conn.Close()
 }

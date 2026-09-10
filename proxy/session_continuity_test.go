@@ -88,6 +88,66 @@ func TestSessionContinuityCompactionAndRestartKeepOwner(test *testing.T) {
 	require.NotNil(test, handler.commitSessionContinuity(request, other))
 }
 
+func TestSessionContinuityModelSwitchAfterIdleKeepsPersistentOwner(test *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		idle      time.Duration
+		mode      string
+		supported bool
+	}{
+		{name: "two_hours_unsupported_model", idle: 2 * time.Hour, mode: "observe"},
+		{name: "one_year_supported_model_with_checks_off", idle: 365 * 24 * time.Hour, mode: "off", supported: true},
+		{name: "one_year_unsupported_model", idle: 365 * 24 * time.Hour, mode: "enforce"},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			handler := newWindowAuthorizationHandler(test)
+			config := handler.store.GetPromptFilterConfig()
+			config.Advanced.Risk.SessionContinuityMode = scenario.mode
+			handler.store.SetPromptFilterConfig(config)
+			owner := &auth.Account{DBID: 1589, AccessToken: "owner-test", Status: auth.StatusReady, Models: []string{"gpt-5.6-sol"}}
+			if scenario.supported {
+				owner.Models = append(owner.Models, "gpt-5.6-terra")
+			}
+			other := &auth.Account{DBID: 1695, AccessToken: "other-test", Status: auth.StatusReady, Models: []string{"gpt-5.6-terra"}}
+			handler.store.AddAccounts([]*auth.Account{owner, other})
+			key := sessionAffinityKey("newapi-root-session:"+promptSessionTestFingerprint(test.Name()), 101)
+			stored := database.SessionContinuityRecord{AccountID: owner.ID(), ThreadID: continuityTestThread, NumberKnown: true, LastSeen: time.Now().Add(-scenario.idle)}
+			_, err := handler.db.CommitSessionContinuity(context.Background(), hashRiskIdentity(key), stored)
+			require.NoError(test, err)
+			_, live := handler.store.LiveSessionAccountID(key, time.Now())
+			require.False(test, live)
+
+			request, body := continuityTestRequest(0, "turn")
+			body = bytes.Replace(body, []byte("gpt-5.6-sol"), []byte("gpt-5.6-terra"), 1)
+			apiErr := handler.configureSessionModelAffinity(request, requestSessionIdentity{stableIdentity: true}, key, "gpt-5.6-terra", "gpt-5.6-terra", false, body)
+			if scenario.supported {
+				require.Nil(test, apiErr)
+			} else {
+				require.NotNil(test, apiErr)
+				require.Equal(test, api.ErrCodeSessionModelUnavailable, apiErr.Code)
+				require.Equal(test, http.StatusBadRequest, api.HTTPStatusCode(apiErr.Code))
+				require.Equal(test, sessionModelUnavailableMessage, apiErr.Message)
+			}
+			trace := selectionTraceForRequest(request)
+			require.Equal(test, owner.ID(), trace.PinnedAccount())
+			require.Equal(test, "persistent_binding", usageRequestDiagnosticState(request).Continuity.OwnerSource)
+			selected, _, _ := handler.store.NextForSessionWithDispatchGuard(key, 101, nil, nil, auth.DispatchPolicyStandard, trace)
+			if scenario.supported {
+				require.Same(test, owner, selected)
+				handler.store.Release(selected)
+			} else {
+				require.Nil(test, selected)
+			}
+			require.Nil(test, handler.store.TakePreferredAccountWithDispatch(other.ID(), 101, nil, nil, auth.DispatchPolicyStandard, trace))
+			record, found, err := handler.db.ReadSessionContinuity(context.Background(), hashRiskIdentity(key))
+			require.NoError(test, err)
+			require.True(test, found)
+			require.Equal(test, owner.ID(), record.AccountID)
+			require.Equal(test, uint64(0), record.Number)
+		})
+	}
+}
+
 func TestSessionContinuityWindowRulesAndMetadata(test *testing.T) {
 	previous := database.SessionContinuityRecord{AccountID: 1695, ThreadID: continuityTestThread, Number: 71, NumberKnown: true}
 	for _, item := range []struct {
