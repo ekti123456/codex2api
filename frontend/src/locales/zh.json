@@ -1,5 +1,6 @@
 {
   "sessionErrors": {
+    "lockedFilter": "已锁定",
     "lineageInvalid": "派生关系无效",
     "title": "会话过载统计", "description": "仅统计最终 500 + server_is_overloaded，按用户与主会话 ID 汇总。其他 500 不计入；手动锁定后禁止该会话及已知派生链路继续调用。",
     "views": "会话统计视图", "statistics": "过载 500", "blacklist": "会话黑名单", "summary": "{{groups}} 个会话 · 累计 {{count}} 次过载 500",
@@ -12,7 +13,8 @@
     "unlockHint": "解除所列会话的直接黑名单。仍被其他父会话锁定的派生会话不会因此放行。",
     "lockedSuccess": "已长期锁定 {{count}} 个会话", "unlockedSuccess": "已解锁 {{count}} 个会话", "saving": "正在保存…", "updateFailed": "更新失败，请刷新确认后重试",
     "detailHint": "最近一次 server_is_overloaded（500）与经身份隔离的会话信息。未知字段不推测，不包含密钥。",
-    "columns": { "user": "用户 / 平台", "session": "主会话 ID", "count": "过载次数", "last": "最近错误", "error": "错误 / 模型 / 账号", "status": "会话状态", "details": "详情" }
+    "accountHint": "最近一次过载请求使用的上游账号",
+    "columns": { "user": "用户 / 平台", "session": "主会话 ID", "account": "过载账号", "count": "过载次数", "last": "最近错误", "error": "错误 / 模型", "status": "会话状态", "details": "详情" }
   },
   "serviceErrors": {
     "timeRange": "时间范围",

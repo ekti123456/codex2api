@@ -237,13 +237,13 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 }
 
 func sessionContinuityError(reason string) *api.APIError {
-	message := "会话上下文序号不连续，请恢复正确的对话后重试；本次未切换账号。"
+	message := "会话上下文序号不连续，请恢复正确的对话后重试。"
 	if reason == "unbound_nonzero" {
 		message = "当前请求来自已有上下文窗口，但无法恢复原会话账号，请新开对话后重试。"
 	} else if reason == "window_missing" || reason == "window_invalid" || reason == "number_conflict" || reason == "thread_conflict" {
-		message = "会话窗口标识缺失或不一致，请重新连接正确的对话；本次未切换账号。"
+		message = "会话窗口标识缺失或不一致，请重新连接正确的对话。"
 	} else if reason == "ownership_unavailable" || reason == "storage_unavailable" {
-		message = "会话账号归属暂时无法确认，请稍后重试；本次未重新选号。"
+		message = "会话账号归属暂时无法确认，请稍后重试。"
 	}
 	result := api.NewAPIError(api.ErrorCode("codex_session_continuity_"+reason), message, api.ErrorTypeInvalidRequest)
 	result.Details = gin.H{"reason": reason, "retry": "stop"}
@@ -328,7 +328,7 @@ func (handler *Handler) pinnedSessionCapacityError(request *gin.Context, key str
 	}
 	account := handler.store.FindByID(accountID)
 	if account == nil {
-		return api.NewAPIError(api.ErrorCode("codex_sticky_account_unavailable"), "当前窗口绑定账号已不可用，请新开对话；本次未切换账号。", api.ErrorTypeInvalidRequest)
+		return api.NewAPIError(api.ErrorCode("codex_sticky_account_unavailable"), "当前窗口绑定账号已不可用，请新开对话。", api.ErrorTypeInvalidRequest)
 	}
 	if handler.store.CanAdmitAccountSession(account, key, time.Now(), trace) {
 		return nil
@@ -336,10 +336,10 @@ func (handler *Handler) pinnedSessionCapacityError(request *gin.Context, key str
 	limits := account.SessionCapacityLimits()
 	total, reserved := handler.store.AccountSessionSlotCounts(accountID, time.Now())
 	code := "codex_sticky_account_capacity_full"
-	message := "当前窗口绑定账号的普通及扩容会话容量均已满，请新开对话或切换其他窗口使用；本次未切换账号。"
+	message := "当前窗口绑定账号的普通及扩容会话容量均已满，请新开对话或切换其他窗口使用。"
 	if !trace.ExpandedWindow() && total < limits.Total && reserved < limits.Reserved {
 		code = "codex_sticky_expansion_required"
-		message = "当前窗口绑定账号的普通会话容量已满，请在「窗口管理」开启扩容并确认此窗口的扩容费用后重试；本次未切换账号。"
+		message = "当前窗口绑定账号的普通会话容量已满，请在「窗口管理」开启扩容并确认此窗口的扩容费用后重试。"
 	}
 	return api.NewAPIError(api.ErrorCode(code), message, api.ErrorTypeInvalidRequest)
 }

@@ -57,5 +57,5 @@ func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context
 		state.RootAccountWait = "unavailable"
 		return api.NewAPIError(api.ErrCodeBackgroundRootUnavailable, "主会话绑定暂不可用或等待请求过多，请稍后再试。未选择其他账号。", api.ErrorTypeInvalidRequest)
 	}
-	return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "Main conversation account was not bound within the 60-second wait limit. Background request stopped; no other account was selected.", api.ErrorTypeInvalidRequest)
+	return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "Main conversation account was not bound within the 60-second wait limit. Background request stopped.", api.ErrorTypeInvalidRequest)
 }

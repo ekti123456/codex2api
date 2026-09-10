@@ -347,9 +347,9 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 			statusCode = http.StatusBadRequest
 			message = promptSessionCreationLimitMessage(promptSessionCreationLimitStatus{NextRecoveryAt: deniedRecovery, RetryAfter: max(1, int(time.Until(deniedRecovery).Seconds()))})
 			if ownerNeedsExpansion {
-				message = "当前窗口绑定账号的普通会话容量已满，请在「窗口管理」开启扩容后重试；本次未切换账号。"
+				message = "当前窗口绑定账号的普通会话容量已满，请在「窗口管理」开启扩容后重试。"
 				if input.AllowExpansion {
-					message = "你的扩容窗口额度已用尽，请等待恢复或使用已有窗口；本次未切换账号。"
+					message = "你的扩容窗口额度已用尽，请等待恢复或使用已有窗口。"
 				}
 			}
 		}

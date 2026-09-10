@@ -1,5 +1,6 @@
 {
   "sessionErrors": {
+    "lockedFilter": "已鎖定",
     "lineageInvalid": "衍生關係無效",
     "title": "會話過載統計", "description": "僅統計最終 500 + server_is_overloaded，依使用者與主會話 ID 彙總。其他 500 不計入；手動鎖定後禁止該會話及已知衍生鏈路繼續呼叫。",
     "views": "會話統計檢視", "statistics": "過載 500", "blacklist": "會話黑名單", "summary": "{{groups}} 個會話 · 累計 {{count}} 次過載 500",
@@ -12,7 +13,8 @@
     "unlockHint": "解除列出會話的直接黑名單。仍被其他父會話鎖定的衍生會話不會因此放行。",
     "lockedSuccess": "已長期鎖定 {{count}} 個會話", "unlockedSuccess": "已解鎖 {{count}} 個會話", "saving": "正在儲存…", "updateFailed": "更新失敗，請重新整理確認後重試",
     "detailHint": "最近一次 server_is_overloaded（500）與經身分隔離的會話資訊。未知欄位不推測，不包含金鑰。",
-    "columns": { "user": "使用者 / 平台", "session": "主會話 ID", "count": "過載次數", "last": "最近錯誤", "error": "錯誤 / 模型 / 帳號", "status": "會話狀態", "details": "詳情" }
+    "accountHint": "最近一次過載請求使用的上游帳號",
+    "columns": { "user": "使用者 / 平台", "session": "主會話 ID", "account": "過載帳號", "count": "過載次數", "last": "最近錯誤", "error": "錯誤 / 模型", "status": "會話狀態", "details": "詳情" }
   },
   "serviceErrors": {
     "timeRange": "時間範圍",

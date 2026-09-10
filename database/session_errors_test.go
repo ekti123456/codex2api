@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,6 +137,13 @@ func TestSessionBlacklistCycleFailsClosedWithoutHidingOtherRows(test *testing.T)
 		require.Equal(test, row.Identity.Key == first, row.LineageInvalid)
 		require.Equal(test, row.Identity.Key == first, row.Locked)
 	}
+	for _, state := range []string{"unlocked", "locked"} {
+		filtered, err := db.ListSessionErrors(context.Background(), SessionErrorQuery{LockState: state})
+		require.NoError(test, err)
+		require.Equal(test, int64(1), filtered.Groups)
+		require.Len(test, filtered.Items, 1)
+		require.Equal(test, state == "locked", filtered.Items[0].LineageInvalid)
+	}
 }
 
 func BenchmarkSessionBlacklistCachedLookup(benchmark *testing.B) {
@@ -156,4 +164,101 @@ func BenchmarkSessionBlacklistCachedLookup(benchmark *testing.B) {
 			benchmark.Fatalf("unexpected blacklist result: %q, %v", lockedBy, err)
 		}
 	}
+}
+
+func TestSessionErrorAccountsUseLatestRequestAndExposeOnlyLabels(test *testing.T) {
+	db, err := New("sqlite", filepath.Join(test.TempDir(), "account-labels.db"))
+	require.NoError(test, err)
+	test.Cleanup(func() { require.NoError(test, db.Close()) })
+	ctx := context.Background()
+	older, err := db.InsertAccountWithCredentials(ctx, "older account", map[string]interface{}{"email": "old@example.com", "refresh_token": "old-private-token"}, "")
+	require.NoError(test, err)
+	latest, err := db.InsertAccountWithCredentials(ctx, "latest account", map[string]interface{}{"email": "latest@example.com", "refresh_token": "latest-private-token"}, "")
+	require.NoError(test, err)
+	now := time.Now()
+	first := SessionErrorIdentity{Key: strings.Repeat("8", 64), UserID: "17", SessionID: "first"}
+	second := SessionErrorIdentity{Key: strings.Repeat("9", 64), UserID: "17", SessionID: "second"}
+	missing := SessionErrorIdentity{Key: strings.Repeat("a", 64), UserID: "18", SessionID: "missing-account"}
+	require.NoError(test, db.insertSessionErrors(ctx, []SessionErrorEvent{
+		{Identity: first, CreatedAt: now.Add(-time.Minute), AccountID: older},
+		{Identity: first, CreatedAt: now, AccountID: latest},
+		{Identity: second, CreatedAt: now, AccountID: latest},
+		{Identity: missing, CreatedAt: now, AccountID: latest + 1000},
+	}))
+	page, err := db.ListSessionErrors(ctx, SessionErrorQuery{})
+	require.NoError(test, err)
+	require.Len(test, page.Items, 3)
+	for _, row := range page.Items {
+		if row.Identity.Key == missing.Key {
+			require.Empty(test, row.AccountName)
+			require.Empty(test, row.AccountEmail)
+			require.Equal(test, latest+1000, row.Latest.AccountID)
+		} else {
+			require.Equal(test, "latest account", row.AccountName)
+			require.Equal(test, "latest@example.com", row.AccountEmail)
+			require.Equal(test, latest, row.Latest.AccountID)
+		}
+	}
+	payload, err := json.Marshal(page)
+	require.NoError(test, err)
+	require.NotContains(test, string(payload), "private-token")
+	require.NotContains(test, string(payload), "refresh_token")
+	require.NotContains(test, string(payload), "credentials")
+	require.NoError(test, db.SetSessionBlacklist(ctx, []string{first.Key}, true))
+	locked, err := db.ListSessionErrors(ctx, SessionErrorQuery{LockedOnly: true})
+	require.NoError(test, err)
+	require.Len(test, locked.Items, 1)
+	require.Equal(test, "latest account", locked.Items[0].AccountName)
+}
+
+func TestSessionErrorLockFiltersApplyBeforeCountsAndPagination(test *testing.T) {
+	db, err := New("sqlite", filepath.Join(test.TempDir(), "lock-filter.db"))
+	require.NoError(test, err)
+	test.Cleanup(func() { require.NoError(test, db.Close()) })
+	ctx := context.Background()
+	keys := []string{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64)}
+	now := time.Now()
+	for index, key := range keys {
+		userID := "17"
+		if index == 4 {
+			userID = "18"
+		}
+		require.NoError(test, db.insertSessionErrors(ctx, []SessionErrorEvent{{Identity: SessionErrorIdentity{Key: key, UserID: userID, SessionID: "shared-session"}, CreatedAt: now.Add(-time.Duration(index) * time.Second)}}))
+	}
+	require.NoError(test, db.RecordSessionParent(ctx, keys[1], keys[0]))
+	require.NoError(test, db.RecordSessionParent(ctx, keys[2], keys[1]))
+	require.NoError(test, db.SetSessionBlacklist(ctx, []string{keys[0]}, true))
+	first, err := db.ListSessionErrors(ctx, SessionErrorQuery{LockState: "unlocked", Limit: 1})
+	require.NoError(test, err)
+	require.Equal(test, int64(2), first.Groups)
+	require.Equal(test, int64(2), first.Errors)
+	require.Len(test, first.Items, 1)
+	require.Equal(test, keys[3], first.Items[0].Identity.Key)
+	require.NotEmpty(test, first.NextCursor)
+	second, err := db.ListSessionErrors(ctx, SessionErrorQuery{LockState: "unlocked", Limit: 1, Cursor: first.NextCursor})
+	require.NoError(test, err)
+	require.Len(test, second.Items, 1)
+	require.Equal(test, keys[4], second.Items[0].Identity.Key)
+	require.Empty(test, second.NextCursor)
+	locked, err := db.ListSessionErrors(ctx, SessionErrorQuery{LockState: "locked"})
+	require.NoError(test, err)
+	require.Equal(test, int64(3), locked.Groups)
+	require.Len(test, locked.Items, 3)
+	for _, row := range locked.Items {
+		require.True(test, row.Locked)
+		require.Equal(test, keys[0], row.LockedBy)
+	}
+	isolated, err := db.ListSessionErrors(ctx, SessionErrorQuery{UserID: "18", SessionID: "shared-session", LockState: "locked"})
+	require.NoError(test, err)
+	require.Zero(test, isolated.Groups)
+	require.Empty(test, isolated.Items)
+	all, err := db.ListSessionErrors(ctx, SessionErrorQuery{LockState: "all"})
+	require.NoError(test, err)
+	require.Equal(test, int64(5), all.Groups)
+	require.NoError(test, db.SetSessionBlacklist(ctx, []string{keys[0]}, false))
+	unlocked, err := db.ListSessionErrors(ctx, SessionErrorQuery{LockState: "unlocked"})
+	require.NoError(test, err)
+	require.Equal(test, int64(5), unlocked.Groups)
+	_, err = db.ListSessionErrors(ctx, SessionErrorQuery{LockState: "invalid"})
+	require.Error(test, err)
 }

@@ -1,5 +1,6 @@
 {
   "sessionErrors": {
+    "lockedFilter": "Locked",
     "lineageInvalid": "Invalid lineage",
     "title": "Session overload statistics", "description": "Only final 500 + server_is_overloaded, grouped by user and root session ID. Other 500 errors are excluded. Manual blacklisting blocks the session and identifiable descendants.",
     "views": "Session views", "statistics": "Overload 500", "blacklist": "Session blacklist", "summary": "{{groups}} sessions · {{count}} total overload 500 errors",
@@ -12,7 +13,8 @@
     "unlockHint": "Remove the direct blacklist entries. Descendants still blocked by another ancestor remain blocked.",
     "lockedSuccess": "Permanently locked {{count}} sessions", "unlockedSuccess": "Unlocked {{count}} sessions", "saving": "Saving…", "updateFailed": "Update failed. Refresh and verify before retrying.",
     "detailHint": "Latest server_is_overloaded (500) and subject-isolated session metadata. Unknown fields are not inferred; no API secrets are included.",
-    "columns": { "user": "User / platform", "session": "Root session ID", "count": "Overload count", "last": "Latest error", "error": "Error / model / account", "status": "Session status", "details": "Details" }
+    "accountHint": "Upstream account used by the latest overloaded request",
+    "columns": { "user": "User / platform", "session": "Root session ID", "account": "Overloaded account", "count": "Overload count", "last": "Latest error", "error": "Error / model", "status": "Session status", "details": "Details" }
   },
   "serviceErrors": {
     "title": "Service errors",

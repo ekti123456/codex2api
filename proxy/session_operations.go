@@ -82,9 +82,9 @@ func (handler *Handler) sessionBlacklistError(ctx *gin.Context) *api.APIError {
 	defer cancel()
 	lockedBy, err := handler.db.SessionBlacklistStatus(lookup, identity.Key, identity.ParentKey)
 	if err != nil {
-		code, message := "session_blacklist_unavailable", "暂时无法确认会话黑名单状态，请稍后重试；本次未请求其他账号。"
+		code, message := "session_blacklist_unavailable", "暂时无法确认会话黑名单状态，请稍后重试。"
 		if errors.Is(err, database.ErrSessionLineageConflict) {
-			code, message = "session_lineage_invalid", "会话派生关系冲突或过深，请联系管理员；本次未切换账号。"
+			code, message = "session_lineage_invalid", "会话派生关系冲突或过深，请联系管理员。"
 		}
 		return api.NewAPIError(api.ErrorCode(code), message, api.ErrorTypeInvalidRequest)
 	}
@@ -92,7 +92,7 @@ func (handler *Handler) sessionBlacklistError(ctx *gin.Context) *api.APIError {
 		return nil
 	}
 	ctx.Header("X-Should-Retry", "false")
-	result := api.NewAPIError("session_blacklisted", "当前会话或其父会话已被管理员加入黑名单，长期禁止继续请求及派生会话调用，请联系管理员解锁；本次未切换账号。", api.ErrorTypeInvalidRequest)
+	result := api.NewAPIError("session_blacklisted", "当前会话或其父会话已被管理员加入黑名单，长期禁止继续请求及派生会话调用，请联系管理员解锁。", api.ErrorTypeInvalidRequest)
 	result.Details = gin.H{"retry": "stop", "inherited": lockedBy != identity.Key}
 	return result
 }

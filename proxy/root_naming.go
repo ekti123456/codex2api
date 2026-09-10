@@ -45,7 +45,7 @@ func (handler *Handler) claimRequestRootNaming(request *gin.Context, body []byte
 	}
 	if !claimed {
 		diagnostic.Naming = "duplicate"
-		return api.NewAPIError(api.ErrorCode("codex_root_already_named"), "该主会话已触发过命名，不允许重复命名。未请求其他账号。", api.ErrorTypeInvalidRequest)
+		return api.NewAPIError(api.ErrorCode("codex_root_already_named"), "该主会话已触发过命名，不允许重复命名。", api.ErrorTypeInvalidRequest)
 	}
 	diagnostic.Naming = "claimed"
 	request.Set("root_naming_claimed", diagnostic)

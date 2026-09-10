@@ -64,7 +64,7 @@ func (handler *Handler) bindWindowGrantOwner(request *gin.Context, accountID int
 	}
 	if grant.Grant.OwnerAccountID > 0 {
 		if grant.Grant.OwnerAccountID != accountID {
-			return errors.New("窗口已绑定其他账号，本次未切换账号")
+			return errors.New("窗口已绑定其他账号")
 		}
 		return nil
 	}
@@ -81,7 +81,7 @@ func (handler *Handler) bindWindowGrantOwner(request *gin.Context, accountID int
 			return errWindowGrantRefresh
 		}
 		if stored.OwnerAccountID > 0 && stored.OwnerAccountID != accountID {
-			return errors.New("窗口已绑定其他账号，本次未切换账号")
+			return errors.New("窗口已绑定其他账号")
 		}
 		stored.OwnerAccountID, stored.OwnerKey = accountID, key
 		current = *stored

@@ -14,8 +14,8 @@ import (
 )
 
 func (handler *Handler) GetSessionErrors(ctx *gin.Context) {
-	query := database.SessionErrorQuery{UserID: strings.TrimSpace(ctx.Query("user_id")), SessionID: strings.TrimSpace(ctx.Query("session_id")), Cursor: ctx.Query("cursor"), LockedOnly: ctx.Query("locked") == "true", Limit: 20}
-	if len(query.UserID) > 255 || len(query.SessionID) > 256 || !database.ValidateServiceErrorCursor(query.Cursor) || ctx.Query("locked") != "" && ctx.Query("locked") != "true" && ctx.Query("locked") != "false" {
+	query := database.SessionErrorQuery{UserID: strings.TrimSpace(ctx.Query("user_id")), SessionID: strings.TrimSpace(ctx.Query("session_id")), Cursor: ctx.Query("cursor"), LockedOnly: ctx.Query("locked") == "true", LockState: ctx.DefaultQuery("lock_state", "unlocked"), Limit: 20}
+	if len(query.UserID) > 255 || len(query.SessionID) > 256 || !database.ValidateServiceErrorCursor(query.Cursor) || ctx.Query("locked") != "" && ctx.Query("locked") != "true" && ctx.Query("locked") != "false" || query.LockState != "unlocked" && query.LockState != "locked" && query.LockState != "all" {
 		writeError(ctx, http.StatusBadRequest, "查询条件无效")
 		return
 	}

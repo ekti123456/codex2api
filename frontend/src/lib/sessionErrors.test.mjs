@@ -23,3 +23,11 @@ test('batch locking cannot select locked descendants and unlocking only selects 
   assert.deepEqual(validSessionSelection(['open', 'open', 'child', 'other-page'], items, false), ['open'])
   assert.deepEqual(validSessionSelection(['open', 'direct', 'child'], items, true), ['direct'])
 })
+
+test('session statistics default to unlocked and keep the persistent blacklist separate', () => {
+  assert.equal(new URLSearchParams(sessionErrorSearchParams({})).get('lock_state'), 'unlocked')
+  assert.equal(new URLSearchParams(sessionErrorSearchParams({ lockState: 'locked' })).get('lock_state'), 'locked')
+  const blacklist = new URLSearchParams(sessionErrorSearchParams({ lockedOnly: true, lockState: 'unlocked' }))
+  assert.equal(blacklist.get('locked'), 'true')
+  assert.equal(blacklist.has('lock_state'), false)
+})

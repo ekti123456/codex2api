@@ -5,12 +5,13 @@ import { api } from '../api'
 import PageHeader from '../components/PageHeader'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
-import { selectableSessionKeys, validSessionSelection, type SessionErrorPage, type SessionErrorRow } from '../lib/sessionErrors'
+import { selectableSessionKeys, validSessionSelection, type SessionErrorPage, type SessionErrorRow, type SessionErrorQuery } from '../lib/sessionErrors'
 import { formatBeijingTime } from '../utils/time'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
@@ -18,7 +19,7 @@ const emptyPage: SessionErrorPage = { items: [], groups: 0, errors: 0, collector
 
 export default function SessionErrors() {
   const { t } = useTranslation()
-  const [filters, setFilters] = useState({ userID: '', sessionID: '', lockedOnly: false, cursors: [''] })
+  const [filters, setFilters] = useState({ userID: '', sessionID: '', lockedOnly: false, lockState: 'unlocked' as NonNullable<SessionErrorQuery['lockState']>, cursors: [''] })
   const [draft, setDraft] = useState({ userID: '', sessionID: '' })
   const [selected, setSelected] = useState<string[]>([])
   const [confirming, setConfirming] = useState(false)
@@ -31,8 +32,8 @@ export default function SessionErrors() {
   const load = useCallback(async () => {
     controller.current?.abort()
     controller.current = new AbortController()
-    return api.getSessionErrors({ userID: filters.userID, sessionID: filters.sessionID, lockedOnly: filters.lockedOnly, cursor }, controller.current.signal)
-  }, [filters.userID, filters.sessionID, filters.lockedOnly, cursor])
+    return api.getSessionErrors({ userID: filters.userID, sessionID: filters.sessionID, lockedOnly: filters.lockedOnly, lockState: filters.lockState, cursor }, controller.current.signal)
+  }, [filters.userID, filters.sessionID, filters.lockedOnly, filters.lockState, cursor])
   const { data, loading, error, reload, reloadSilently } = useDataLoader({ initialData: emptyPage, load })
   const canPoll = useRef(true)
   canPoll.current = selected.length === 0 && !confirming && !busy
@@ -45,8 +46,9 @@ export default function SessionErrors() {
     return () => window.clearInterval(timer)
   }, [cursor, reloadSilently])
 
-  const selection = validSessionSelection(selected, data.items, filters.lockedOnly)
-  const eligible = selectableSessionKeys(data.items, filters.lockedOnly)
+  const unlockMode = filters.lockedOnly || filters.lockState === 'locked'
+  const selection = validSessionSelection(selected, data.items, unlockMode)
+  const eligible = selectableSessionKeys(data.items, unlockMode)
   const changeQuery = (next: typeof filters) => {
     setSelected([])
     setSuccess('')
@@ -58,11 +60,12 @@ export default function SessionErrors() {
     setBusy(true)
     setActionError('')
     try {
-      await api.setSessionBlacklist(selection, !filters.lockedOnly)
-      setSuccess(t(filters.lockedOnly ? 'sessionErrors.unlockedSuccess' : 'sessionErrors.lockedSuccess', { count: selection.length }))
+      await api.setSessionBlacklist(selection, !unlockMode)
+      setSuccess(t(unlockMode ? 'sessionErrors.unlockedSuccess' : 'sessionErrors.lockedSuccess', { count: selection.length }))
       setSelected([])
       setConfirming(false)
-      await reload()
+      if (cursor) setFilters(current => ({ ...current, cursors: [''] }))
+      else await reload()
     } catch (failure) {
       setActionError(failure instanceof Error ? failure.message : t('sessionErrors.updateFailed'))
     } finally {
@@ -93,9 +96,14 @@ export default function SessionErrors() {
     </Card>
     {success && <p role="status" className="mb-3 text-sm text-emerald-600">{success}</p>}
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <span className="text-sm text-muted-foreground">{t('sessionErrors.selected', { count: selection.length })}</span>
+      <div className="flex flex-wrap items-center gap-3">
+        {!filters.lockedOnly && <Select value={filters.lockState} disabled={busy || confirming} className="w-32" onValueChange={value => {
+          if (value === 'unlocked' || value === 'locked') changeQuery({ ...filters, lockState: value, cursors: [''] })
+        }} options={[{ value: 'unlocked', label: t('sessionErrors.allowed') }, { value: 'locked', label: t('sessionErrors.lockedFilter') }]} />}
+        <span className="text-sm text-muted-foreground">{t('sessionErrors.selected', { count: selection.length })}</span>
+      </div>
       <Button disabled={busy || loading || !!error || selection.length === 0} onClick={() => { setActionError(''); setConfirming(true) }}>
-        {filters.lockedOnly ? <UnlockKeyhole className="size-4" /> : <LockKeyhole className="size-4" />}{t(filters.lockedOnly ? 'sessionErrors.unlockSelected' : 'sessionErrors.lockSelected')}
+        {unlockMode ? <UnlockKeyhole className="size-4" /> : <LockKeyhole className="size-4" />}{t(unlockMode ? 'sessionErrors.unlockSelected' : 'sessionErrors.lockSelected')}
       </Button>
     </div>
     <StateShell loading={loading} error={error} onRetry={() => void reload()}>
@@ -103,15 +111,21 @@ export default function SessionErrors() {
         {data.items.length === 0 ? <p className="p-10 text-center text-sm text-muted-foreground">{t('sessionErrors.empty')}</p> : <div className="overflow-x-auto"><Table className="min-w-[900px]">
           <TableHeader><TableRow>
             <TableHead className="w-10"><input type="checkbox" aria-label={t('sessionErrors.selectPage')} disabled={busy || eligible.length === 0} checked={eligible.length > 0 && selection.length === eligible.length} onChange={event => setSelected(event.target.checked ? eligible : [])} /></TableHead>
-            {['user', 'session', 'count', 'last', 'error', 'status', 'details'].map(column => <TableHead key={column}>{t(`sessionErrors.columns.${column}`)}</TableHead>)}
+            {['user', 'session', 'account', 'count', 'last', 'error', 'status', 'details'].map(column => <TableHead key={column} title={column === 'account' ? t('sessionErrors.accountHint') : undefined}>{t(`sessionErrors.columns.${column}`)}</TableHead>)}
           </TableRow></TableHeader>
           <TableBody>{data.items.map(row => <TableRow key={row.identity.key}>
             <TableCell><input type="checkbox" aria-label={t('sessionErrors.selectSession', { user: row.identity.user_id, session: row.identity.session_id || row.identity.root_fingerprint })} checked={selection.includes(row.identity.key)} disabled={busy || !eligible.includes(row.identity.key)} onChange={event => setSelected(current => event.target.checked ? [...current, row.identity.key] : current.filter(key => key !== row.identity.key))} /></TableCell>
             <TableCell><p className="max-w-44 break-all text-sm">{row.identity.user_label || row.identity.user_id}</p><span className="text-xs text-muted-foreground">{row.identity.platform} · #{row.identity.user_id}</span></TableCell>
             <TableCell className="max-w-64 break-all font-mono text-xs">{row.identity.session_id || t('sessionErrors.sessionUnknown', { fingerprint: row.identity.root_fingerprint })}</TableCell>
+            <TableCell className="max-w-56">{row.latest.account_id ? <>
+              {(row.account_name || row.account_email) && <p className="truncate text-sm" title={row.account_name || row.account_email}>{row.account_name || row.account_email}</p>}
+              <p className="truncate text-xs text-muted-foreground" title={row.account_email}>
+                {row.account_name && row.account_email && row.account_name.toLowerCase() !== row.account_email.toLowerCase() ? `${row.account_email} · ` : ''}#{row.latest.account_id}
+              </p>
+            </> : '—'}</TableCell>
             <TableCell className="font-mono font-semibold">{row.count.toLocaleString()}</TableCell>
             <TableCell className="whitespace-nowrap text-xs">{row.count ? formatBeijingTime(row.last_at) : '—'}</TableCell>
-            <TableCell className="max-w-64"><p className="truncate text-xs" title={row.latest.message}>{row.latest.code || '—'}</p><span className="text-xs text-muted-foreground">{row.latest.model}{row.latest.account_id ? ` · #${row.latest.account_id}` : ''}</span></TableCell>
+            <TableCell className="max-w-64"><p className="truncate text-xs" title={row.latest.message}>{row.latest.code || '—'}</p><span className="text-xs text-muted-foreground">{row.latest.model}</span></TableCell>
             <TableCell><Badge variant="outline">{t(row.lineage_invalid ? 'sessionErrors.lineageInvalid' : !row.locked ? 'sessionErrors.allowed' : row.locked_by === row.identity.key ? 'sessionErrors.locked' : 'sessionErrors.inherited')}</Badge></TableCell>
             <TableCell><Button size="sm" variant="ghost" onClick={() => setDetail(row)}>{t('sessionErrors.columns.details')}</Button></TableCell>
           </TableRow>)}</TableBody>
@@ -126,7 +140,7 @@ export default function SessionErrors() {
       </div>
     </div>
     <Dialog open={confirming} onOpenChange={open => { if (!busy) setConfirming(open) }}><DialogContent>
-      <DialogHeader><DialogTitle>{t(filters.lockedOnly ? 'sessionErrors.confirmUnlock' : 'sessionErrors.confirmLock', { count: selection.length })}</DialogTitle><DialogDescription>{t(filters.lockedOnly ? 'sessionErrors.unlockHint' : 'sessionErrors.lockHint')}</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{t(unlockMode ? 'sessionErrors.confirmUnlock' : 'sessionErrors.confirmLock', { count: selection.length })}</DialogTitle><DialogDescription>{t(unlockMode ? 'sessionErrors.unlockHint' : 'sessionErrors.lockHint')}</DialogDescription></DialogHeader>
       <ul className="max-h-48 overflow-y-auto space-y-2 text-xs">{data.items.filter(row => selection.includes(row.identity.key)).map(row => <li className="break-all font-mono" key={row.identity.key}>{row.identity.platform} / {row.identity.user_id} / {row.identity.session_id || row.identity.root_fingerprint}</li>)}</ul>
       {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
       <DialogFooter><Button variant="outline" disabled={busy} onClick={() => setConfirming(false)}>{t('common.cancel')}</Button><Button disabled={busy || selection.length === 0} onClick={() => void updateBlacklist()}>{t(busy ? 'sessionErrors.saving' : 'common.confirm')}</Button></DialogFooter>

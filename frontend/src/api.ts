@@ -540,6 +540,7 @@ export function sessionErrorSearchParams(query: SessionErrorQuery): string {
   if (query.userID) params.set('user_id', query.userID)
   if (query.sessionID) params.set('session_id', query.sessionID)
   if (query.lockedOnly) params.set('locked', 'true')
+  else params.set('lock_state', query.lockState ?? 'unlocked')
   if (query.cursor) params.set('cursor', query.cursor)
   return params.toString()
 }

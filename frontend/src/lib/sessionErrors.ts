@@ -13,6 +13,8 @@ export interface SessionErrorIdentity {
 
 export interface SessionErrorRow {
   identity: SessionErrorIdentity
+  account_name?: string
+  account_email?: string
   count: number
   first_at: string
   last_at: string
@@ -34,6 +36,7 @@ export interface SessionErrorQuery {
   userID?: string
   sessionID?: string
   lockedOnly?: boolean
+  lockState?: 'unlocked' | 'locked'
   cursor?: string
 }
 

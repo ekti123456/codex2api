@@ -40,6 +40,8 @@ type SessionErrorEvent struct {
 
 type SessionErrorRow struct {
 	Identity       SessionErrorIdentity `json:"identity"`
+	AccountName    string               `json:"account_name,omitempty"`
+	AccountEmail   string               `json:"account_email,omitempty"`
 	Count          int64                `json:"count"`
 	FirstAt        time.Time            `json:"first_at"`
 	LastAt         time.Time            `json:"last_at"`
@@ -51,6 +53,7 @@ type SessionErrorRow struct {
 
 type SessionErrorQuery struct {
 	UserID, SessionID, Cursor string
+	LockState                 string
 	LockedOnly                bool
 	Limit                     int
 }
@@ -253,6 +256,9 @@ func (db *DB) SetSessionBlacklist(ctx context.Context, keys []string, locked boo
 
 func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (SessionErrorPage, error) {
 	page := SessionErrorPage{Items: []SessionErrorRow{}, Collector: db.SessionErrorCollectorStats()}
+	if filter.LockState != "" && filter.LockState != "all" && filter.LockState != "locked" && filter.LockState != "unlocked" {
+		return page, fmt.Errorf("invalid session lock state")
+	}
 	cursor, err := decodeServiceErrorCursor(filter.Cursor)
 	if err != nil {
 		return page, err
@@ -279,7 +285,26 @@ func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (
 		}
 	}
 	where := strings.Join(conditions, " AND ")
-	if err := db.conn.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(stats.error_count),0) FROM `+from+` WHERE `+where, args...).Scan(&page.Groups, &page.Errors); err != nil {
+	prefix := ""
+	if !filter.LockedOnly && (filter.LockState == "locked" || filter.LockState == "unlocked") {
+		prefix = `WITH RECURSIVE session_ancestors(start_key,session_key,depth) AS (
+			SELECT stats.session_key,links.parent_key,1 FROM session_error_stats stats
+			JOIN session_identity_links links ON links.session_key=stats.session_key WHERE ` + where + `
+			UNION ALL SELECT ancestry.start_key,links.parent_key,ancestry.depth+1
+			FROM session_ancestors ancestry JOIN session_identity_links links ON links.session_key=ancestry.session_key WHERE ancestry.depth<64
+		), filtered_locked_sessions(session_key) AS (
+			SELECT session_key FROM session_blacklist WHERE locked=1
+			UNION SELECT ancestry.start_key FROM session_ancestors ancestry
+			LEFT JOIN session_blacklist blacklist ON blacklist.session_key=ancestry.session_key
+			WHERE blacklist.locked=1 OR ancestry.depth=64
+		) `
+		operator := "IN"
+		if filter.LockState == "unlocked" {
+			operator = "NOT IN"
+		}
+		where += ` AND stats.session_key ` + operator + ` (SELECT session_key FROM filtered_locked_sessions)`
+	}
+	if err := db.conn.QueryRowContext(ctx, prefix+`SELECT COUNT(*),COALESCE(SUM(stats.error_count),0) FROM `+from+` WHERE `+where, args...).Scan(&page.Groups, &page.Errors); err != nil {
 		return page, err
 	}
 	if cursor.ID != "" {
@@ -287,7 +312,7 @@ func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (
 		where += fmt.Sprintf(" AND (%s<$%d OR (%s=$%d AND %s<$%d))", stamp, len(args)-1, stamp, len(args)-1, key, len(args))
 	}
 	args = append(args, filter.Limit+1)
-	query := `SELECT ` + projection + ` FROM ` + from + ` WHERE ` + where + ` ORDER BY ` + stamp + ` DESC,` + key + fmt.Sprintf(" DESC LIMIT $%d", len(args))
+	query := prefix + `SELECT ` + projection + ` FROM ` + from + ` WHERE ` + where + ` ORDER BY ` + stamp + ` DESC,` + key + fmt.Sprintf(" DESC LIMIT $%d", len(args))
 	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return page, err
@@ -338,5 +363,42 @@ func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (
 			page.Items[index].LockedBy = ""
 		}
 	}
+	if err := db.populateSessionErrorAccounts(ctx, page.Items); err != nil {
+		return page, err
+	}
 	return page, nil
+}
+
+func (db *DB) populateSessionErrorAccounts(ctx context.Context, items []SessionErrorRow) error {
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.Latest.AccountID)
+	}
+	ids = positiveUniqueIDs(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+	query := `SELECT id, COALESCE(name,''), COALESCE(CAST(credentials AS TEXT),'{}') FROM accounts WHERE id IN (` + strings.Join(dbPlaceholders(db.isSQLite(), 1, len(ids)), ",") + `)`
+	rows, err := db.conn.QueryContext(ctx, query, argsFromInt64s(ids)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	labels := make(map[int64][2]string, len(ids))
+	for rows.Next() {
+		var id int64
+		var name, credentials string
+		if err := rows.Scan(&id, &name, &credentials); err != nil {
+			return err
+		}
+		labels[id] = [2]string{serviceErrorString(name, 160), serviceErrorString(accountEmailFromRawCredentials(credentials), 256)}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for index := range items {
+		label := labels[items[index].Latest.AccountID]
+		items[index].AccountName, items[index].AccountEmail = label[0], label[1]
+	}
+	return nil
 }
