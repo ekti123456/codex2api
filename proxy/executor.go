@@ -533,6 +533,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		ctx = context.Background()
 	}
 	resetUpstreamUserAgentAudit(ctx)
+	ctx = ensureTransportTrace(ctx)
 	resetWsAcquireAudit(ctx)
 	var encryptedAttempt *encryptedContentAttempt
 	requestBody, encryptedAttempt = prepareEncryptedContentAttempt(ctx, account, requestBody, sessionID, headers)
@@ -720,7 +721,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 			return nil, err
 		}
-		resp, err := doTracedUpstreamRequest(client, req, account, proxyURL)
+		resp, err := doTracedUpstreamRequest(client, req, account, proxyURL, requestBody)
 		if err != nil {
 			if shouldRecyclePooledClient(err) {
 				recyclePooledClient(account, proxyURL)
@@ -802,7 +803,7 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 		if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(body, "model").String()); err != nil {
 			return nil, err
 		}
-		resp, err := doTracedUpstreamRequest(client, req, account, proxyURL)
+		resp, err := doTracedUpstreamRequest(client, req, account, proxyURL, body)
 		if err != nil {
 			if shouldRecyclePooledClient(err) {
 				recyclePooledClient(account, proxyURL)
@@ -949,7 +950,7 @@ func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Acc
 	if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 		return nil, err
 	}
-	resp, err := doTracedUpstreamRequest(getPooledClient(account, proxyURL), req, account, proxyURL)
+	resp, err := doTracedUpstreamRequest(getPooledClient(account, proxyURL), req, account, proxyURL, requestBody)
 	if err != nil {
 		if shouldRecyclePooledClient(err) {
 			recyclePooledClient(account, proxyURL)
@@ -1045,7 +1046,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 		return nil, err
 	}
-	resp, err := doTracedUpstreamRequest(client, req, account, proxyURL)
+	resp, err := doTracedUpstreamRequest(client, req, account, proxyURL, requestBody)
 	if err != nil {
 		if shouldRecyclePooledClient(err) {
 			recyclePooledClient(account, proxyURL)
@@ -1472,6 +1473,7 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	c.Set(relatedSessionObservationContextKey, nil)
 	status, policyContext := h.cachedNewAPIPolicyAuditState(c)
 	verifiedPolicy := (status == "verified" || status == "signed_response") && policyContext.MetaVerified
+	bindTransportOwner(c, policyContext, verifiedPolicy)
 	accountingBypass := h.verifiedNewAPISessionAccountingBypass(c)
 	rootIdentity := h.resolveRequestRootSessionIdentityForContext(c, body)
 	identity.requiresRootAccount = requiresBackgroundRootAccount(rootIdentity.threadSource)
@@ -1841,6 +1843,8 @@ func ReadSSEStream(body io.Reader, callback func(data []byte) bool) error {
 // ReadSSEStreamWithEvent preserves the optional SSE event field while keeping
 // ReadSSEStream's data-only API compatible for existing callers.
 func ReadSSEStreamWithEvent(body io.Reader, callback func(event string, data []byte) bool) error {
+	observer, _ := body.(interface{ observeUpstreamEvent(string, []byte) })
+	terminalObserved := false
 	// 使用 sync.Pool 复用缓冲区，减少 GC 压力
 	buf := sseBufferPool.Get().([]byte)
 	defer sseBufferPool.Put(buf)
@@ -1872,6 +1876,14 @@ func ReadSSEStreamWithEvent(body io.Reader, callback func(event string, data []b
 			data = bytes.Join(dataLines, []byte("\n"))
 		}
 		isDone := bytes.Equal(data, []byte("[DONE]"))
+		switch gjson.GetBytes(data, "type").String() {
+		case "response.completed", "response.done", "response.failed", "response.incomplete", "error":
+			terminalObserved = true
+		}
+		terminalObserved = terminalObserved || isDone || event == "error"
+		if !isDone && observer != nil {
+			observer.observeUpstreamEvent(event, data)
+		}
 		keepReading := !isDone && callback(event, data)
 		// 清掉 backing array 中的切片引用，避免最后一个大事件一直被
 		// dataLines 的容量槽位持有到整条流结束。
@@ -1947,6 +1959,9 @@ func ReadSSEStreamWithEvent(body io.Reader, callback func(event string, data []b
 				}
 				if !emitEvent() {
 					return nil
+				}
+				if completion, ok := body.(interface{ finishObservedSSE(bool) error }); ok {
+					return completion.finishObservedSSE(terminalObserved)
 				}
 				return nil
 			}

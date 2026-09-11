@@ -115,6 +115,8 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	observer := proxy.UpstreamTransportObserver(ctx)
+	observer.Continuation("new_chain", "not_required")
 
 	account.Mu().RLock()
 	accessToken := account.AccessToken
@@ -150,6 +152,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	if proxy.IsResinEnabled() {
 		wsURL = proxy.BuildWebSocketURL(wsURL)
 	}
+	observer.Endpoint(wsURL)
 
 	// 准备请求头
 	headers := e.prepareWebsocketHeaders(accessToken, account, accountIDStr, headerSessionID, apiKey, deviceCfg, ginHeaders, wsBody, fingerprint)
@@ -166,6 +169,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	if proxy.IsResinEnabled() {
 		headers.Set("X-Resin-Account", proxy.ResinAccountID(account))
 	}
+	observer.HandshakeProfile(websocketConnectionProfile(headers))
 
 	// 获取或创建连接。无显式会话的请求（stateless 连接 ID）在确定性 cache key
 	// 的槽位池内复用连接，避免持续高 RPM 下逐请求握手触发上游限流。
@@ -190,17 +194,33 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	if proxy.IsStatelessWebsocketSessionID(sessionID) {
 		requestScope = "stateless:" + baseKey
 	}
+	owner := proxy.WebsocketTransportOwner(ctx, apiKey)
+	downstreamID := proxy.DownstreamWebsocketConnectionID(ctx)
+	requestScope = proxy.WebsocketTransportPartition(owner, "", requestScope)
+	poolSessionID = proxy.WebsocketTransportPartition(owner, downstreamID, poolSessionID)
+	if baseKey != "" {
+		baseKey = proxy.WebsocketTransportPartition(owner, downstreamID, baseKey)
+	}
+	oneShot := strings.HasPrefix(owner, "anonymous-") || (proxy.IsStatelessWebsocketSessionID(sessionID) && (statelessOneShotEnabled() || baseKey == ""))
+	observer.Isolation(owner, downstreamID)
 	var wc *WsConnection
 	var pr *PendingRequest
 	var err2 error
+	connectionLocal := false
 	acquireStart := time.Now()
 	if prevRespID := strings.TrimSpace(gjson.GetBytes(wsBody, "previous_response_id").String()); prevRespID != "" {
-		if pwc, ppr, slotKey := e.manager.AcquirePreferredConnection(prevRespID, account.ID(), apiKey, requestScope); pwc != nil {
-			wc, pr, poolSessionID = pwc, ppr, slotKey
+		var slotKey string
+		wc, pr, slotKey, connectionLocal, err2 = acquireContinuation(e.manager, observer, prevRespID, account, apiKey, requestScope, wsURL, headers, proxyOverride, downstreamID)
+		if err2 != nil {
+			observer.Failure("gateway", "continuation", 0)
+			return nil, err2
+		}
+		if wc != nil {
+			poolSessionID = slotKey
 		}
 	}
 	if wc == nil {
-		if proxy.IsStatelessWebsocketSessionID(sessionID) && baseKey != "" && !statelessOneShotEnabled() {
+		if proxy.IsStatelessWebsocketSessionID(sessionID) && baseKey != "" && !oneShot {
 			wc, pr, poolSessionID, err2 = e.manager.AcquireReusableConnection(ctx, account, wsURL, baseKey, sessionID, statelessConnectionSlots(), headers, proxyOverride)
 		} else {
 			wc, pr, err2 = e.manager.AcquireConnection(ctx, account, wsURL, poolSessionID, headers, proxyOverride)
@@ -209,8 +229,10 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// 取连耗时（busy 排队 + 探活 + 握手）计入本 attempt 的 ws_acquire_ms（issue #413）
 	proxy.AddWsAcquireDuration(ctx, time.Since(acquireStart))
 	if err2 != nil {
+		observer.FailureIfUnset("gateway", "ws_acquire")
 		return nil, err2
 	}
+	recordConnection(observer, wc, headers)
 	// AcquireConnection 可能按 busy overflow 策略落到 <lane>#ovf-N；
 	// response_id 续链绑定和发送失败后的重拨都必须使用实际槽位，不能继续
 	// 记录调用前的 base lane。普通、stateless slot 与 preferred 路径在这里
@@ -224,14 +246,15 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// 用 DiscardConnection 按连接指针精确清理：续链亲和取回的连接其 PoolKey
 	// 可能与当前请求的 proxy 组合不同，按参数重算 key 会漏删。
 	if err := proxy.ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(wsBody, "model").String()); err != nil {
+		observer.Failure("gateway", "quota_admission", 0)
 		if !wc.cancelUnsentReadLease(pr.RequestID) {
 			e.manager.DiscardConnection(wc)
 		}
 		wc.session.RemovePendingRequest(pr.RequestID)
 		return nil, err
 	}
-	sendErr := e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID)
-	for retries := 0; shouldRetryWebsocketSendError(sendErr) && retries < 2; retries++ {
+	sendErr := e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
+	for retries := 0; !connectionLocal && shouldRetryWebsocketSendError(sendErr) && retries < 2; retries++ {
 		wc.session.RemovePendingRequest(pr.RequestID)
 		e.manager.DiscardConnection(wc)
 
@@ -246,23 +269,33 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		wc, pr, err2 = e.manager.AcquireConnection(ctx, account, wsURL, poolSessionID, headers, proxyOverride)
 		proxy.AddWsAcquireDuration(ctx, time.Since(reacquireStart))
 		if err2 != nil {
+			observer.FailureIfUnset("gateway", "ws_acquire")
 			return nil, err2
 		}
+		recordConnection(observer, wc, headers)
 		if wc.upstreamUserAgentKnown {
 			proxy.RecordUpstreamUserAgent(ctx, wc.upstreamUserAgent)
 		}
-		sendErr = e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID)
+		sendErr = e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
 	}
 	if sendErr != nil {
+		observer.Failure("transport", "ws_write", 0)
 		wc.session.RemovePendingRequest(pr.RequestID)
 		e.manager.DiscardConnection(wc)
+		if connectionLocal {
+			observer.Continuation("connection_local", "write_failed")
+			return nil, continuationUnavailable()
+		}
 		return nil, fmt.Errorf("发送 WebSocket 请求失败: %w", sendErr)
 	}
+	observer.Phase("after_payload")
 
 	// 启动心跳
 	e.manager.StartHeartbeat(wc)
 
 	return &WsResponse{
+		oneShot:      oneShot,
+		observer:     observer,
 		conn:         wc,
 		pendingReq:   pr,
 		sessionID:    poolSessionID,
@@ -284,7 +317,7 @@ func actualWebsocketPoolSessionID(wc *WsConnection, fallback string) string {
 }
 
 func shouldRetryWebsocketSendError(err error) bool {
-	if err == nil {
+	if err == nil || proxy.TransportReplayBlocked(err) {
 		return false
 	}
 	var closeErr *websocket.CloseError
@@ -336,6 +369,7 @@ const codexTurnMetadataClientPath = "client_metadata.x-codex-turn-metadata"
 // flat parent/subagent fields remain compatibility projections. Existing frame
 // values always win because they are newer than connection upgrade headers.
 func applyCodexFrameMetadata(body []byte, headers http.Header) []byte {
+	body = proxy.NormalizeCodexRequestMetadata(body)
 	if len(body) == 0 || headers == nil || !gjson.ValidBytes(body) {
 		return body
 	}
@@ -406,7 +440,7 @@ func applyCodexFrameMetadata(body []byte, headers http.Header) []byte {
 	if strings.EqualFold(strings.TrimSpace(headers.Get("X-OpenAI-Memgen-Request")), "true") {
 		body = mergeCodexTurnMetadataStringField(body, "request_kind", "memory")
 	}
-	return body
+	return proxy.NormalizeCodexRequestMetadata(body)
 }
 
 func firstCodexFrameValue(body []byte, paths ...string) string {
@@ -558,20 +592,27 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 }
 
 // sendRequest 发送 WebSocket 请求
-func (e *Executor) sendRequest(wc *WsConnection, body []byte, requestID string) error {
+func (e *Executor) sendRequest(wc *WsConnection, body []byte, requestID string, observers ...*proxy.TransportObserver) error {
 	if !wc.IsConnected() {
 		return fmt.Errorf("websocket connection is not connected")
 	}
 	if err := wc.ensureReadLeaseForSend(requestID); err != nil {
 		return err
 	}
-	return wc.WriteMessage(websocket.TextMessage, body)
+	var observer *proxy.TransportObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	observer.ResponsesInput(body, nil, "")
+	return wc.writeMessageObserved(websocket.TextMessage, body, observer)
 }
 
 // ==================== WebSocket 响应处理 ====================
 
 // WsResponse WebSocket 响应包装器
 type WsResponse struct {
+	oneShot      bool
+	observer     *proxy.TransportObserver
 	conn         *WsConnection
 	pendingReq   *PendingRequest
 	sessionID    string
@@ -607,17 +648,29 @@ func (r *WsResponse) ReadStream(callback func(data []byte) bool) error {
 	for {
 		msgType, payload, err := r.conn.ReadMessage()
 		if err != nil {
+			code := 0
+			var closeError *websocket.CloseError
+			if errors.As(err, &closeError) {
+				code = closeError.Code
+			}
+			r.observer.Failure("transport", "ws_read", code)
+			r.observer.TransportError(err)
+			r.conn.noteExit(readExitReason(err), err)
 			// ReadStream only returns successfully after consuming an explicit
 			// response terminal frame. Any socket close here, including 1000/1001,
 			// is premature and must preserve the real close error for the consumer.
 			r.markConnBroken()
-			return fmt.Errorf("websocket read error: %w", err)
+			return proxy.BlockTransportReplay(fmt.Errorf("websocket read error: %w", err))
 		}
 
 		// 只处理文本消息
 		if msgType != websocket.TextMessage {
 			if msgType == websocket.BinaryMessage {
-				return fmt.Errorf("unexpected binary message from websocket")
+				r.observer.Failure("transport", "ws_protocol", 0)
+				r.observer.TransportError(fmt.Errorf("unexpected binary message"))
+				r.conn.noteExit("unexpected_binary_frame", nil)
+				r.markConnBroken()
+				return proxy.BlockTransportReplay(fmt.Errorf("unexpected binary message from websocket"))
 			}
 			continue
 		}
@@ -643,26 +696,43 @@ func (r *WsResponse) ReadStream(callback func(data []byte) bool) error {
 
 // handleMessage 处理单条 WebSocket 消息
 func (r *WsResponse) handleMessage(payload []byte, callback func(data []byte) bool) error {
+	r.observer.Event(payload)
+	if isConnLimitErrorFrame(payload) {
+		r.conn.noteExit("upstream_connection_limit", nil)
+		r.markConnBroken()
+	}
 	// 上游错误帧：透传给下游(转成 SSE 错误事件)，而不是转成 Go error 后静默关闭 pipe。
 	// 否则下游只会读到一个底层 read error → 表现为空响应，无从得知具体错误。
 	if errEvent, isErr := r.buildErrorEvent(payload); isErr {
-		// 连接级寿命限制错误：针对连接而非单个请求，这条连接上的后续
-		// response.create 一律失败，而 Ping 探活仍会成功；归还池会持续毒害
-		// 后续请求（含续链亲和定向回来的），必须标记销毁 (issue #346)。
-		if isConnLimitErrorFrame(payload) {
+		// 把错误内容作为 SSE 数据写给下游，让客户端看到完整错误 JSON。
+		if !callback(errEvent) {
+			r.conn.noteExit("downstream_delivery_failed", nil)
 			r.markConnBroken()
 		}
-		// 把错误内容作为 SSE 数据写给下游，让客户端看到完整错误 JSON。
-		callback(errEvent)
 		// 错误即终止：结束流(等价于 response.failed)。
 		return io.EOF
 	}
 
 	// 标准化完成事件类型
 	payload = normalizeCompletionEvent(payload)
+	eventType := gjson.GetBytes(payload, "type").String()
+	if (eventType == "response.completed" || eventType == "response.incomplete") && r.manager != nil && r.conn != nil {
+		if responseID := gjson.GetBytes(payload, "response.id").String(); responseID != "" {
+			accountID := int64(0)
+			if r.conn.session != nil {
+				accountID = r.conn.session.AccountID
+			}
+			r.manager.BindResponseConn(responseID, r.conn, r.sessionID, accountID, r.apiKey, r.requestScope)
+			if gjson.GetBytes(payload, "response.store").Type == gjson.True {
+				r.manager.markResponsePersisted(responseID, r.conn)
+			}
+		}
+	}
 
 	// 调用回调
 	if !callback(payload) {
+		r.conn.noteExit("downstream_delivery_failed", nil)
+		r.observer.FailureIfUnset("downstream", "response_delivery")
 		// 下游写入失败(broken pipe / 客户端断开)：响应流在非终止边界被截断，
 		// 上游仍会在这条连接上继续推送本响应的剩余帧。连接必须销毁，
 		// 归还池中复用会把残留帧串给下一个请求(issue #308)。
@@ -671,19 +741,7 @@ func (r *WsResponse) handleMessage(payload []byte, callback func(data []byte) bo
 	}
 
 	// 检查是否是终止事件
-	eventType := gjson.GetBytes(payload, "type").String()
-	if eventType == "response.completed" || eventType == "response.failed" {
-		// 续链亲和：记录本响应由哪条连接产出，后续带 previous_response_id 的
-		// 请求可回到原连接（上游无服务端存储时上下文只存活在连接内）。
-		if eventType == "response.completed" && r.manager != nil && r.conn != nil {
-			if respID := gjson.GetBytes(payload, "response.id").String(); respID != "" {
-				accountID := int64(0)
-				if r.conn.session != nil {
-					accountID = r.conn.session.AccountID
-				}
-				r.manager.BindResponseConn(respID, r.conn, r.sessionID, accountID, r.apiKey, r.requestScope)
-			}
-		}
+	if isReadLeaseTerminal(payload) {
 		return io.EOF
 	}
 
@@ -736,11 +794,16 @@ func (r *WsResponse) buildErrorEvent(payload []byte) ([]byte, bool) {
 // (websocket_connection_limit_reached)：该错误按连接而非按请求生效，
 // 复用此连接必然继续失败。
 func isConnLimitErrorFrame(payload []byte) bool {
-	code := gjson.GetBytes(payload, "error.code").String()
-	if code == "" {
-		code = gjson.GetBytes(payload, "code").String()
+	eventType := gjson.GetBytes(payload, "type").String()
+	if eventType != "error" && eventType != "response.failed" {
+		return false
 	}
-	return code == "websocket_connection_limit_reached"
+	for _, path := range []string{"error.code", "response.error.code", "code"} {
+		if gjson.GetBytes(payload, path).String() == "websocket_connection_limit_reached" {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeCompletionEvent 标准化完成事件类型
@@ -807,6 +870,11 @@ func (r *WsResponse) Close() error {
 		if !r.connBroken && r.streamCompleted && !r.shouldDiscardOneShotConn() {
 			r.manager.ReleaseConnection(r.conn)
 		} else {
+			if r.oneShot {
+				r.conn.noteExit("one_shot_completed", nil)
+			} else if !r.streamCompleted {
+				r.conn.noteExit("response_abandoned", nil)
+			}
 			r.manager.DiscardConnection(r.conn)
 		}
 	}
@@ -820,6 +888,9 @@ func (r *WsResponse) Close() error {
 // previous_response_id 的上下文只存活在产出响应的那条连接里），因此有存活绑定时
 // 仍归还池。CODEX_WS_STATELESS_ONESHOT 模式显式承诺用完即毁，无条件销毁。
 func (r *WsResponse) shouldDiscardOneShotConn() bool {
+	if r.oneShot {
+		return true
+	}
 	if r.conn == nil || r.conn.session == nil || !proxy.IsStatelessWebsocketSessionID(r.conn.session.ID) {
 		return false
 	}

@@ -1272,6 +1272,9 @@ func normalizeResponsesInputItemIDs(body map[string]any) bool {
 		if !ok {
 			continue
 		}
+		if isResponsesCompactionItemType(firstNonEmptyAnyString(itemMap["type"])) {
+			continue
+		}
 		if _, exists := itemMap["id"]; exists {
 			delete(itemMap, "id")
 			modified = true

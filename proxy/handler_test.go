@@ -2511,7 +2511,7 @@ func TestResponsesCompactAppliesAccountMappingBeforeSuffixFallback(t *testing.T)
 	}
 }
 
-func TestResponsesCompactOpenAIReadErrorRetryReturnsBadGateway(t *testing.T) {
+func TestResponsesCompactOpenAIReadErrorStopsWithBadGateway(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2549,8 +2549,8 @@ func TestResponsesCompactOpenAIReadErrorRetryReturnsBadGateway(t *testing.T) {
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
 	}
-	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.code").String(); got != "upstream_502" {
-		t.Fatalf("error.code = %q, want upstream_502; body=%s", got, recorder.Body.String())
+	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.code").String(); got != "upstream_error" {
+		t.Fatalf("error.code = %q, want upstream_error; body=%s", got, recorder.Body.String())
 	}
 	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.message").String(); !strings.Contains(got, "Failed to read upstream response") {
 		t.Fatalf("error.message = %q, want read failure; body=%s", got, recorder.Body.String())
@@ -2635,7 +2635,7 @@ func TestResponsesCompactReadCancellationDoesNotPenalizeAccount(t *testing.T) {
 	}
 }
 
-func TestResponsesCompactCodexReadErrorRetryReturnsBadGatewayAndSyncsUsage(t *testing.T) {
+func TestResponsesCompactCodexReadErrorStopsAndSyncsUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	previousResin := resinCfg.Load()
@@ -2690,16 +2690,16 @@ func TestResponsesCompactCodexReadErrorRetryReturnsBadGatewayAndSyncsUsage(t *te
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
 	}
-	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.code").String(); got != "upstream_502" {
-		t.Fatalf("error.code = %q, want upstream_502; body=%s", got, recorder.Body.String())
+	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.code").String(); got != "upstream_error" {
+		t.Fatalf("error.code = %q, want upstream_error; body=%s", got, recorder.Body.String())
 	}
 	if !account.IsPremium5hRateLimited() {
 		t.Fatal("account should sync Codex usage headers and enter premium 5h rate_limited state")
 	}
 	upstreamMu.Lock()
 	defer upstreamMu.Unlock()
-	if len(liteHeaders) == 0 {
-		t.Fatal("compact upstream was not called")
+	if len(liteHeaders) != 1 {
+		t.Fatalf("compact requests = %d, want 1 without replay", len(liteHeaders))
 	}
 	for attempt, got := range liteHeaders {
 		if got != "true" {

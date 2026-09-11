@@ -1230,6 +1230,9 @@ func stripResponseItemID(raw json.RawMessage) (json.RawMessage, bool) {
 	if err := json.Unmarshal(raw, &item); err != nil || item == nil {
 		return raw, true
 	}
+	if isResponsesCompactionItemType(firstNonEmptyAnyString(item["type"])) {
+		return raw, true
+	}
 	if _, exists := item["id"]; !exists {
 		return raw, true
 	}

@@ -30,7 +30,7 @@ func TestServiceErrorsPersistencePaginationAndIsolation(test *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for index := 0; index < 4; index++ {
-		event := ServiceErrorEvent{ID: fmt.Sprintf("event-%d", index), CreatedAt: now, StatusCode: 429, Stage: "rate_limit", RequestID: "request-one", NewAPIRequestID: "newapi-one", Message: "concurrency exhausted"}
+		event := ServiceErrorEvent{ID: fmt.Sprintf("event-%d", index), CreatedAt: now, StatusCode: 429, Stage: "rate_limit", RequestID: "request-one", NewAPIRequestID: "newapi-one", Message: "concurrency exhausted", UpstreamInfo: json.RawMessage(`{"send_phase":"before_payload","error_source":"gateway"}`)}
 		if index == 3 {
 			event.StatusCode, event.Stage = 400, "root_binding"
 		}
@@ -52,6 +52,9 @@ func TestServiceErrorsPersistencePaginationAndIsolation(test *testing.T) {
 		test.Fatalf("first page=%+v err=%v", first, err)
 	}
 	filter.Cursor = first.NextCursor
+	if string(first.Items[0].UpstreamInfo) != `{"send_phase":"before_payload","error_source":"gateway"}` {
+		test.Fatalf("upstream diagnostics not persisted: %s", first.Items[0].UpstreamInfo)
+	}
 	second, err := db.ListServiceErrors(context.Background(), filter)
 	if err != nil || len(second.Items) != 2 || second.NextCursor != "" || second.Items[0].ID != "event-1" || second.Summary.Total != 4 {
 		test.Fatalf("second page=%+v err=%v", second, err)
@@ -85,7 +88,8 @@ func TestServiceErrorQueueBoundedAndImmutable(test *testing.T) {
 	defer db.serviceErrors.cancel()
 	reasons := []string{"root_unresolved"}
 	clientInfo := map[string]string{"headers.X-Codex-Installation-Id": "device-before-mutation"}
-	event := ServiceErrorEvent{ID: "bounded", StatusCode: 429, Message: strings.Repeat("中文", 3000), CandidateRejections: reasons, ClientInfo: clientInfo}
+	upstream := json.RawMessage(`{"send_phase":"before_payload"}`)
+	event := ServiceErrorEvent{ID: "bounded", StatusCode: 429, Message: strings.Repeat("中文", 3000), CandidateRejections: reasons, ClientInfo: clientInfo, UpstreamInfo: upstream}
 	for index := 0; index < serviceErrorQueueCapacity; index++ {
 		if !db.EnqueueServiceError(event) {
 			test.Fatalf("queue full at %d", index)
@@ -96,7 +100,11 @@ func TestServiceErrorQueueBoundedAndImmutable(test *testing.T) {
 	}
 	reasons[0] = "mutated"
 	clientInfo["headers.X-Codex-Installation-Id"] = "mutated"
+	upstream[0] = 'X'
 	job := <-db.serviceErrors.jobs
+	if !json.Valid(job.event.UpstreamInfo) {
+		test.Fatalf("mutable upstream diagnostics: %s", job.event.UpstreamInfo)
+	}
 	if len(job.event.Message) > 2048 || !utf8.ValidString(job.event.Message) || job.event.CandidateRejections[0] != "root_unresolved" || job.event.ClientInfo["headers.X-Codex-Installation-Id"] != "device-before-mutation" || !json.Valid([]byte(job.payload)) {
 		test.Fatalf("unbounded or mutable event: %+v", job.event)
 	}

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,5 +29,6 @@ func (h *Handler) GetUsageRequestDiagnostics(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "读取请求诊断失败")
 		return
 	}
+	detail.Diagnostics = proxy.EnrichWebsocketLifecycle(detail.Diagnostics)
 	c.JSON(http.StatusOK, detail)
 }

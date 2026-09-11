@@ -46,6 +46,22 @@ export function diagnosticEntries(value: unknown, includeMissing = false): [stri
   return Object.entries(fields).filter(([key]) => !key.startsWith('_'))
 }
 
+export function diagnosticOutboundIdentity(value: unknown): Record<string, unknown> {
+  const identity = diagnosticRecord(value)
+  const result: Record<string, unknown> = {}
+  if (identity.truncated === true) result.capture_truncated = true
+  for (const source of ['http', 'ws_handshake', 'body']) {
+    const groups = diagnosticRecord(identity[source])
+    const names = source === 'body' ? ['client_metadata', 'turn_metadata', 'links'] : ['headers', 'turn_metadata']
+    for (const group of names) {
+      for (const [field, item] of diagnosticEntries(groups[group])) {
+        result[`${source}.${group}.${field}`] = item
+      }
+    }
+  }
+  return result
+}
+
 export function diagnosticValueText(value: unknown): string | null {
   if (value === null || value === undefined || value === '' || value === '0001-01-01T00:00:00Z') return null
   if (typeof value === 'string') return value

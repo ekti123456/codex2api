@@ -53,6 +53,7 @@ type ServiceErrorEvent struct {
 	RootAccountWaitMs      int64             `json:"root_account_wait_ms,omitempty"`
 	CandidateRejections    []string          `json:"candidate_rejections,omitempty"`
 	ClientInfo             map[string]string `json:"client_info,omitempty"`
+	UpstreamInfo           json.RawMessage   `json:"upstream,omitempty"`
 }
 
 type ServiceErrorFilter struct {
@@ -189,6 +190,11 @@ func normalizeServiceError(event ServiceErrorEvent) ServiceErrorEvent {
 		remaining -= len(name) + len(value)
 	}
 	event.ClientInfo = clientInfo
+	if len(event.UpstreamInfo) > 8192 || !json.Valid(event.UpstreamInfo) {
+		event.UpstreamInfo = nil
+	} else {
+		event.UpstreamInfo = append(json.RawMessage(nil), event.UpstreamInfo...)
+	}
 	return event
 }
 

@@ -201,7 +201,7 @@ func TestRotatePolicyCannotSwitchStableSessionOnTemporaryFailure(t *testing.T) {
 	}
 }
 
-func TestStickyFailureStreamBreakAndResponseFailedRetrySameAccount(t *testing.T) {
+func TestStickyFailureStreamBreakStopsAndExplicitFailureRetriesSameAccount(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cases := map[string]func(http.ResponseWriter, int32){
 		"early EOF": func(w http.ResponseWriter, n int32) {
@@ -228,7 +228,11 @@ func TestStickyFailureStreamBreakAndResponseFailedRetrySameAccount(t *testing.T)
 			)
 			defer cleanup()
 			recorder := runStickyFailureRequest(t, handler)
-			if recorder.Code != http.StatusOK || callsA.Load() != 4 || callsB.Load() != 0 {
+			wantStatus, wantCalls := http.StatusOK, int32(4)
+			if name == "early EOF" {
+				wantStatus, wantCalls = http.StatusBadGateway, 1
+			}
+			if recorder.Code != wantStatus || callsA.Load() != wantCalls || callsB.Load() != 0 {
 				t.Fatalf("downstream=%d A=%d B=%d body=%s", recorder.Code, callsA.Load(), callsB.Load(), recorder.Body.String())
 			}
 			if boundID, ok := store.SessionAffinityAccountID(key); !ok || boundID != accountA.ID() {

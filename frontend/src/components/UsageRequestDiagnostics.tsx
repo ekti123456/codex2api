@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { UsageLog } from '../types'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
 import { useToast } from '../hooks/useToast'
 import Modal from './Modal'
 import { Button } from './ui/button'
@@ -56,9 +56,12 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
   }, [id, reload])
 
   const data = detail?.diagnostics
+  const { outbound_identity: outboundIdentity, ...upstream } = diagnosticRecord(data?.upstream)
   const sections: [string, unknown][] = data ? [
-    ['request', { request_type: detail.request_type, ...diagnosticRecord(data.request), started_at: data.started_at, completed_at: data.completed_at, correlation_id: data.correlation_id, newapi_request_id: data.newapi_request_id, attempt: data.attempt, capture_status: data.capture_status }],
+    ['request', { request_type: detail.request_type, ...diagnosticRecord(data.request), started_at: data.started_at, completed_at: data.completed_at, correlation_id: data.correlation_id, newapi_request_id: data.newapi_request_id, attempt: data.attempt, capture_status: data.capture_status, responses_input: data.responses_input }],
     ['client', diagnosticClientInfo(data.incoming)],
+    ['upstream', upstream],
+    ['outbound', diagnosticOutboundIdentity(outboundIdentity)],
     ['resolved', data.resolved],
     ['continuity', data.session_continuity],
     ['audit', data.audit],

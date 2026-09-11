@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,8 @@ type usageRequestDiagnostics struct {
 	NewAPIRequestID       string                       `json:"newapi_request_id,omitempty"`
 	Request               *usageRequestInfo            `json:"request,omitempty"`
 	CaptureStatus         string                       `json:"capture_status,omitempty"`
+	Upstream              *UpstreamTransportDiagnostic `json:"upstream,omitempty"`
+	ResponsesInput        *responsesInputDiagnostic    `json:"responses_input,omitempty"`
 	Incoming              map[string]map[string]string `json:"incoming"`
 	Resolved              *usageRequestResolution      `json:"resolved,omitempty"`
 	Audit                 *usageRequestAuthorization   `json:"audit,omitempty"`
@@ -229,6 +232,15 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 		return
 	}
 	state.rootCaptured = true
+	endpoint := ""
+	var headers http.Header
+	if c.Request != nil {
+		headers = c.Request.Header
+		if c.Request.URL != nil {
+			endpoint = c.Request.URL.Path
+		}
+	}
+	state.ResponsesInput = diagnoseResponsesInput(body, headers, endpoint)
 	c.Set(sessionOperationsContextKey, nil)
 	c.Set(sessionContinuityContextKey, nil)
 	if c.Request != nil {
@@ -374,6 +386,18 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 	}
 	snapshot := *state
 	snapshot.Request = usageRequestInfoSnapshot(c, input)
+	if input.UpstreamDiagnostics != "" {
+		var upstream UpstreamTransportDiagnostic
+		if json.Unmarshal([]byte(input.UpstreamDiagnostics), &upstream) == nil {
+			if upstream.ErrorSource == "" && input.StatusCode >= 400 {
+				upstream.ErrorSource, upstream.ErrorStage = "unknown", "unclassified"
+				if upstream.Transport == "http" && upstream.HTTPStatus >= 200 && upstream.HTTPStatus < 300 {
+					upstream.ErrorSource, upstream.ErrorStage = "upstream_stream_or_transport", "after_headers"
+				}
+			}
+			snapshot.Upstream = &upstream
+		}
+	}
 	snapshot.CaptureStatus = "partial"
 	if state.rootCaptured {
 		snapshot.CaptureStatus = "captured"
@@ -432,6 +456,12 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 	if len(payload) > database.MaxUsageRequestDiagnosticsBytes {
 		snapshot.Incoming = nil
 		snapshot.Truncated = true
+		payload, err = json.Marshal(snapshot)
+	}
+	if len(payload) > database.MaxUsageRequestDiagnosticsBytes && snapshot.Upstream != nil && snapshot.Upstream.OutboundIdentity != nil {
+		upstream := *snapshot.Upstream
+		upstream.OutboundIdentity = &outboundIdentityDiagnostic{Truncated: true}
+		snapshot.Upstream = &upstream
 		payload, err = json.Marshal(snapshot)
 	}
 	if err == nil && len(payload) <= database.MaxUsageRequestDiagnosticsBytes {

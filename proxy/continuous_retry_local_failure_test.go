@@ -564,7 +564,7 @@ func TestContinuousRetryDisabledMessagesStickyTransportRetryKeepsSameAccount(t *
 	}
 }
 
-func TestContinuousRetryBufferedRelayTransportRetryKeepsSameAccount(t *testing.T) {
+func TestContinuousRetryBufferedRelayAmbiguousDeliveryStops(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousSettings := CurrentRuntimeSettings()
 	t.Cleanup(func() { ApplyRuntimeSettings(previousSettings) })
@@ -619,20 +619,16 @@ func TestContinuousRetryBufferedRelayTransportRetryKeepsSameAccount(t *testing.T
 		path: "/v1/responses", body: `{"model":"gpt-4.1-direct","input":"hello","stream":true}`,
 		invoke: func(h *Handler, c *gin.Context) { h.Responses(c) },
 	}
-	recorder, affinityKey := continuousRetryLocalRequest(t, tc, handler)
-	if calls.Load() != 2 {
-		t.Fatalf("relay transport attempts = %d, want 2; body=%q", calls.Load(), recorder.Body.String())
+	recorder, _ := continuousRetryLocalRequest(t, tc, handler)
+	if calls.Load() != 1 {
+		t.Fatalf("relay transport attempts = %d, want 1; body=%q", calls.Load(), recorder.Body.String())
 	}
 	firstAuthorization := <-authorizations
-	secondAuthorization := <-authorizations
-	if firstAuthorization == "" || firstAuthorization != secondAuthorization {
-		t.Fatalf("buffered relay sticky retry changed account credentials: first=%q second=%q", firstAuthorization, secondAuthorization)
+	if firstAuthorization == "" || len(authorizations) != 0 {
+		t.Fatal("ambiguous delivery must not send another authenticated request")
 	}
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "relay-sticky-success") {
-		t.Fatalf("relay sticky retry response = status %d body %q", recorder.Code, recorder.Body.String())
-	}
-	if _, ok := store.SessionAffinityAccountID(affinityKey); !ok {
-		t.Fatal("relay sticky winner did not leave a committed affinity binding")
+	if !strings.Contains(recorder.Body.String(), `"code":"upstream_error"`) || strings.Contains(recorder.Body.String(), "relay-sticky-success") {
+		t.Fatalf("ambiguous delivery should fail once: status %d body %q", recorder.Code, recorder.Body.String())
 	}
 }
 

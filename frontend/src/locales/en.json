@@ -2252,7 +2252,7 @@
       "retry": "Reload",
       "types": { "user": "User request", "related_internal": "Related internal", "independent_internal": "Independent background", "related_unclassified": "Related (not classified internal)", "compaction": "Compaction", "gateway_internal": "Gateway internal", "unknown": "Unrecognized", "not_recorded": "Not recorded" },
       "clientHint": "Inbound client claims are shown separately by source. Conflicting installation/device IDs are not merged and are not the upstream account's converged device ID. Missing or historically unrecorded fields are not inferred. SDK, version and system information appears only when provided.",
-      "sections": { "request": "Request", "client": "Client and device", "resolved": "Resolved identity", "audit": "Content inspection", "dispatch": "Model dispatch", "windows": "Window decisions", "routing": "Account selection", "recent": "Unlinked recent-account fallback", "incoming": "Ingress fields by source" }
+      "sections": { "request": "Request", "client": "Client and device", "upstream": "Upstream egress, connection and failure phase", "outbound": "Final outbound identity (HTTP / WS handshake / body)", "resolved": "Resolved identity", "audit": "Content inspection", "dispatch": "Model dispatch", "windows": "Window decisions", "routing": "Account selection", "recent": "Unlinked recent-account fallback", "incoming": "Ingress fields by source" }
     },
     "imageInputTokens": "Image input tokens",
     "imageOutputTokens": "Image output tokens",

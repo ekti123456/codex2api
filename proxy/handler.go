@@ -2350,7 +2350,7 @@ func websocketMessageTooBigSource(message string) string {
 }
 
 func isWebsocketMessageTooBigOutcome(outcome streamOutcome) bool {
-	return outcome.failureKind == upstreamErrorKindMessageTooBig
+	return !outcome.replayBlocked && outcome.failureKind == upstreamErrorKindMessageTooBig
 }
 
 func shouldFallbackWebsocketMessageTooBigToHTTP(outcome streamOutcome, useWebsocket bool, wroteAnyBody bool, ctxErr, writeErr error) bool {
@@ -2427,6 +2427,7 @@ func classifyHTTPFailure(statusCode int) string {
 }
 
 type streamOutcome struct {
+	replayBlocked  bool
 	logStatusCode  int
 	failureKind    string
 	failureMessage string
@@ -2499,7 +2500,13 @@ func isWebsocketUpstreamClose(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "websocket read error")
 }
 
-func classifyStreamOutcome(ctxErr, readErr, writeErr error, gotTerminal bool) streamOutcome {
+func classifyStreamOutcome(ctxErr, readErr, writeErr error, gotTerminal bool) (outcome streamOutcome) {
+	defer func() {
+		if TransportReplayBlocked(readErr) {
+			outcome.replayBlocked = true
+			outcome.penalize = false
+		}
+	}()
 	if errors.Is(ctxErr, errContinuousRetryDeadlineExceeded) {
 		return streamOutcome{
 			logStatusCode:  http.StatusGatewayTimeout,
@@ -2943,6 +2950,9 @@ func shouldTransparentRetryStreamWithBudgets(outcome streamOutcome, generalRetri
 }
 
 func shouldTransparentRetryStreamEventWithBudgets(outcome streamOutcome, eventType string, generalRetries, rateLimitRetries *int, maxGeneralRetries, maxRateLimitRetries int, wroteAnyBody bool, ctxErr, writeErr error, policies ...database.ContinuousRetryPolicy) bool {
+	if outcome.replayBlocked {
+		return false
+	}
 	// Native relay passthrough returns an already-classified client-closed
 	// outcome instead of a separate writeErr. Never turn failed downstream
 	// delivery into another upstream request, even in catch-all mode.
@@ -3684,6 +3694,9 @@ func (h *Handler) shouldRetryUpstreamHTTPStatus(statusCode int, body []byte, gen
 }
 
 func shouldRetryRequestError(err error, generalRetries *int, maxGeneralRetries int, policies ...database.ContinuousRetryPolicy) bool {
+	if TransportReplayBlocked(err) {
+		return false
+	}
 	if codexCapacityRequestRetryDisabled(err) {
 		return false
 	}
@@ -3711,6 +3724,9 @@ func shouldRetryRequestError(err error, generalRetries *int, maxGeneralRetries i
 // ErrUpstream(0, ..., cause) for failures from http.Client.Do; those remain
 // retryable even though a status-less Error cannot set Retryable by status.
 func isRetryableRequestError(err error) bool {
+	if TransportReplayBlocked(err) {
+		return false
+	}
 	if codexCapacityRequestRetryDisabled(err) {
 		return false
 	}
@@ -3735,6 +3751,9 @@ func isRetryableRequestError(err error) bool {
 }
 
 func isRetryableRequestErrorForContext(ctx context.Context, err error, policies ...database.ContinuousRetryPolicy) bool {
+	if TransportReplayBlocked(UpstreamTransportObserver(ctx).TransportError(err)) {
+		return false
+	}
 	if apiKeyModelRequestError(err) != nil {
 		return false
 	}
@@ -5342,7 +5361,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			if wsHTTPFallback.ForceHTTP() && !useWebsocket {
 				wsHTTPFallback.LogHTTPAttemptCompletion("/v1/responses", account.ID(), attempt+1, durationMs, 0, logStatusUpstreamStreamBreak)
 			}
-			if useWebsocket && kind == upstreamErrorKindMessageTooBig {
+			if useWebsocket && kind == upstreamErrorKindMessageTooBig && !TransportReplayBlocked(reqErr) {
 				wsElapsed := time.Since(start)
 				globalWSSizeRouter.RecordMessageTooBig(len(codexBody))
 				wsHTTPFallback.Retain(account, proxyURL, wsElapsed, websocketMessageTooBigSource(reqErr.Error()))
@@ -5661,6 +5680,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 				outputCollector.Add(data)
 				eventType, data, parsed = rewriteEmptyIncompleteTerminal(emptyIncomplete, eventType, data, parsed)
+				UpstreamTransportObserver(c.Request.Context()).ResponsesTerminal(eventType, data, c.Request.Context().Err() != nil)
 
 				// 提取 usage + service_tier
 				if isResponsesSuccessTerminalEvent(eventType) {
@@ -5740,6 +5760,13 @@ func (h *Handler) Responses(c *gin.Context) {
 					shouldDefer := shouldDeferPreContentSSEEvent(eventType, contentTokenSeen, gotTerminal, preflightPassthrough) ||
 						(!contentTokenSeen && !visibleBody && !gotTerminal && isRetryableUpstreamErrorFrame(eventType, data, continuousRetryPolicy))
 					wrote, err := writeDeferredSSEData(streamWriter, &pendingFirstTokenEvents, data, shouldDefer)
+					if isResponsesTerminalEvent(eventType) || eventType == "error" {
+						disposition := "accepted"
+						if streamAttempt != nil {
+							disposition = "buffered"
+						}
+						UpstreamTransportObserver(c.Request.Context()).ResponsesTerminalWrite(disposition, err)
+					}
 					if err != nil {
 						writeErr = err
 						clientGone = true
@@ -5889,6 +5916,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			if writeErr == nil && wroteAnyBody {
 				writeErr = streamWriter.Flush()
 			}
+			UpstreamTransportObserver(c.Request.Context()).ResponsesDeliveryFinished(c.Request.Context().Err(), writeErr)
 			// 流结束但未收到终止事件（上游断流）：已写过正文时无法整段静默重试，
 			// 合成 response.failed（code=upstream_stream_break）给下游一个可编程
 			// 识别的失败终态，而不是静默 EOF 的"假 200"(issue #473)。启用整次
@@ -6073,6 +6101,10 @@ func (h *Handler) Responses(c *gin.Context) {
 				return
 			}
 			if commitErr := h.commitResponsesStreamAttempt(c, streamAttempt, affinityKey, account, resp.Header); commitErr != nil {
+				if isStream {
+					UpstreamTransportObserver(c.Request.Context()).ResponsesTerminalWrite("failed", commitErr)
+					UpstreamTransportObserver(c.Request.Context()).ResponsesDeliveryFinished(c.Request.Context().Err(), commitErr)
+				}
 				if isContinuousRetryLocalFailure(commitErr) {
 					outcome = overlayContinuousRetryLocalFailure(outcome, commitErr)
 				} else {
@@ -6084,6 +6116,10 @@ func (h *Handler) Responses(c *gin.Context) {
 					h.recordCompactionProvenanceFromPayload(context.Background(), account, payload)
 				}
 				if isStream && len(completedResponseData) > 0 {
+					if streamAttempt != nil {
+						UpstreamTransportObserver(c.Request.Context()).ResponsesTerminalWrite("accepted", nil)
+						UpstreamTransportObserver(c.Request.Context()).ResponsesDeliveryFinished(c.Request.Context().Err(), nil)
+					}
 					cacheCompletedResponseWithOutputItems(respCacheOwner, []byte(expandedInputRaw), completedResponseData, completedResponseOutputItems)
 					if responseID := responseIDFromPayload(completedResponseData); responseID != "" {
 						h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account))
@@ -7537,7 +7573,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			if wsHTTPFallback.ForceHTTP() && !useWebsocket {
 				wsHTTPFallback.LogHTTPAttemptCompletion("/v1/chat/completions", account.ID(), attempt+1, durationMs, 0, logStatusUpstreamStreamBreak)
 			}
-			if useWebsocket && kind == upstreamErrorKindMessageTooBig {
+			if useWebsocket && kind == upstreamErrorKindMessageTooBig && !TransportReplayBlocked(reqErr) {
 				wsElapsed := time.Since(start)
 				globalWSSizeRouter.RecordMessageTooBig(len(codexBody))
 				wsHTTPFallback.Retain(account, proxyURL, wsElapsed, websocketMessageTooBigSource(reqErr.Error()))

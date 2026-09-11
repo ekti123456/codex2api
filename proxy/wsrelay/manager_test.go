@@ -362,7 +362,7 @@ func TestAcquireConnectionCapsIdleConnectionsAtAccountConcurrency(t *testing.T) 
 	}
 }
 
-func TestAcquireConnectionKeepsActualHandshakeUserAgentWhenReused(t *testing.T) {
+func TestAcquireConnectionRotatesWhenHandshakeUserAgentChanges(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -412,14 +412,14 @@ func TestAcquireConnectionKeepsActualHandshakeUserAgentWhenReused(t *testing.T) 
 		manager.DiscardConnection(reused)
 	}()
 
-	if reused != first {
-		t.Fatal("second acquisition did not reuse the existing WebSocket connection")
+	if reused == first || first.IsConnected() {
+		t.Fatal("changed handshake User-Agent must replace the idle WebSocket connection")
 	}
 	if !reused.upstreamUserAgentKnown {
 		t.Fatal("reused connection is missing its handshake User-Agent audit")
 	}
-	if got := reused.upstreamUserAgent; got != "codex-first/1.0" {
-		t.Fatalf("reused connection User-Agent = %q, want original handshake value", got)
+	if got := reused.upstreamUserAgent; got != "codex-new-setting/2.0" {
+		t.Fatalf("connection User-Agent = %q, want current handshake value", got)
 	}
 }
 

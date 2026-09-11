@@ -231,6 +231,14 @@ func (handler *Handler) recordServiceError(ctx *gin.Context, status int, apiErro
 		APIKeyID: state.apiKeyID, APIKeyName: serviceErrorSafeText(ctx, state.apiKeyName, 160), RequestType: "unknown",
 	}
 	var incoming map[string]map[string]string
+	upstream := trace.Transport
+	if upstream == nil {
+		upstream = &UpstreamTransportDiagnostic{Transport: "not_started", EgressKind: "unknown", PublicEgressIPStatus: "not_observed", SendPhase: "before_payload", ErrorSource: "gateway", ErrorStage: event.Stage}
+	}
+	if upstream.ErrorSource == "" {
+		upstream.ErrorSource, upstream.ErrorStage = "gateway", event.Stage
+	}
+	event.UpstreamInfo = []byte(transportDiagnosticJSON(upstream))
 	if value, exists := ctx.Get(usageRequestDiagnosticsContextKey); exists {
 		if diagnostics, ok := value.(*usageRequestDiagnostics); ok && diagnostics != nil {
 			incoming = diagnostics.Incoming

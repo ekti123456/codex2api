@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/codex2api/database"
+	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
 
@@ -68,6 +69,9 @@ func (handler *Handler) GetServiceErrorLogs(ctx *gin.Context) {
 	if err != nil {
 		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "服务错误日志查询失败，请稍后重试"})
 		return
+	}
+	for index := range page.Items {
+		page.Items[index].UpstreamInfo = proxy.EnrichUpstreamWebsocketLifecycle(page.Items[index].UpstreamInfo)
 	}
 	ctx.JSON(http.StatusOK, page)
 }

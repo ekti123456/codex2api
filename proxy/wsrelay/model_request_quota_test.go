@@ -91,9 +91,10 @@ func TestExecuteWebsocketModelQuotaRejectionReturnsUnsentLeaseToIdle(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	poolKey := manager.poolKey(account.ID(), wsURL, sessionID, "")
+	poolSession := proxy.WebsocketTransportPartition(proxy.WebsocketTransportOwner(context.Background(), key), "", sessionID)
+	poolKey := manager.poolKey(account.ID(), wsURL, poolSession, "")
 	session := NewSession(account.ID(), manager)
-	session.ID = sessionID
+	session.ID = poolSession
 	session.SetConnected(true)
 	wc := NewWsConnection(conn, session, wsURL)
 	wc.PoolKey = poolKey

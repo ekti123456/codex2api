@@ -363,7 +363,7 @@ func (wc *WsConnection) enqueueBusinessFrameForCapturedLease(messageType int, pa
 
 func isReadLeaseTerminal(payload []byte) bool {
 	switch gjson.GetBytes(payload, "type").String() {
-	case "response.completed", "response.failed", "response.done", "error":
+	case "response.completed", "response.incomplete", "response.failed", "response.done", "error":
 		return true
 	default:
 		return false
@@ -448,6 +448,7 @@ func (wc *WsConnection) finalizeReadPumpFailure(state *wsReadState) {
 		state.mu.Lock()
 		readerErr := state.readerErr
 		state.mu.Unlock()
+		wc.noteExit(readExitReason(readerErr), readerErr)
 		idle := time.Duration(0)
 		if ts := wc.lastUsed.Load(); ts > 0 {
 			idle = time.Since(time.Unix(0, ts)).Round(time.Millisecond)
@@ -878,6 +879,7 @@ func (wc *WsConnection) readMessageWithLiveness(checkInterval, recentInboundWind
 			// 约束就在这里)。文案含 "timed out" 供故障归因识别为超时。
 			silence := time.Since(started)
 			if maxTurnSilence > 0 && silence >= maxTurnSilence {
+				wc.noteExit("business_response_timeout", nil)
 				log.Printf("[WS] 读路径静默超限 account=%d 静默=%s 上限=%s 已续命%d次", wc.sessionAccountID(), silence.Round(time.Second), maxTurnSilence, rescuedCheckpoints)
 				return 0, nil, fmt.Errorf(
 					"websocket read timed out: no business frame within %s (%d liveness checkpoint(s) rescued)",
@@ -906,6 +908,7 @@ func (wc *WsConnection) readMessageWithLiveness(checkInterval, recentInboundWind
 			recentInbound = wc.recentInboundWithin(recentInboundWindow)
 			if !probeAlive && !hasQueuedItem && !readerStopped && !recentInbound {
 				state.mu.Unlock()
+				wc.noteExit("heartbeat_pong_timeout", nil)
 				return 0, nil, fmt.Errorf(
 					"websocket liveness check timed out after %s: no inbound activity within %s and no matching pong within %s",
 					checkInterval,

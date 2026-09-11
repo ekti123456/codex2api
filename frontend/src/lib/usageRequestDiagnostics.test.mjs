@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey } from './usageRequestDiagnostics.ts'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey } from './usageRequestDiagnostics.ts'
 
 test('historical and unknown request types are not inferred', () => {
   assert.equal(usageRequestTypeLabelKey(), 'usage.diagnostics.types.not_recorded')
@@ -48,4 +48,23 @@ test('old diagnostic snapshots do not synthesize device information', () => {
   const fields = Object.fromEntries(diagnosticEntries({ window_number: 0 }, true))
   assert.equal(fields.window_number, 0)
   assert.equal(diagnosticValueText(fields.installation_id), null)
+})
+
+test('outbound identity separates actual handshake values from current frame values', () => {
+  const info = diagnosticOutboundIdentity({
+    http: { headers: { 'User-Agent': 'http-client' }, turn_metadata: { installation_id: 'http-device' } },
+    ws_handshake: { headers: { 'User-Agent': 'original-handshake-client' }, turn_metadata: { window_id: 'thread:1' } },
+    body: { client_metadata: { 'x-codex-installation-id': 'frame-device' }, turn_metadata: { window_id: 'thread:2' }, links: { previous_response_id: 'hash:response' }, input: 'not displayed' },
+    incoming: { installation_id: 'not displayed' },
+    _private: 'hidden',
+  })
+  assert.equal(info['http.headers.User-Agent'], 'http-client')
+  assert.equal(info['ws_handshake.headers.User-Agent'], 'original-handshake-client')
+  assert.equal(info['ws_handshake.turn_metadata.window_id'], 'thread:1')
+  assert.equal(info['body.turn_metadata.window_id'], 'thread:2')
+  assert.equal(info['body.client_metadata.x-codex-installation-id'], 'frame-device')
+  assert.equal(info['body.links.previous_response_id'], 'hash:response')
+  assert.equal(JSON.stringify(info).includes('not displayed'), false)
+  assert.deepEqual(diagnosticOutboundIdentity(undefined), {})
+  assert.deepEqual(diagnosticOutboundIdentity({ truncated: true }), { capture_truncated: true })
 })

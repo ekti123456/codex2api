@@ -151,6 +151,9 @@ func isExplicitUpstreamCyberPolicyError(err error) bool {
 }
 
 func continuousRetryRequestErrorSelected(policy database.ContinuousRetryPolicy, err error) bool {
+	if TransportReplayBlocked(err) {
+		return false
+	}
 	if codexCapacityRequestError(err) != nil {
 		return false
 	}
@@ -176,6 +179,9 @@ func continuousRetryRequestErrorSelected(policy database.ContinuousRetryPolicy, 
 }
 
 func continuousRetryStreamSelected(outcome streamOutcome, payload []byte, eventType string, policies ...database.ContinuousRetryPolicy) bool {
+	if outcome.replayBlocked {
+		return false
+	}
 	if codexCapacityErrorForClient(payload) != nil || codexCapacityErrorForClient(outcome.failurePayload) != nil {
 		return false
 	}
@@ -283,6 +289,9 @@ func terminalUpstreamErrorPayload(payload []byte) []byte {
 // into account-scoped 4xx/context/error-frame failures whose legacy outcome is
 // not penalized.
 func continuousRetryStreamFailureSelected(outcome streamOutcome, payload []byte, eventType string, policies ...database.ContinuousRetryPolicy) bool {
+	if outcome.replayBlocked {
+		return false
+	}
 	if outcome.terminalLocal || strings.EqualFold(strings.TrimSpace(outcome.failureKind), "continuous_retry_timeout") {
 		return false
 	}

@@ -51,9 +51,10 @@ func TestWebsocketEnvironmentUsesCurrentFrameAndActualConnectionProxy(test *test
 	account := &auth.Account{DBID: 1973, AccessToken: "dummy", ProxyURL: "http://original:8080", CodexFingerprintMode: auth.CodexFingerprintModeDevice, DynamicConcurrencyLimit: 1}
 	const sessionID = "environment-session"
 	wsURL, _ := buildWebsocketURL(proxy.CodexBaseURL + CodexWsEndpoint)
-	poolKey := manager.poolKey(account.ID(), wsURL, sessionID, account.ProxyURL)
+	poolSession := proxy.WebsocketTransportPartition(proxy.WebsocketTransportOwner(context.Background(), "key"), "", sessionID)
+	poolKey := manager.poolKey(account.ID(), wsURL, poolSession, account.ProxyURL)
 	session := NewSession(account.ID(), manager)
-	session.ID = sessionID
+	session.ID = poolSession
 	session.SetConnected(true)
 	wrapped := NewWsConnection(connection, session, wsURL)
 	wrapped.PoolKey, wrapped.proxyURL = poolKey, account.ProxyURL
@@ -82,7 +83,6 @@ func TestWebsocketEnvironmentUsesCurrentFrameAndActualConnectionProxy(test *test
 		selectedProxy := account.ProxyURL
 		if turn > 0 {
 			payload["previous_response_id"] = fmt.Sprintf("resp_env_%d", turn-1)
-			selectedProxy = "http://different-requested-proxy:8080"
 		}
 		body, _ := json.Marshal(payload)
 		response, err := executor.ExecuteRequestViaWebsocket(ctx, account, body, sessionID, selectedProxy, "key", nil, http.Header{}, "")
@@ -108,5 +108,16 @@ func TestWebsocketEnvironmentUsesCurrentFrameAndActualConnectionProxy(test *test
 		case <-ctx.Done():
 			test.Fatal("no upstream frame received")
 		}
+	}
+	_, err = executor.ExecuteRequestViaWebsocket(context.Background(), account,
+		[]byte(`{"model":"gpt-6-astra","previous_response_id":"resp_env_2","input":[]}`),
+		sessionID, "http://different-requested-proxy:8080", "key", nil, http.Header{}, "")
+	if err == nil || proxy.StatusCodeFromError(err) != http.StatusBadRequest || proxy.IsRetryableError(err) {
+		test.Fatalf("changed proxy must stop connection-local continuation: %v", err)
+	}
+	select {
+	case payload := <-received:
+		test.Fatalf("rejected continuation was sent: %s", payload)
+	default:
 	}
 }

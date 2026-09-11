@@ -2252,7 +2252,7 @@
       "retry": "重新加载",
       "types": { "user": "用户主请求", "related_internal": "关联被动", "independent_internal": "独立后台", "related_unclassified": "关联请求（未判被动）", "compaction": "压缩请求", "gateway_internal": "网关内部", "unknown": "未识别", "not_recorded": "未记录" },
       "clientHint": "客户端入站声明按来源分别展示，不合并有差异的安装/设备 ID，也不等同于上游账号收敛后的设备 ID。未发送或旧日志未采集的字段不推测；SDK、版本和系统信息仅在实际携带时显示。",
-      "sections": { "request": "请求信息", "client": "客户端与设备", "resolved": "实际解析结果", "audit": "内容审核阶段", "dispatch": "模型调度阶段", "windows": "窗口处理结果", "routing": "账号选择结果", "recent": "无根最近账号回溯", "incoming": "入口字段（按来源分开）" }
+      "sections": { "request": "请求信息", "client": "客户端与设备", "upstream": "上游出口、连接与错误阶段", "outbound": "最终出站身份（HTTP／WS 握手／正文）", "resolved": "实际解析结果", "audit": "内容审核阶段", "dispatch": "模型调度阶段", "windows": "窗口处理结果", "routing": "账号选择结果", "recent": "无根最近账号回溯", "incoming": "入口字段（按来源分开）" }
     },
     "imageInputTokens": "图片输入 token",
     "imageOutputTokens": "图片输出 token",

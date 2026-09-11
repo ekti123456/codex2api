@@ -237,7 +237,7 @@ func (h *Handler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 	conn.SetReadLimit(int64(security.MaxRequestBodySize))
-	requestCtx, messages, readPumpDone, cancel := startResponsesWSReadPump(c.Request.Context(), conn)
+	requestCtx, messages, readPumpDone, cancel := startResponsesWSReadPump(WithDownstreamWebsocketConnection(c.Request.Context()), conn)
 	c.Request = c.Request.WithContext(requestCtx)
 	defer func() {
 		cancel()
@@ -809,7 +809,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			if wsHTTPFallback.ForceHTTP() && !useWebsocket {
 				wsHTTPFallback.LogHTTPAttemptCompletion("/v1/responses", account.ID(), attempt+1, durationMs, 0, logStatusUpstreamStreamBreak)
 			}
-			if useWebsocket && kind == upstreamErrorKindMessageTooBig {
+			if useWebsocket && kind == upstreamErrorKindMessageTooBig && !TransportReplayBlocked(reqErr) {
 				wsElapsed := time.Since(start)
 				globalWSSizeRouter.RecordMessageTooBig(len(codexBody))
 				wsHTTPFallback.Retain(account, proxyURL, wsElapsed, websocketMessageTooBigSource(reqErr.Error()))

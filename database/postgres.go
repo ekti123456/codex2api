@@ -4486,13 +4486,14 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 
 // UsageLogInput 日志写入参数
 type UsageLogInput struct {
-	RequestType        string
-	RequestDiagnostics string
-	AccountID          int64
-	RequestID          string
-	UpstreamRequestID  string
-	UpstreamProxyID    int64
-	UpstreamProxyName  string
+	UpstreamDiagnostics string
+	RequestType         string
+	RequestDiagnostics  string
+	AccountID           int64
+	RequestID           string
+	UpstreamRequestID   string
+	UpstreamProxyID     int64
+	UpstreamProxyName   string
 	// CredentialGeneration attributes internally-generated Grok traffic to the
 	// credential snapshot that issued it. Zero is legacy/unscoped traffic.
 	CredentialGeneration int64

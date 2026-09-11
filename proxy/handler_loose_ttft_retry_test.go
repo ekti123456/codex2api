@@ -293,7 +293,7 @@ func TestRelayResponsesCatchAllDiscardsExplicitErrorEventAfterPartialOutput(t *t
 	}
 }
 
-func TestRelayResponsesCatchAllDiscardsPartialAttemptWithoutTerminal(t *testing.T) {
+func TestRelayResponsesCatchAllStopsPartialAttemptWithoutTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	enableCatchAllContinuousRetry(t)
 
@@ -320,11 +320,11 @@ func TestRelayResponsesCatchAllDiscardsPartialAttemptWithoutTerminal(t *testing.
 	handler.Responses(ctx)
 
 	body := recorder.Body.String()
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("upstream calls = %d, want 2; body=%q", got, body)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1; body=%q", got, body)
 	}
-	if !strings.Contains(body, "recovered-after-eof") || strings.Contains(body, "failed-eof-partial") || strings.Contains(body, ErrorCodeUpstreamStreamBreak) {
-		t.Fatalf("unterminated attempt leaked or successful replay missing: %q", body)
+	if strings.Contains(body, "recovered-after-eof") || strings.Contains(body, "failed-eof-partial") || !strings.Contains(body, ErrorCodeUpstreamStreamBreak) {
+		t.Fatalf("unterminated attempt must fail without replay or partial output: %q", body)
 	}
 }
 

@@ -529,8 +529,10 @@ func TestExecuteRequestViaWebsocketSendFailureRemovesEffectiveProxyConnection(t 
 		t.Fatalf("buildWebsocketURL: %v", err)
 	}
 	effectiveProxy := effectiveProxyURL(account, "")
-	key := manager.poolKey(account.ID(), wsURL, sessionID, effectiveProxy)
+	poolSession := proxy.WebsocketTransportPartition(proxy.WebsocketTransportOwner(context.Background(), "key"), "", sessionID)
+	key := manager.poolKey(account.ID(), wsURL, poolSession, effectiveProxy)
 	session := NewSession(account.ID(), manager)
+	session.ID = poolSession
 	session.SetConnected(true)
 	conn := &WsConnection{
 		conn:    newClosedTestWebsocketConn(t),
@@ -547,7 +549,7 @@ func TestExecuteRequestViaWebsocketSendFailureRemovesEffectiveProxyConnection(t 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	exec := NewExecutorWithManager(manager)
-	_, err = exec.ExecuteRequestViaWebsocket(ctx, account, []byte(`{"model":"gpt-5.4","input":"hi"}`), sessionID, "", "", nil, http.Header{}, "")
+	_, err = exec.ExecuteRequestViaWebsocket(ctx, account, []byte(`{"model":"gpt-5.4","input":"hi"}`), sessionID, "", "key", nil, http.Header{}, "")
 	if err == nil {
 		t.Fatal("expected final send failure")
 	}

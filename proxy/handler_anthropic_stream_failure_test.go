@@ -242,12 +242,7 @@ func TestMessagesStreamKeepsDownstreamAliveDuringUpstreamSilence(t *testing.T) {
 	}
 }
 
-// TestMessagesStreamPreContentBreakRetriesTransparently 验证 issue #435 修复：
-// 首个真实内容帧之前的结构帧（output_item.added 等）只缓冲不落盘，
-// 此窗口内上游断流仍可静默换号/重试，下游最终拿到一条完整干净的成功响应。
-// 第一轮静默时间刻意超过下游保活间隔（issue #623）：首字前绝不能写注释，
-// 否则 200 提前落盘，透明重试窗口被心跳自己关掉。
-func TestMessagesStreamPreContentBreakRetriesTransparently(t *testing.T) {
+func TestMessagesStreamPreContentBreakStopsAmbiguousReplay(t *testing.T) {
 	shortenDownstreamSSEKeepalive(t)
 	handler, calls := newAnthropicStreamFailureTestHandler(t, func(call int32, w http.ResponseWriter) {
 		if call == 1 {
@@ -270,27 +265,20 @@ func TestMessagesStreamPreContentBreakRetriesTransparently(t *testing.T) {
 	recorder := invokeAnthropicMessagesStream(t, handler)
 	body := recorder.Body.String()
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%q", recorder.Code, body)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%q", recorder.Code, body)
 	}
-	if !strings.Contains(body, "retried") {
-		t.Fatalf("retried attempt content missing; body=%q", body)
+	if strings.Contains(body, "retried") || !strings.Contains(body, "停止自动重试") {
+		t.Fatalf("ambiguous delivery must stop instead of replaying; body=%q", body)
 	}
-	if strings.Contains(body, "event: error") {
-		t.Fatalf("transparent retry must not leak an error event downstream; body=%q", body)
+	if strings.Contains(body, `"type":"message_start"`) || strings.Contains(body, "message_stop") {
+		t.Fatalf("buffered structural frames must not leak downstream; body=%q", body)
 	}
-	if got := strings.Count(body, `"type":"message_start"`); got != 1 {
-		t.Fatalf("message_start count = %d, want exactly 1 (first attempt's structural frames must stay buffered); body=%q", got, body)
+	if strings.Contains(body, downstreamSSEKeepaliveComment) {
+		t.Fatalf("keepalive comment must not commit an ambiguous response; body=%q", body)
 	}
-	if !strings.Contains(body, "message_stop") {
-		t.Fatalf("successful retry should end with message_stop; body=%q", body)
-	}
-	// 第一轮静默期间心跳 ticker 已多次触发，但首字前不得写出任何字节。
-	if keepalive := strings.Index(body, downstreamSSEKeepaliveComment); keepalive >= 0 && keepalive < strings.Index(body, "retried") {
-		t.Fatalf("keepalive comment must not be written before the first real content; body=%q", body)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("upstream calls = %d, want 2 (break + transparent retry)", got)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1", got)
 	}
 }
 

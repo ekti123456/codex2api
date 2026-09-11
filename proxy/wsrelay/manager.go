@@ -39,7 +39,16 @@ type WsConnection struct {
 	// 不能用当前配置重新推导，否则设置变更后会记录并未发送的 UA。
 	upstreamUserAgent      string
 	upstreamUserAgentKnown bool
+	upstreamIdentity       *proxy.OutboundHeaderDiagnostic
 	proxyURL               string
+	handshakeProfile       string
+	diagnosticID           string
+	acquisitions           atomic.Int64
+	downstreamConnectionID string
+	lifecycleMu            sync.Mutex
+	exitReason             string
+	exitCloseCode          int
+	onClosed               func(*WsConnection)
 
 	// 创建/复用该连接的账号。仅用于读取当前动态并发上限，让 response_id
 	// 续链复用路径也能在账号上限下调后收敛空闲连接数。
@@ -136,10 +145,11 @@ func configureWebsocketDialerProxy(dialer *websocket.Dialer, rawProxyURL string)
 // NewWsConnection 创建 WebSocket 连接
 func NewWsConnection(conn *websocket.Conn, session *Session, wsURL string) *WsConnection {
 	wc := &WsConnection{
-		conn:      conn,
-		session:   session,
-		URL:       wsURL,
-		createdAt: time.Now().UnixNano(),
+		conn:         conn,
+		session:      session,
+		URL:          wsURL,
+		createdAt:    time.Now().UnixNano(),
+		diagnosticID: proxy.NewUpstreamSessionUUID(),
 	}
 	wc.lastUsed.Store(time.Now().UnixNano())
 	wc.state.Store(int32(StateConnected))
@@ -191,11 +201,16 @@ func (wc *WsConnection) Close() error {
 		return nil
 	}
 	wc.closeOnce.Do(func() {
+		wc.noteExit("local_close", nil)
 		wc.state.Store(int32(StateClosing))
 		if wc.conn != nil {
 			wc.closeErr = wc.conn.Close()
 		}
 		wc.state.Store(int32(StateDisconnected))
+		proxy.RecordWebsocketLifecycle(wc.lifecycle("closed"))
+		if wc.onClosed != nil {
+			wc.onClosed(wc)
+		}
 	})
 	if wc.onDisconnected != nil && wc.session != nil && wc.disconnectNotified.CompareAndSwap(false, true) {
 		wc.onDisconnected(wc.session.AccountID)
@@ -210,6 +225,10 @@ func (wc *WsConnection) SetState(state ConnectionState) {
 
 // WriteMessage 安全写入消息
 func (wc *WsConnection) WriteMessage(messageType int, data []byte) error {
+	return wc.writeMessageObserved(messageType, data, nil)
+}
+
+func (wc *WsConnection) writeMessageObserved(messageType int, data []byte, observer *proxy.TransportObserver) error {
 	wc.writeMu.Lock()
 	defer wc.writeMu.Unlock()
 
@@ -221,13 +240,22 @@ func (wc *WsConnection) WriteMessage(messageType int, data []byte) error {
 		return err
 	}
 
-	wc.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
+	if err := wc.conn.SetWriteDeadline(time.Now().Add(WriteTimeout)); err != nil {
+		return err
+	}
 	defer wc.conn.SetWriteDeadline(time.Time{})
 
+	observer.Phase("ambiguous")
 	writeErr := wc.conn.WriteMessage(messageType, data)
 	if tracksLease {
-		return wc.completeReadLeaseWrite(leaseID, writeErr)
+		writeErr = wc.completeReadLeaseWrite(leaseID, writeErr)
 	}
+	if writeErr != nil {
+		wc.noteExit("write_failure", writeErr)
+		observer.TransportError(writeErr)
+		return proxy.BlockTransportReplay(writeErr)
+	}
+	observer.Phase("after_payload")
 	return writeErr
 }
 
@@ -273,8 +301,9 @@ type Manager struct {
 	// previous_response_id 的上下文只存活在产生该响应的那条 WS 连接里；带续链 ID
 	// 的请求必须回到原连接，落到别的槽位会得到 "previous response not found"。
 	// 参考 sub2api openai_ws_state_store 的 BindResponseConn/GetResponseConn。
-	respConnMu       sync.Mutex
-	respConnBindings map[string]responseConnBinding
+	respConnMu         sync.Mutex
+	respConnBindings   map[string]responseConnBinding
+	continuationLosses map[string]continuationLoss
 
 	// 可选的探活函数（用于测试替换），nil 时使用默认 probeConnection
 	probeFunc func(wc *WsConnection) bool
@@ -292,6 +321,7 @@ type Manager struct {
 // 防止跨 Key 用他人 response_id 定向挤上他人连接（与 response cache 的
 // owner 隔离同一原则）。
 type responseConnBinding struct {
+	persisted    bool
 	conn         *WsConnection
 	sessionKey   string
 	requestScope string
@@ -355,12 +385,14 @@ func (m *Manager) cleanupLoop() {
 // 或 pong 丢失时会把活跃对象误判为空闲，直接 Close 会把在途流同秒批量截断
 // （issue #436）；等在途收尾（读路径业务帧静默上限 ActiveReadMaxTurnSilence 兜底）后下一轮再清。
 func (m *Manager) evictExpired() {
+	defer m.cleanupContinuationRecords()
 	m.connections.Range(func(key, value any) bool {
 		wc := value.(*WsConnection)
 		if wc.session != nil && wc.session.PendingCount() > 0 {
 			return true
 		}
 		if wc.IsExpired() || !wc.IsConnected() || isRotatableOverAge(wc) {
+			wc.noteExit("idle_or_lifetime_expired", nil)
 			m.connections.Delete(key)
 			wc.Close()
 		}
@@ -392,6 +424,7 @@ func (m *Manager) Stop() {
 func (m *Manager) closeAll() {
 	m.connections.Range(func(key, value any) bool {
 		wc := value.(*WsConnection)
+		wc.noteExit("manager_shutdown", nil)
 		m.connections.Delete(key)
 		wc.Close()
 		return true
@@ -550,6 +583,7 @@ func (m *Manager) ensureAccountConnectionCapacity(accountID int64, limit int, pr
 		if current, ok := m.connections.Load(wc.PoolKey); !ok || current != wc {
 			continue
 		}
+		wc.noteExit("account_connection_capacity", nil)
 		m.DiscardConnection(wc)
 		count--
 	}
@@ -646,7 +680,7 @@ func (m *Manager) AcquireConnection(
 		lock.Lock()
 		if v, ok := m.connections.Load(key); ok {
 			wc := v.(*WsConnection)
-			if canReuseConnection(wc) {
+			if canReuseConnection(wc) && wc.matchesProfile(headers) {
 				// 发送 Ping 探活，确认连接真正存活
 				if m.probe(wc) {
 					// 网络 probe 不持有账号锁。同账号其它 pool key 可以并行探活；
@@ -807,7 +841,7 @@ func (m *Manager) tryAcquireBusyOverflow(
 		lock.Lock()
 		if v, ok := m.connections.Load(key); ok {
 			wc := v.(*WsConnection)
-			if canReuseConnection(wc) {
+			if canReuseConnection(wc) && wc.matchesProfile(headers) {
 				if m.probe(wc) {
 					accountLock.Lock()
 					current, exists := m.connections.Load(key)
@@ -924,7 +958,7 @@ func (m *Manager) AcquireReusableConnection(
 		lock.Lock()
 		if v, ok := m.connections.Load(key); ok {
 			wc := v.(*WsConnection)
-			if canReuseConnection(wc) {
+			if canReuseConnection(wc) && wc.matchesProfile(headers) {
 				if m.probe(wc) {
 					accountLock.Lock()
 					current, exists := m.connections.Load(key)
@@ -1146,12 +1180,24 @@ func (m *Manager) createConnection(
 	m.sessions.Store(poolKey, session)
 
 	// 拨号连接
+	observer := proxy.UpstreamTransportObserver(ctx)
+	observer.HandshakeProfile(websocketConnectionProfile(headers))
+	outboundIdentity := proxy.CaptureOutboundIdentityHeaders(headers)
+	observer.OutboundWebsocketHandshake(outboundIdentity)
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
+	if resp != nil {
+		observer.ResponseHeaders(resp.StatusCode, resp.Header, true)
+	}
 	if err != nil {
+		observer.FailureIfUnset("transport", "ws_handshake")
 		m.sessions.Delete(poolKey)
 		session.Close()
 		// bad handshake 时 resp 常非空：附带上游 HTTP 状态/ body，便于测试连接定位。
-		return nil, formatDialHandshakeError(err, resp)
+		failure := formatDialHandshakeError(err, resp)
+		if detail, ok := failure.(*HandshakeHTTPError); ok {
+			observer.HTTPErrorBody([]byte(detail.Body))
+		}
+		return nil, failure
 	}
 
 	logCompressionNegotiation(resp, account.ID())
@@ -1161,12 +1207,17 @@ func (m *Manager) createConnection(
 	wc.account = account
 	wc.PoolKey = poolKey
 	wc.proxyURL = proxyURL
+	wc.handshakeProfile = websocketConnectionProfile(headers)
+	wc.downstreamConnectionID = proxy.DownstreamWebsocketConnectionID(ctx)
 	wc.upstreamUserAgent = strings.TrimSpace(headers.Get("User-Agent"))
 	wc.upstreamUserAgentKnown = true
+	wc.upstreamIdentity = outboundIdentity
 	wc.httpResp = resp
 	wc.onDisconnected = m.getOnDisconnected()
 	wc.onReadFailure = m.DiscardConnection
+	wc.onClosed = m.recordConnectionLoss
 	session.SetConnected(true)
+	proxy.RecordWebsocketLifecycle(wc.lifecycle("opened"))
 
 	// 控制帧处理器必须在唯一永久 reader 启动前安装。
 	wc.installControlHandlers()
@@ -1188,6 +1239,7 @@ func (m *Manager) RemoveConnection(accountID int64, wsURL string, sessionKey str
 	key := m.poolKey(accountID, wsURL, sessionKey, proxyURL)
 	if v, ok := m.connections.LoadAndDelete(key); ok {
 		wc := v.(*WsConnection)
+		wc.noteExit("pool_removed", nil)
 		wc.Close()
 	}
 	m.sessions.Delete(key)
@@ -1202,6 +1254,7 @@ func (m *Manager) DiscardConnection(wc *WsConnection) {
 	if wc == nil {
 		return
 	}
+	wc.noteExit("pool_discarded", nil)
 	if wc.PoolKey != "" {
 		m.connections.CompareAndDelete(wc.PoolKey, wc)
 		if wc.session != nil {
@@ -1234,6 +1287,7 @@ func (m *Manager) BindResponseConn(responseID string, wc *WsConnection, sessionK
 	if len(m.respConnBindings) >= responseConnBindingMaxEntries {
 		for k, b := range m.respConnBindings {
 			if now.After(b.expiresAt) {
+				m.rememberContinuationLossLocked(k, b, "binding_expired")
 				delete(m.respConnBindings, k)
 			}
 		}
@@ -1247,6 +1301,12 @@ func (m *Manager) BindResponseConn(responseID string, wc *WsConnection, sessionK
 			apiKey:       apiKey,
 			expiresAt:    now.Add(responseConnBindingTTL),
 		}
+		if !wc.IsConnected() {
+			m.rememberContinuationLossLocked(responseID, m.respConnBindings[responseID], "connection_closed")
+			delete(m.respConnBindings, responseID)
+		}
+	} else {
+		m.rememberContinuationLossLocked(responseID, responseConnBinding{conn: wc, accountID: accountID, apiKey: apiKey, requestScope: requestScope}, "binding_capacity")
 	}
 	m.respConnMu.Unlock()
 }
@@ -1267,6 +1327,7 @@ func (m *Manager) lookupResponseConn(responseID string, accountID int64, apiKey 
 	}
 	if ok && (now.After(binding.expiresAt) || binding.accountID != accountID || binding.apiKey != apiKey) {
 		if now.After(binding.expiresAt) {
+			m.rememberContinuationLossLocked(responseID, binding, "binding_expired")
 			delete(m.respConnBindings, responseID)
 		}
 		ok = false
@@ -1392,6 +1453,7 @@ func (m *Manager) SendHeartbeat(wc *WsConnection) error {
 	deadline := time.Now().Add(10 * time.Second)
 	err := wc.conn.WriteControl(websocket.PingMessage, []byte{}, deadline)
 	if err != nil {
+		wc.noteExit("heartbeat_write_failure", err)
 		// 写路径故障 ≠ 读路径已死：有在途请求时只摘池禁止新复用，不关 socket、
 		// 不动 session——强关会把连接上全部在途流同秒截断（issue #436）。socket 的
 		// 最终关闭由读路径兜底（pump 读错误时 onReadFailure→DiscardConnection，

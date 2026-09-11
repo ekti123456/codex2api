@@ -14,9 +14,11 @@ import (
 
 type upstreamTraceContextKey struct{}
 type upstreamTraceAttempt struct {
-	accountID int64
-	requestID string
-	proxy     auth.ProxyAuditLabel
+	idempotent bool
+	accountID  int64
+	requestID  string
+	proxy      auth.ProxyAuditLabel
+	transport  UpstreamTransportDiagnostic
 }
 
 type upstreamTraceSnapshot struct {
@@ -24,6 +26,7 @@ type upstreamTraceSnapshot struct {
 	accountID         int64
 	UpstreamRequestID string
 	Proxy             auth.ProxyAuditLabel
+	Transport         *UpstreamTransportDiagnostic
 }
 
 func snapshotUpstreamTrace(ctx context.Context) upstreamTraceSnapshot {
@@ -38,6 +41,8 @@ func snapshotUpstreamTrace(ctx context.Context) upstreamTraceSnapshot {
 		result.accountID = a.current.accountID
 		result.UpstreamRequestID = a.current.requestID
 		result.Proxy = a.current.proxy
+		transport := a.current.transport
+		result.Transport = &transport
 	}
 	return result
 }
@@ -48,6 +53,7 @@ func (s upstreamTraceSnapshot) apply(input *database.UsageLogInput) {
 		input.UpstreamRequestID = s.UpstreamRequestID
 		input.UpstreamProxyID = s.Proxy.ID
 		input.UpstreamProxyName = s.Proxy.Name
+		input.UpstreamDiagnostics = transportDiagnosticJSON(s.Transport)
 	}
 }
 
@@ -108,38 +114,69 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 		label = auth.ProxyAuditLabel{Name: "resin"}
 	}
 	label.Name = security.MaskSensitiveData(label.Name)
-	attempt := &upstreamTraceAttempt{accountID: account.ID(), proxy: label}
+	transport := "http"
+	if ws {
+		transport = "websocket"
+	}
+	egress := "direct"
+	if proxyURL != "" {
+		egress = "proxy"
+	}
+	if label.Name == "resin" {
+		egress = "resin"
+	}
+	attempt := &upstreamTraceAttempt{accountID: account.ID(), proxy: label, transport: UpstreamTransportDiagnostic{
+		AccountID: account.ID(), Transport: transport, EgressKind: egress, ProxyID: label.ID, ProxyName: label.Name,
+		ProxyEndpoint: safeProxyEndpoint(proxyURL), PublicEgressIPStatus: "not_observed", SendPhase: "before_payload",
+	}}
 	a.mu.Lock()
 	a.current = attempt
 	a.mu.Unlock()
 	header := account.GetUpstreamRequestIDHeader()
+	observer := &TransportObserver{audit: a, attempt: attempt}
 	return func(resp *http.Response) {
 		if resp == nil || ws {
 			return
 		} // A WS handshake ID is not a per-turn ID.
+		observer.ResponseHeaders(resp.StatusCode, resp.Header, false)
 		id := ""
 		if header != "" && auth.ValidateUpstreamRequestIDHeader(header) == nil {
 			id = resp.Header.Get(header)
 		} else if header == "" {
-			for _, name := range []string{"X-Request-Id", "Request-Id", "X-Goog-Request-Id"} {
-				if id = resp.Header.Get(name); strings.TrimSpace(id) != "" {
-					break
-				}
-			}
+			id = upstreamHeaderRequestID(resp.Header)
 		}
 		id = security.SafeTruncate(strings.TrimSpace(id), 128)
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		if a.current == attempt {
 			attempt.requestID = id
+			attempt.transport.UpstreamRequestID = safeDiagnosticToken(id)
 		}
 	}
 }
 
-func doTracedUpstreamRequest(client *http.Client, req *http.Request, account *auth.Account, proxyURL string) (*http.Response, error) {
+func doTracedUpstreamRequest(client *http.Client, req *http.Request, account *auth.Account, proxyURL string, jsonBodies ...[]byte) (*http.Response, error) {
+	req = req.WithContext(ensureTransportTrace(req.Context()))
 	record := beginUpstreamTrace(req.Context(), account, proxyURL, false)
-	resp, err := client.Do(req)
+	observer := UpstreamTransportObserver(req.Context())
+	observer.OutboundHTTPIdentity(req.Header)
+	if len(jsonBodies) > 0 {
+		observer.ResponsesInput(jsonBodies[0], req.Header, req.URL.Path)
+	}
+	observer.update(func(*UpstreamTransportDiagnostic) {
+		observer.attempt.idempotent = req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodOptions
+	})
+	observer.Endpoint(req.URL.String())
+	resp, err := client.Do(traceHTTPTransport(req, observer))
 	record(resp)
+	if observer != nil && resp != nil && resp.Body != nil {
+		resp.Body = &tracedResponseBody{ReadCloser: resp.Body, observer: observer, captureError: resp.StatusCode >= 400,
+			requireTerminal: resp.StatusCode < 300 && strings.HasSuffix(req.URL.Path, "/responses") && strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")}
+	}
+	if err != nil {
+		observer.Failure("transport", "http_roundtrip", 0)
+		err = observer.TransportError(err)
+	}
 	return resp, err
 }
 
@@ -161,5 +198,6 @@ func populateUpstreamTrace(c *gin.Context, input *database.UsageLogInput) {
 		input.UpstreamRequestID = current.requestID
 		input.UpstreamProxyID = current.proxy.ID
 		input.UpstreamProxyName = current.proxy.Name
+		input.UpstreamDiagnostics = transportDiagnosticJSON(&current.transport)
 	}
 }

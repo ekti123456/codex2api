@@ -281,6 +281,9 @@ func ErrMissingModel() *Error {
 // IsRetryableError checks if an error is retryable
 // Uses errors.As to support wrapped errors
 func IsRetryableError(err error) bool {
+	if TransportReplayBlocked(err) {
+		return false
+	}
 	if err == nil {
 		return false
 	}

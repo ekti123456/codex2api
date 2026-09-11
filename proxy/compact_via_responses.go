@@ -50,6 +50,7 @@ func normalizeCompactionTriggerFinal(body []byte, addIfMissing bool) []byte {
 		for _, item := range items {
 			if isDirectCompactionTrigger(item) {
 				triggerCount++
+				trigger = canonicalCompactionTrigger(item)
 			}
 		}
 		if triggerCount == 0 && !addIfMissing {
@@ -85,6 +86,7 @@ func normalizeCompactionTriggerFinal(body []byte, addIfMissing bool) []byte {
 		}
 		return out
 	case input.IsObject() && isDirectCompactionTrigger(input):
+		trigger = canonicalCompactionTrigger(input)
 		encoded, err := json.Marshal([]json.RawMessage{trigger})
 		if err != nil {
 			return body
@@ -126,6 +128,14 @@ func normalizeCompactionTriggerFinal(body []byte, addIfMissing bool) []byte {
 	default:
 		return body
 	}
+}
+
+func canonicalCompactionTrigger(item gjson.Result) json.RawMessage {
+	raw, err := sjson.Set(item.Raw, "type", "compaction_trigger")
+	if err != nil {
+		return json.RawMessage(item.Raw)
+	}
+	return json.RawMessage(raw)
 }
 
 func isDirectCompactionTrigger(item gjson.Result) bool {
