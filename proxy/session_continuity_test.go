@@ -233,7 +233,11 @@ func TestSessionContinuityEnforceStopsUnboundContextBeforeHTTPOrWebSocketDispatc
 				request, recorder := signedRootlessPassiveModelContext(test, http.MethodPost, endpoint, body, meta)
 				map[string]func(*gin.Context){"/v1/responses": handler.Responses, "/v1/responses/compact": handler.ResponsesCompact, "/v1/chat/completions": handler.ChatCompletions}[endpoint](request)
 				require.Equal(test, http.StatusBadRequest, recorder.Code, recorder.Body.String())
-				require.Equal(test, "codex_session_continuity_unbound_nonzero", gjson.GetBytes(recorder.Body.Bytes(), "error.code").String())
+				expectedCode := "codex_session_continuity_unbound_nonzero"
+				if endpoint == "/v1/responses/compact" {
+					expectedCode = "codex_session_continuity_unbound_compaction"
+				}
+				require.Equal(test, expectedCode, gjson.GetBytes(recorder.Body.Bytes(), "error.code").String())
 				return
 			}
 			router := gin.New()

@@ -6350,7 +6350,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	// Compaction is itself a continuation of the user window. If either the
 	// ordinary affinity or the hard account-session owner survived a restart,
 	// keep it strict so a paused owner cannot make the compaction state cross
-	// accounts. A brand-new compaction root still uses normal scheduling.
+	// accounts.
 	compactContinuationPinned := priorSessionAccountID > 0
 	if _, bound := h.store.SessionAffinityAccountID(affinityKey); bound {
 		compactContinuationPinned = true

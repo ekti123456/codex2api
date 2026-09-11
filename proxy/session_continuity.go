@@ -55,6 +55,26 @@ func continuityRequest(request *gin.Context) *sessionContinuityRequest {
 	return state
 }
 
+func requestRequiresCompactionOwner(request *gin.Context, body []byte) bool {
+	websocket := isResponsesWebSocketUpgradeRequest(request.Request)
+	resolved := usageRequestDiagnosticState(request).Resolved
+	if !websocket && resolved != nil && strings.EqualFold(strings.TrimSpace(resolved.RequestKind), "compaction") {
+		return true
+	}
+	if request.Request.URL != nil && isCompactUsageEndpoint(request.Request.URL.Path) {
+		return true
+	}
+	if requestBodyCompactionMeta(body).ProtocolTriggered {
+		return true
+	}
+	headers := request.Request.Header
+	if websocket {
+		headers = nil
+	}
+	headers = CodexRequestMetadataHeaders(headers, body)
+	return turnMetadataIndicatesCompaction(headers.Get(codexTurnMetadataHeader))
+}
+
 func parseContinuityWindow(headers http.Header, body []byte, websocket bool) (string, uint64, bool, string) {
 	if websocket {
 		headers = nil
@@ -221,6 +241,10 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 		diagnostic.Result, diagnostic.WouldBlock, diagnostic.Action = "ownership_unavailable", true, "blocked"
 		return sessionContinuityError("ownership_unavailable")
 	}
+	if owner == 0 && requestRequiresCompactionOwner(request, body) {
+		diagnostic.Result, diagnostic.WouldBlock, diagnostic.Action = "unbound_compaction", true, "blocked"
+		return sessionContinuityError("unbound_compaction")
+	}
 	if mode == "off" {
 		diagnostic.Result, diagnostic.WouldBlock, diagnostic.Action = "disabled", false, "disabled"
 	} else if diagnostic.WouldBlock {
@@ -244,6 +268,8 @@ func sessionContinuityError(reason string) *api.APIError {
 	message := "会话上下文序号不连续，请恢复正确的对话后重试。"
 	if reason == "unbound_nonzero" {
 		message = "当前请求来自已有上下文窗口，但无法恢复原会话账号，请新开对话后重试。"
+	} else if reason == "unbound_compaction" {
+		message = "无法恢复当前压缩请求的原会话账号，请先恢复主会话连接；无法恢复时请新开对话。"
 	} else if reason == "window_missing" || reason == "window_invalid" || reason == "number_conflict" || reason == "thread_conflict" {
 		message = "会话窗口标识缺失或不一致，请重新连接正确的对话。"
 	} else if reason == "ownership_unavailable" || reason == "storage_unavailable" {

@@ -542,6 +542,8 @@ func TestResponsesCompactContinuousRetryDeadlineReturnsLatestFailureAndReleasesS
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = req
+	affinityKey := capacityAwareSessionAffinityKey(handler.resolveRequestSessionIdentityForContext(c, body), 0)
+	store.BindSessionAffinity(affinityKey, account, "")
 
 	started := time.Now()
 	handler.ResponsesCompact(c)
@@ -567,9 +569,9 @@ func TestResponsesCompactContinuousRetryDeadlineReturnsLatestFailureAndReleasesS
 	if account.FailureStreak != 1 {
 		t.Fatalf("FailureStreak = %d, want only the completed 503 attempt to be penalized", account.FailureStreak)
 	}
-	affinityKey := sessionAffinityKey(ResolveSessionID(req.Header, body), 0)
-	if _, ok := store.SessionAffinityAccountID(affinityKey); ok {
-		t.Fatal("deadline left a fresh session affinity binding")
+	entry, found, err := handler.readSessionContinuity(context.Background(), hashRiskIdentity(affinityKey))
+	if err != nil || !found || entry.Record.AccountID != account.ID() {
+		t.Fatalf("deadline lost the recoverable compaction owner: entry=%+v found=%v error=%v", entry, found, err)
 	}
 }
 
