@@ -51,6 +51,8 @@ func readExitReason(err error) string {
 	var closeErr *websocket.CloseError
 	var networkErr net.Error
 	switch {
+	case errors.Is(err, websocket.ErrReadLimit):
+		return "local_read_limit"
 	case errors.Is(err, errReadPumpIdleFrame), errors.Is(err, errReadPumpUncommitted):
 		return "unexpected_business_frame"
 	case errors.Is(err, errReadPumpQueueOverflow):

@@ -37,6 +37,10 @@ func transportFailureCodeCategory(code string) string {
 
 func classifyTransportDiagnostic(diagnostic *UpstreamTransportDiagnostic) {
 	diagnostic.FailureCategory, diagnostic.FailureEvidence = "", ""
+	if diagnostic.MessageTooBigSource != "" {
+		diagnostic.FailureCategory, diagnostic.FailureEvidence = "message_too_big", diagnostic.MessageTooBigSource
+		return
+	}
 	if diagnostic.ErrorSource == "transport" {
 		diagnostic.FailureCategory, diagnostic.FailureEvidence = "transport", "transport_error"
 		return

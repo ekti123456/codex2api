@@ -294,15 +294,16 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	e.manager.StartHeartbeat(wc)
 
 	return &WsResponse{
-		oneShot:      oneShot,
-		observer:     observer,
-		conn:         wc,
-		pendingReq:   pr,
-		sessionID:    poolSessionID,
-		requestScope: requestScope,
-		manager:      e.manager,
-		apiKey:       apiKey,
-		readErrChan:  make(chan error, 1),
+		connectionLocal: connectionLocal,
+		oneShot:         oneShot,
+		observer:        observer,
+		conn:            wc,
+		pendingReq:      pr,
+		sessionID:       poolSessionID,
+		requestScope:    requestScope,
+		manager:         e.manager,
+		apiKey:          apiKey,
+		readErrChan:     make(chan error, 1),
 	}, nil
 }
 
@@ -611,15 +612,16 @@ func (e *Executor) sendRequest(wc *WsConnection, body []byte, requestID string, 
 
 // WsResponse WebSocket 响应包装器
 type WsResponse struct {
-	oneShot      bool
-	observer     *proxy.TransportObserver
-	conn         *WsConnection
-	pendingReq   *PendingRequest
-	sessionID    string
-	requestScope string
-	manager      *Manager
-	readErrChan  chan error
-	closed       bool
+	connectionLocal bool
+	oneShot         bool
+	observer        *proxy.TransportObserver
+	conn            *WsConnection
+	pendingReq      *PendingRequest
+	sessionID       string
+	requestScope    string
+	manager         *Manager
+	readErrChan     chan error
+	closed          bool
 	// apiKey 发起本请求的下游 API Key，用于 response_id → 连接绑定的归属校验。
 	apiKey string
 	// connBroken 标记读流因上游 WS 异常(非正常关闭)或下游写入失败而终止；
@@ -645,22 +647,16 @@ func (r *WsResponse) ReadStream(callback func(data []byte) bool) error {
 		}
 	}
 
+	responseStarted := false
 	for {
 		msgType, payload, err := r.conn.ReadMessage()
 		if err != nil {
-			code := 0
-			var closeError *websocket.CloseError
-			if errors.As(err, &closeError) {
-				code = closeError.Code
-			}
-			r.observer.Failure("transport", "ws_read", code)
-			r.observer.TransportError(err)
 			r.conn.noteExit(readExitReason(err), err)
 			// ReadStream only returns successfully after consuming an explicit
 			// response terminal frame. Any socket close here, including 1000/1001,
 			// is premature and must preserve the real close error for the consumer.
 			r.markConnBroken()
-			return proxy.BlockTransportReplay(fmt.Errorf("websocket read error: %w", err))
+			return r.observer.WebsocketReadFailure(err, responseStarted, r.connectionLocal)
 		}
 
 		// 只处理文本消息
@@ -680,6 +676,7 @@ func (r *WsResponse) ReadStream(callback func(data []byte) bool) error {
 		if len(payload) == 0 {
 			continue
 		}
+		responseStarted = true
 
 		// 解析并处理消息
 		if err := r.handleMessage(payload, callback); err != nil {

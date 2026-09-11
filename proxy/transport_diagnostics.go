@@ -54,6 +54,9 @@ type UpstreamTransportDiagnostic struct {
 	CFRay                  string                             `json:"cf_ray,omitempty"`
 	CloseCode              int                                `json:"close_code,omitempty"`
 	ReplayBlocked          bool                               `json:"replay_blocked,omitempty"`
+	MessageTooBigSource    string                             `json:"message_too_big_source,omitempty"`
+	ReplayDecision         string                             `json:"replay_decision,omitempty"`
+	HTTPSizeRouteLearned   bool                               `json:"http_size_route_learned,omitempty"`
 	TransportOwnerHash     string                             `json:"transport_owner_hash,omitempty"`
 	DownstreamConnectionID string                             `json:"downstream_connection_id,omitempty"`
 	FailureCategory        string                             `json:"failure_category,omitempty"`

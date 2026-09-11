@@ -49,7 +49,15 @@
 
 HTTP 响应体非 EOF 读取错误单独标记 `http_body_read`；Responses SSE 没有终态就 EOF 标记 `sse_unexpected_eof`。经过统一 SSE 读取器的上游错误事件标记 `upstream_sse/sse_event`。没有明确来源证据的错误保留未知分类。
 
-非幂等请求在正文开始写出后发生传输失败，不再自动重放：`replay_blocked=true`。WS 只有能确认发生于写帧之前的失败才允许原有的有限重连；HTTP POST 关闭自动重放正文的 `GetBody`。发送状态不明、已写完但响应中断、缺失终态等失败不能被有限重试、无限重试或 WS→HTTP 降级绕过。GET/HEAD/OPTIONS 查询不受此限制。明确返回的 HTTP 错误或业务错误帧仍由原有错误策略决定，不因这个改动额外增加重试。客户端自行重新提交不等于服务端自动重试，本功能不提供跨请求的业务去重保证。
+非幂等请求在正文开始写出后发生不确定的传输失败，不再自动重放：`replay_blocked=true`。WS 只有能确认发生于写帧之前的失败才允许原有的有限重连；HTTP POST 关闭自动重放正文的 `GetBody`。发送状态不明、已写完但响应中断、缺失终态等失败不能被有限重试、无限重试或 WS→HTTP 降级绕过。GET/HEAD/OPTIONS 查询不受此限制。明确返回的 HTTP 错误或业务错误帧仍由原有错误策略决定，不因这个改动额外增加重试。客户端自行重新提交不等于服务端自动重试，本功能不提供跨请求的业务去重保证。
+
+### WS 消息超限与 HTTP 降级
+
+唯一新增的读失败例外是对端明确关闭 `1009`，且本轮尚未读取任何非空响应文本帧：按对端拒收过大消息处理，允许原有的同账号 HTTP 降级，不重新选号。原 WS 连接仍销毁，不复用已关闭连接。已知 `connection_local` 续链、已收到响应事件、本地 `read limit exceeded`、发送情况已标记不明的请求仍禁止自动重放；下游已写出或请求已取消也不降级。此规则不把任意断线视为拒收，也不提供跨请求的绝对去重保证。
+
+`message_too_big_source` 区分 `peer_close`（收到对端 1009）和 `local_read_limit`（本地接收消息超限）。`replay_decision` 记录 `peer_rejected_before_response` 或具体阻止原因；`failure_category=message_too_big` 与 `failure_evidence` 保留分类依据。
+
+消息超限的大小学习与当前请求是否允许重放分开。开启 WS 大小自适应路由时，使用最终出站 JSON 字节数学习，最小样本 64 KiB、阈值保留 5% 余量；`http_size_route_learned=true` 表示后续同类大请求已可优先走 HTTP。即使当前请求因响应已开始或本地接收超限而停止，也不会阻止后续新请求学习避开 WS。阈值为本进程内全局状态，有效期 6 小时，重启后需重新学习；设置关闭或 `CODEX_WS_SIZE_ROUTER=off` 时不生效。这是经验路由，不代表上游公布的固定大小上限，也不调整账号粘性或额度。
 
 ## WS 握手配置变更
 

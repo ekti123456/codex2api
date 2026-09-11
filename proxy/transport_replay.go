@@ -9,6 +9,14 @@ type payloadDeliveryError struct {
 	cause error
 }
 
+type rejectedWebsocketRequestError struct {
+	cause error
+}
+
+func (failure *rejectedWebsocketRequestError) Error() string { return failure.cause.Error() }
+
+func (failure *rejectedWebsocketRequestError) Unwrap() error { return failure.cause }
+
 func (failure *payloadDeliveryError) Error() string {
 	return "上游请求是否完成无法确认，已停止自动重试。" + failure.cause.Error()
 }
@@ -39,6 +47,10 @@ func ensureTransportTrace(ctx context.Context) context.Context {
 
 func (observer *TransportObserver) TransportError(err error) error {
 	if observer == nil || err == nil {
+		return err
+	}
+	var rejected *rejectedWebsocketRequestError
+	if errors.As(err, &rejected) && !TransportReplayBlocked(err) {
 		return err
 	}
 	observer.audit.mu.Lock()
