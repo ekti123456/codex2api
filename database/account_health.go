@@ -16,10 +16,32 @@ type AccountHealthBucket struct {
 	EndAt         time.Time `json:"end_at,omitzero"`
 }
 
-const accountHealthOverloaded500SQL = `CASE WHEN status_code = 500 AND (
+const accountHealthOverloaded500Predicate = `status_code = 500 AND (
 	TRIM(COALESCE(error_message, '')) = 'server_is_overloaded'
 	OR SUBSTR(TRIM(COALESCE(error_message, '')), 1, LENGTH('server_is_overloaded · ')) = 'server_is_overloaded · '
-) THEN 1 ELSE 0 END`
+)`
+
+const accountHealthOverloaded500SQL = `CASE WHEN ` + accountHealthOverloaded500Predicate + ` THEN 1 ELSE 0 END`
+
+func (db *DB) GetAccountsWithOverload500(ctx context.Context, start, end time.Time) (map[int64]struct{}, error) {
+	startArg, endArg := db.timeRangeArgs(start, end)
+	rows, err := db.conn.QueryContext(ctx, `SELECT DISTINCT account_id FROM usage_logs
+		WHERE created_at >= $1 AND created_at <= $2 AND account_id > 0
+		AND `+accountHealthOverloaded500Predicate+` AND `+db.endUserUsageLogPredicate(), startArg, endArg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]struct{})
+	for rows.Next() {
+		var accountID int64
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, err
+		}
+		result[accountID] = struct{}{}
+	}
+	return result, rows.Err()
+}
 
 // GetAccountsHealthBuckets 返回每个账号最近 blockCount 个时间桶（由旧到新）的请求
 // 成败计数，每个桶跨度 bucketDuration，整体覆盖 [now-blockCount*dur, now]。用于账号

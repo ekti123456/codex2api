@@ -170,22 +170,24 @@ type accountPageSelection struct {
 }
 
 type accountPageQuery struct {
-	Page         int
-	PageSize     int
-	Search       string
-	Status       string
-	Plan         string
-	AuthKind     string
-	Tag          string
-	EmailDomain  string
-	GroupInclude []int64
-	GroupExclude []int64
-	Ungrouped    bool
-	HealthTier   string
-	ProxyURL     string
-	ProxyFilter  string
-	Sort         string
-	Order        string
+	Overload500          string
+	overloadedAccountIDs map[int64]struct{}
+	Page                 int
+	PageSize             int
+	Search               string
+	Status               string
+	Plan                 string
+	AuthKind             string
+	Tag                  string
+	EmailDomain          string
+	GroupInclude         []int64
+	GroupExclude         []int64
+	Ungrouped            bool
+	HealthTier           string
+	ProxyURL             string
+	ProxyFilter          string
+	Sort                 string
+	Order                string
 }
 
 type accountPageQueryError struct {
@@ -199,6 +201,7 @@ func (e *accountPageQueryError) Error() string {
 // accountOperationSelector lets large-pool operations resolve their target set
 // on the server instead of transferring tens of thousands of IDs.
 type accountOperationSelector struct {
+	Overload500          string  `json:"overload_500,omitempty"`
 	Channel              string  `json:"channel"`
 	Search               string  `json:"search,omitempty"`
 	Status               string  `json:"status,omitempty"`
@@ -226,6 +229,7 @@ func (h *Handler) resolveAccountOperationSelector(ctx context.Context, selector 
 		return nil, err
 	}
 	query := accountPageQuery{
+		Overload500:  strings.ToLower(strings.TrimSpace(selector.Overload500)),
 		Search:       strings.ToLower(strings.TrimSpace(selector.Search)),
 		Status:       strings.ToLower(strings.TrimSpace(selector.Status)),
 		Plan:         strings.ToLower(strings.TrimSpace(selector.Plan)),
@@ -237,6 +241,9 @@ func (h *Handler) resolveAccountOperationSelector(ctx context.Context, selector 
 		Ungrouped:    selector.Ungrouped,
 	}
 	if err := validateAccountPageFilters(query); err != nil {
+		return nil, err
+	}
+	if err := h.loadAccountOverloadFilter(ctx, &query); err != nil {
 		return nil, err
 	}
 	ids := make([]int64, 0)
@@ -275,6 +282,7 @@ func positiveUniqueAdminIDs(values []int64) []int64 {
 
 func parseAccountPageQuery(c *gin.Context) (accountPageQuery, error) {
 	query := accountPageQuery{
+		Overload500: strings.ToLower(strings.TrimSpace(c.Query("overload_500"))),
 		Page:        1,
 		PageSize:    accountListPageDefault,
 		Search:      strings.ToLower(strings.TrimSpace(c.Query("search"))),
@@ -338,6 +346,11 @@ func parseAccountPageQuery(c *gin.Context) (accountPageQuery, error) {
 }
 
 func validateAccountPageFilters(query accountPageQuery) error {
+	switch query.Overload500 {
+	case "", "all", "marked", "unmarked":
+	default:
+		return fmt.Errorf("unsupported overload_500")
+	}
 	validStatuses := map[string]bool{
 		"": true, "all": true, "normal": true, "active": true, "scheduling": true,
 		"overload_paused": true, "rate_limited": true, "abnormal": true, "banned": true,
@@ -394,6 +407,9 @@ func (h *Handler) getAccountPageSelection(ctx context.Context, c *gin.Context, c
 	}
 	snapshot, err := h.getAccountListSnapshot(ctx, channel)
 	if err != nil {
+		return nil, err
+	}
+	if err := h.loadAccountOverloadFilter(ctx, &query); err != nil {
 		return nil, err
 	}
 	filtered := make([]*accountListSnapshotItem, 0, len(snapshot.Items))
@@ -1088,7 +1104,27 @@ func (h *Handler) expireAccountListSnapshot(channel string) {
 	h.accountListCacheMu.Unlock()
 }
 
+func (h *Handler) loadAccountOverloadFilter(ctx context.Context, query *accountPageQuery) error {
+	if query.Overload500 == "" || query.Overload500 == "all" {
+		return nil
+	}
+	now := time.Now().UTC()
+	start := now.Add(-accountHealthBlockCount * accountHealthBlockMinutes * time.Minute)
+	marked, err := h.db.GetAccountsWithOverload500(ctx, start, now)
+	if err != nil {
+		return fmt.Errorf("获取 500 标记失败: %w", err)
+	}
+	query.overloadedAccountIDs = marked
+	return nil
+}
+
 func accountListItemMatches(item *accountListSnapshotItem, query accountPageQuery, channel string) bool {
+	if query.Overload500 == "marked" || query.Overload500 == "unmarked" {
+		_, marked := query.overloadedAccountIDs[item.ID]
+		if marked != (query.Overload500 == "marked") {
+			return false
+		}
+	}
 	if query.Search != "" && !strings.Contains(item.SearchText, query.Search) {
 		return false
 	}

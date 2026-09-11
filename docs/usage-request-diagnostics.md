@@ -45,7 +45,7 @@
 
 ## 根命名与窗口授权
 
-`thread_title`、`thread_title_reconsideration`、`thread_description` 共享最终主根的一次命名机会。账号/窗口准入完成后、上游调用前原子认领，等待超时或准入失败不认领。同一逻辑请求的内部传输重试可继续；新的命名请求返回 400 `codex_root_already_named`，不会跳过该根去选择另一个根。诊断 `naming` 为 `claimed`、`duplicate` 或 `unavailable`。记录按平台/人员/最终主根隔离，跨 API Key、实例和重启保留；设备收敛后的同一根也共享次数。记录从升级后开始，不扫描历史日志反推旧命名。`ambient_suggestions`、Guardian、正常用户请求不受命名次数限制。
+`thread_title`、`thread_title_reconsideration`、`thread_description` 允许同一主会话多次触发，不再按主根认领一次命名机会，也不返回 `codex_root_already_named`。命名请求仍须具有有效主根，通过原账号/窗口准入和会话连续性校验；缺根、根账号不可用、会话锁定或过期时不改选账号。旧数据库命名记录保留但不再读写用于准入，无需清理；新请求不再写入 `naming` 的 `claimed`、`duplicate` 或 `unavailable`，历史日志保持原样。NewAPI 同步移除标题的一次占用限制，身份范围、唯一主根与渠道绑定检查不变。
 
 未确认的用户窗口预留仍为 30 秒，与后台 60 秒等待分离。实际准入确认后通过签名 `X-Codex2API-Window-Grant` 回传正式授权，NewAPI 仅缓存明确确认的授权到原到期时间，不将请求成功等同于确认。账号未启用会话容量时，普通授权确认成 `no_window`，不占用户普通名额；扩容授权不能用于这种账号。
 

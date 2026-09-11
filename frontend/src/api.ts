@@ -629,6 +629,7 @@ export const api = {
     if (params.channel) searchParams.set('channel', params.channel)
     if (params.search?.trim()) searchParams.set('search', params.search.trim())
     if (params.status && params.status !== 'all') searchParams.set('status', params.status)
+    if (params.overload500 && params.overload500 !== 'all') searchParams.set('overload_500', params.overload500)
     if (params.plan && params.plan !== 'all') searchParams.set('plan', params.plan)
     if (params.authKind && params.authKind !== 'all') searchParams.set('auth_kind', params.authKind)
     if (params.tag) searchParams.set('tag', params.tag)
@@ -1189,6 +1190,13 @@ export const api = {
   },
   getUsageRequestDiagnostics: (id: number, signal?: AbortSignal) =>
     request<import('./lib/usageRequestDiagnostics').UsageRequestDiagnosticDetail>(`/usage/logs/${id}/diagnostics`, { signal }),
+  downloadUsageLogs: (scope: 'filtered' | 'all', params?: UsageLogQueryParams, signal?: AbortSignal) => {
+    if (scope === 'filtered' && !params) throw new Error('Filtered export requires a time range')
+    const search = scope === 'filtered' && params ? buildUsageLogSearchParams(params) : new URLSearchParams()
+    search.set('scope', scope)
+    search.set('confirmed', 'true')
+    return requestBlob(`/usage/logs/export?${search}`, { method: 'POST', signal })
+  },
   getUsageLogs: (params: { start?: string; end?: string; limit?: number } = {}) => {
     const searchParams = new URLSearchParams()
     if (params.start && params.end) {

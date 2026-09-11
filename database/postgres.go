@@ -6470,8 +6470,29 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 
 // ListUsageLogsByFilter 按过滤条件查询请求日志，不分页，用于导出。
 func (db *DB) ListUsageLogsByFilter(ctx context.Context, f UsageLogFilter) ([]*UsageLog, error) {
-	where, args := db.buildUsageLogWhere(f)
-	where += ` ORDER BY u.created_at DESC`
+	logs := make([]*UsageLog, 0)
+	err := db.walkUsageLogExport(ctx, &f, false, func(entry *UsageLogExportEntry) error {
+		logs = append(logs, entry.UsageLog)
+		return nil
+	})
+	return logs, err
+}
+
+func (db *DB) WalkUsageLogsForExport(ctx context.Context, filter *UsageLogFilter, visit func(*UsageLogExportEntry) error) error {
+	return db.walkUsageLogExport(ctx, filter, true, visit)
+}
+
+func (db *DB) walkUsageLogExport(ctx context.Context, filter *UsageLogFilter, includeDiagnostics bool, visit func(*UsageLogExportEntry) error) error {
+	where := "1=1"
+	var args []interface{}
+	if filter != nil {
+		where, args = db.buildUsageLogWhere(*filter)
+	}
+	where += ` ORDER BY u.created_at DESC, u.id DESC`
+	diagnosticColumn := `''`
+	if includeDiagnostics {
+		diagnosticColumn = `COALESCE(u.request_diagnostics, '')`
+	}
 
 	query := `SELECT u.id, u.account_id, COALESCE(u.client_ip, ''), u.endpoint, u.model, COALESCE(u.effective_model, ''), u.prompt_tokens, u.completion_tokens, u.total_tokens, u.status_code, u.duration_ms,
 			COALESCE(u.input_tokens, 0), COALESCE(u.output_tokens, 0), COALESCE(u.reasoning_tokens, 0),
@@ -6485,42 +6506,43 @@ func (db *DB) ListUsageLogsByFilter(ctx context.Context, f UsageLogFilter) ([]*U
 			COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 			COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
 			COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''),
-			COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
+			COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at,
+			COALESCE(u.newapi_user_name, ''), ` + diagnosticColumn + `
 		FROM usage_logs u
 		LEFT JOIN accounts a ON u.account_id = a.id
 		WHERE ` + where
 
 	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 
-	var logs []*UsageLog
 	for rows.Next() {
 		l := &UsageLog{}
 		var credentialRaw interface{}
 		var createdAtRaw interface{}
+		var diagnostics string
 		if err := rows.Scan(&l.ID, &l.AccountID, &l.ClientIP, &l.Endpoint, &l.Model, &l.EffectiveModel, &l.PromptTokens, &l.CompletionTokens, &l.TotalTokens, &l.StatusCode, &l.DurationMs,
 			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.ImageInputTokens, &l.ImageOutputTokens, &l.CachedImageInputTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens,
 			&l.ServiceTier, &l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier, &l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize,
 			&l.AccountBilled, &l.UserBilled, &l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage,
 			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix,
-			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
-			return nil, err
+			&credentialRaw, &l.AccountName, &createdAtRaw, &l.NewAPIUserName, &diagnostics); err != nil {
+			return err
 		}
 		l.AccountEmail = accountEmailFromRawCredentials(credentialRaw)
 		l.CreatedAt, err = parseDBTimeValue(createdAtRaw)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		l.populateBillingBreakdown()
-		logs = append(logs, l)
+		exportEntry := &UsageLogExportEntry{UsageLog: l, Diagnostics: usageExportDiagnosticJSON(diagnostics)}
+		if err := visit(exportEntry); err != nil {
+			return err
+		}
 	}
-	if logs == nil {
-		logs = []*UsageLog{}
-	}
-	return logs, rows.Err()
+	return rows.Err()
 }
 
 // ClearUsageLogs 清空所有使用日志（先快照累计值到基线表）。billingWindows

@@ -219,7 +219,7 @@ func (h *Handler) checkPromptSessionCreationLimitForSelectedAccountAdmission(c *
 		status.AdmissionError, status.AdmissionCode = continuityError.Message, continuityError.Code
 		return status, true
 	}
-	if err := h.claimRequestRootNaming(c, body); err != nil {
+	if err := h.validateRequestNamingRoot(c, body); err != nil {
 		status.AdmissionError, status.AdmissionCode = err.Message, err.Code
 		return status, true
 	}

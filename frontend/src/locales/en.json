@@ -729,6 +729,10 @@
     "workspaceRouteBadge": "Workspace route",
     "planWorkspaceId": "Workspace ID: {{id}}",
     "planOverloadCount": "Health bar window ({{minutes}} minutes): {{count}} × 500 · server_is_overloaded",
+    "overload500Filter": "500 marker",
+    "overload500Marked": "With 500 marker",
+    "overload500Unmarked": "Without 500 marker",
+    "overload500FilterHint": "Filter by 500 · server_is_overloaded in the health bar window. Combine with account status and other filters. No marker does not mean the account has no other errors.",
     "tokenWorkspaceLabel": "Token default workspace",
     "importProxyLabel": "Proxy for Imported Accounts (optional)",
     "importProxyHint": "Applied to every account in this import. Leave blank to import without a proxy.",
@@ -2238,6 +2242,17 @@
     "reason7dUrgency": "7d Reset Soon"
   },
   "usage": {
+    "exportFiltered": "Download filtered",
+    "exportAll": "Download all",
+    "exportFilteredTitle": "Download matching logs?",
+    "exportAllTitle": "Download all usage logs?",
+    "exportFilteredDesc": "Download every record matching the time range and filters captured when clicked, not just this page. JSON includes request types, errors, usage and saved inbound/outbound diagnostics.",
+    "exportAllDesc": "Ignore the current time range, channel and all filters. Download every retained usage log, including failed, canceled and internal requests. Deleted logs cannot be recovered. Prefer filtered downloads for large datasets.",
+    "exportPrivacy": "The file retains user identifiers, emails, IPs, device and session IDs for diagnosis. Sensitive credential fields are redacted; request/response bodies are not intentionally exported. Review before sharing. This only downloads locally and does not upload anything.",
+    "exportConfirm": "Confirm JSON download",
+    "exportCancel": "Cancel download",
+    "exportSuccess": "File generated; browser save started",
+    "exportFailed": "Usage log download failed: {{error}}",
     "diagnostics": {
       "column": "Request type",
       "title": "Request diagnostics",

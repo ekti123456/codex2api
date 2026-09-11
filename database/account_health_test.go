@@ -95,3 +95,55 @@ func TestAccountHealthOverloadCountsMatchWindowAndExactCode(test *testing.T) {
 	require.NoError(test, err)
 	require.Empty(test, expired)
 }
+
+func TestAccountOverloadFilterMatchesHealthMarkersAndExpires(test *testing.T) {
+	db := newGrokStateTestDB(test)
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	start := now.Add(-200 * time.Minute)
+	want := make(map[int64]struct{})
+	for index, scenario := range []struct {
+		status   int
+		message  string
+		at       time.Time
+		internal string
+		marked   bool
+	}{
+		{500, "server_is_overloaded", start, "", true},
+		{500, "server_is_overloaded · busy", now, "", true},
+		{500, "  server_is_overloaded · busy  ", now.Add(-time.Minute), "", true},
+		{500, "server_is_overloaded", start.Add(-time.Second), "", false},
+		{500, "server_is_overloaded", now.Add(time.Second), "", false},
+		{500, "server_is_overloaded", now, "grok_capability_probe", false},
+		{500, "other_error · server_is_overloaded", now, "", false},
+		{500, "server_is_overloaded_extra", now, "", false},
+		{500, "", now, "", false},
+		{503, "server_is_overloaded", now, "", false},
+		{429, "server_is_overloaded", now, "", false},
+		{200, "server_is_overloaded", now, "", false},
+	} {
+		accountID := int64(index + 1)
+		_, err := db.conn.ExecContext(test.Context(), `INSERT INTO usage_logs
+			(account_id, status_code, error_message, internal_reason, created_at)
+			VALUES ($1, $2, $3, $4, $5)`, accountID, scenario.status, scenario.message, scenario.internal, sqliteTimeParam(scenario.at))
+		require.NoError(test, err)
+		if scenario.marked {
+			want[accountID] = struct{}{}
+		}
+	}
+	marked, err := db.GetAccountsWithOverload500(test.Context(), start, now)
+	require.NoError(test, err)
+	require.Equal(test, want, marked)
+	buckets, err := db.GetAccountsHealthBuckets(test.Context(), now, 20, 10*time.Minute)
+	require.NoError(test, err)
+	for accountID, accountBuckets := range buckets {
+		count := 0
+		for _, bucket := range accountBuckets {
+			count += bucket.Overloaded500
+		}
+		_, selected := marked[accountID]
+		require.Equal(test, count > 0, selected)
+	}
+	expired, err := db.GetAccountsWithOverload500(test.Context(), start.Add(201*time.Minute), now.Add(201*time.Minute))
+	require.NoError(test, err)
+	require.Empty(test, expired)
+}

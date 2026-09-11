@@ -1905,6 +1905,7 @@ export default function Accounts() {
     [navigate],
   );
   const [page, setPage] = useState(1);
+  const [overload500Filter, setOverload500Filter] = useState<"all" | "marked" | "unmarked">("all");
   const [pageSize, setPageSize] = usePersistedPageSize(
     "accounts",
     20,
@@ -2787,6 +2788,7 @@ export default function Accounts() {
       pageSize,
       search: debouncedSearchQuery,
       status: statusFilter,
+      overload500: overload500Filter,
       plan: planFilter,
       authKind: authFilter,
       tag: tagFilter,
@@ -2811,7 +2813,7 @@ export default function Accounts() {
       statsState: accountsResponse.stats_state,
       disabledSorts: accountsResponse.disabled_sorts ?? [],
     };
-  }, [authFilter, debouncedSearchQuery, domainFilter, groupFilter.exclude, groupFilter.include, groupFilter.ungrouped, page, pageSize, planFilter, sortDir, sortKey, statusFilter, tagFilter]);
+  }, [authFilter, debouncedSearchQuery, domainFilter, groupFilter.exclude, groupFilter.include, groupFilter.ungrouped, overload500Filter, page, pageSize, planFilter, sortDir, sortKey, statusFilter, tagFilter]);
 
   const loadAccountAnalysis = useCallback(async (opts?: { silent?: boolean }) => {
     accountAnalysisAbortRef.current?.abort();
@@ -3322,6 +3324,7 @@ export default function Accounts() {
     channel: "codex",
     search: debouncedSearchQuery || undefined,
     status: statusFilter === "all" ? undefined : statusFilter,
+    overload_500: overload500Filter === "all" ? undefined : overload500Filter,
     plan: planFilter === "all" ? undefined : planFilter,
     auth_kind: authFilter === "all" ? undefined : authFilter,
     tag: tagFilter || undefined,
@@ -3329,7 +3332,7 @@ export default function Accounts() {
     group_include: groupFilter.include.length > 0 ? groupFilter.include : undefined,
     group_exclude: groupFilter.exclude.length > 0 ? groupFilter.exclude : undefined,
     ungrouped: groupFilter.ungrouped || undefined,
-  }), [authFilter, debouncedSearchQuery, domainFilter, groupFilter.exclude, groupFilter.include, groupFilter.ungrouped, planFilter, statusFilter, tagFilter]);
+  }), [authFilter, debouncedSearchQuery, domainFilter, groupFilter.exclude, groupFilter.include, groupFilter.ungrouped, overload500Filter, planFilter, statusFilter, tagFilter]);
 
   // 服务端已完成全池筛选、排序和分页。
   const filteredAccounts = accounts;
@@ -6934,6 +6937,35 @@ export default function Accounts() {
 
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="mr-0.5 shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t("accounts.overload500Filter")}
+              </span>
+              {([
+                ["all", t("accounts.filterAll")],
+                ["marked", t("accounts.overload500Marked")],
+                ["unmarked", t("accounts.overload500Unmarked")],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={overload500Filter === key}
+                  title={t("accounts.overload500FilterHint")}
+                  onClick={() => {
+                    setOverload500Filter(key);
+                    setPage(1);
+                  }}
+                  className={`shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-semibold transition-colors ${
+                    overload500Filter === key
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-0.5 shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 {t("accounts.schedulerView")}
               </span>
               <SchedulerChip
@@ -7280,6 +7312,7 @@ export default function Accounts() {
             </div>
 
             {(statusFilter !== "all" ||
+              overload500Filter !== "all" ||
               planFilter !== "all" ||
               Boolean(tagFilter) ||
               Boolean(domainFilter) ||
@@ -7311,6 +7344,19 @@ export default function Accounts() {
                                 : statusFilter === "disabled"
                                   ? t("accounts.filterDisabled")
                                   : t("accounts.filterLocked")}
+                    <X className="size-3" />
+                  </button>
+                )}
+                {overload500Filter !== "all" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOverload500Filter("all");
+                      setPage(1);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15"
+                  >
+                    {t(overload500Filter === "marked" ? "accounts.overload500Marked" : "accounts.overload500Unmarked")}
                     <X className="size-3" />
                   </button>
                 )}
@@ -7375,6 +7421,7 @@ export default function Accounts() {
                   onClick={() => {
                     setStatusFilter("all");
                     setPlanFilter("all");
+                    setOverload500Filter("all");
                     setTagFilter("");
                     setDomainFilter("");
                     setGroupFilter(EMPTY_ACCOUNT_GROUP_FILTER);

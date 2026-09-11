@@ -532,6 +532,7 @@ export interface AccountSessionsResponse {
 }
 
 export interface AccountsPageParams {
+  overload500?: 'all' | 'marked' | 'unmarked'
   channel?: UpstreamChannel
   page: number
   pageSize: number
@@ -620,6 +621,7 @@ export interface AccountAnalysisResponse {
 }
 
 export interface AccountOperationSelector {
+  overload_500?: 'marked' | 'unmarked'
   channel: UpstreamChannel
   search?: string
   status?: string

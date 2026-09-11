@@ -163,6 +163,10 @@
     "allModelCooldownsCleared": "已清除 {{count}} 條模型冷卻",
     "planWorkspaceId": "空間 ID：{{id}}",
     "planOverloadCount": "健康條統計時段（{{minutes}} 分鐘）內：500 · server_is_overloaded 共 {{count}} 次",
+    "overload500Filter": "500 標記",
+    "overload500Marked": "有 500 標記",
+    "overload500Unmarked": "無 500 標記",
+    "overload500FilterHint": "按健康條統計時段內是否出現 500 · server_is_overloaded 篩選，可與帳號狀態等條件組合。無標記不代表帳號沒有其他錯誤。",
     "occupiedRequestsTooltip": "目前真實在途 {{active}}，佔用槽位 {{occupied}}（含 {{buffered}} 個會話緩衝槽）",
     "sessionCapacityTitle": "帳號活躍會話容量",
     "sessionCapacityHint": "預設關閉。限制此帳號同時保留的不同會話數；已有會話會刷新空閒時間，逾時自動釋放。",
@@ -1398,6 +1402,17 @@
     "cyberRiskSubjectEvents": "{{count}} 筆事件"
   },
   "usage": {
+    "exportFiltered": "按篩選下載",
+    "exportAll": "全部下載",
+    "exportFilteredTitle": "確認下載篩選日誌？",
+    "exportAllTitle": "確認下載全部使用日誌？",
+    "exportFilteredDesc": "下載點擊時的時間範圍及所有篩選條件下的全部符合記錄，不限目前頁面。JSON 包含請求類型、錯誤、用量及已儲存的入站/出站診斷。",
+    "exportAllDesc": "忽略目前時間、渠道及所有篩選條件，下載資料庫中仍保留的全部使用日誌，包括失敗、取消及內部請求。不會還原已清理日誌；資料量大時建議按篩選下載。",
+    "exportPrivacy": "檔案保留使用者識別、信箱、IP、裝置和會話 ID 以便排查。敏感憑據欄位會遮蔽，不主動匯出請求/回應本文；分享前請再次檢查。僅下載至本機，不會自動上傳。",
+    "exportConfirm": "確認下載 JSON",
+    "exportCancel": "取消下載",
+    "exportSuccess": "檔案已產生，瀏覽器已開始儲存",
+    "exportFailed": "下載使用日誌失敗：{{error}}",
     "diagnostics": {
       "column": "請求類型",
       "title": "請求診斷",
