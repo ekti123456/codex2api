@@ -142,7 +142,7 @@ func TestResponsesKnownLocalUnavailableReturns409(t *testing.T) {
 				config := testResponseCacheConfig()
 				config.maxEntryBytes = 1
 				resetResponseCacheStateForTest(config)
-				setResponseCache("anon", "oversize", []json.RawMessage{responseCacheTestItem(1, "oversize")})
+				setResponseCache(continuationFixtureCacheOwner(), "oversize", []json.RawMessage{responseCacheTestItem(1, "oversize")})
 			},
 		},
 		{
@@ -152,8 +152,8 @@ func TestResponsesKnownLocalUnavailableReturns409(t *testing.T) {
 				config := testResponseCacheConfig()
 				config.maxEntries = 1
 				resetResponseCacheStateForTest(config)
-				setResponseCache("anon", "evicted", []json.RawMessage{responseCacheTestItem(1, "first")})
-				setResponseCache("anon", "new", []json.RawMessage{responseCacheTestItem(2, "second")})
+				setResponseCache(continuationFixtureCacheOwner(), "evicted", []json.RawMessage{responseCacheTestItem(1, "first")})
+				setResponseCache(continuationFixtureCacheOwner(), "new", []json.RawMessage{responseCacheTestItem(2, "second")})
 			},
 		},
 	}
@@ -162,7 +162,9 @@ func TestResponsesKnownLocalUnavailableReturns409(t *testing.T) {
 			tt.setup()
 			handler := NewHandler(newContinuationCodexStore(), nil, nil, nil)
 			raw := []byte(`{"model":"gpt-5.5","previous_response_id":"` + tt.id + `","input":[{"role":"user","content":"continue"}],"stream":true}`)
-			recorder := invokeResponsesHandler(t, handler.Responses, raw)
+			recorder := invokeResponsesHandlerWithContext(t, func(ctx *gin.Context) {
+				ctx.Request.Header = continuationFixtureHeaders(handler)
+			}, handler.Responses, raw)
 			if recorder.Code != http.StatusConflict {
 				t.Fatalf("status = %d, want 409; body=%s", recorder.Code, recorder.Body.String())
 			}
@@ -306,6 +308,15 @@ func TestResponsesCompactNormalRequestWaitsForTemporarilyBusyAccountBeforeScope4
 	if len(seenBody) == 0 {
 		t.Fatal("temporarily busy relay account was not used after release")
 	}
+}
+
+func continuationFixtureCacheOwner() string {
+	return "credential:" + hashRiskIdentity("Bearer continuation-test-key")
+}
+
+func continuationFixtureHeaders(handler *Handler) http.Header {
+	handler.configKeys["continuation-test-key"] = true
+	return http.Header{"Authorization": {"Bearer continuation-test-key"}}
 }
 
 func invokeResponsesHandler(t *testing.T, handler func(*gin.Context), body []byte) *httptest.ResponseRecorder {

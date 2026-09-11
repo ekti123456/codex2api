@@ -15,6 +15,21 @@ import (
 
 const usageRequestDiagnosticsContextKey = "usage_request_diagnostics_v1"
 
+func requestSessionIDPrefix(headers http.Header, body []byte) string {
+	signals := collectCodexSessionGraphSignals(headers, body)
+	values := append(signals.headerSessions, signals.metadataRoots...)
+	for _, value := range values {
+		if len(strings.TrimSpace(value)) != 36 {
+			return ""
+		}
+	}
+	sessionID, conflict := oneSessionGraphValue(values)
+	if signals.malformed || conflict || !validSessionGraphUUID(sessionID) {
+		return ""
+	}
+	return strings.ToLower(sessionID[:8])
+}
+
 type usageRequestResolution struct {
 	ThreadSource            string `json:"thread_source"`
 	RequestKind             string `json:"request_kind"`
@@ -53,6 +68,7 @@ type usageRecentAccountDiagnostic struct {
 }
 
 type usageRequestDiagnostics struct {
+	SessionIDPrefix       string                       `json:"session_id_prefix,omitempty"`
 	Version               int                          `json:"version"`
 	StartedAt             time.Time                    `json:"started_at"`
 	CompletedAt           time.Time                    `json:"completed_at"`
@@ -205,6 +221,13 @@ func diagnosticMetadata(raw gjson.Result) map[string]string {
 			}
 		}
 	}
+	if enabled := raw.Get("analytics_enabled"); enabled.Exists() {
+		if enabled.Type == gjson.True || enabled.Type == gjson.False {
+			result["analytics_enabled"] = enabled.Raw
+		} else {
+			result["analytics_enabled"] = "invalid_type"
+		}
+	}
 	return result
 }
 
@@ -241,6 +264,7 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 		}
 	}
 	state.ResponsesInput = diagnoseResponsesInput(body, headers, endpoint)
+	state.SessionIDPrefix = requestSessionIDPrefix(headers, body)
 	c.Set(sessionOperationsContextKey, nil)
 	c.Set(sessionContinuityContextKey, nil)
 	if c.Request != nil {
@@ -328,9 +352,8 @@ func (h *Handler) captureUsageRequestResolution(c *gin.Context, body []byte, ide
 			state.Incoming["signed_newapi"]["platform"] = diagnosticLabel(policy.Platform)
 		}
 	}
-	if h != nil && h.store != nil {
-		state.Recent.Enabled = h.store.CodexUnlinkedAccountFallbackEnabled()
-	}
+	state.Recent.Enabled = false
+	state.Recent.Result = "retired"
 	state.Recent.Scope = identity.unlinkedFallbackScope
 }
 
@@ -385,6 +408,7 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		return
 	}
 	snapshot := *state
+	input.SessionIDPrefix = snapshot.SessionIDPrefix
 	snapshot.Request = usageRequestInfoSnapshot(c, input)
 	if input.UpstreamDiagnostics != "" {
 		var upstream UpstreamTransportDiagnostic
@@ -460,7 +484,7 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 	}
 	if len(payload) > database.MaxUsageRequestDiagnosticsBytes && snapshot.Upstream != nil && snapshot.Upstream.OutboundIdentity != nil {
 		upstream := *snapshot.Upstream
-		upstream.OutboundIdentity = &outboundIdentityDiagnostic{Truncated: true}
+		upstream.OutboundIdentity = &outboundIdentityDiagnostic{FormatVersion: upstream.OutboundIdentity.FormatVersion, Truncated: true}
 		snapshot.Upstream = &upstream
 		payload, err = json.Marshal(snapshot)
 	}

@@ -105,13 +105,14 @@ func TestCompletedContinuationBoundBeforeDelivery(test *testing.T) {
 }
 
 func TestContinuationDoesNotFallBackWhenConnectionLocal(test *testing.T) {
-	for _, scenario := range []string{"ready", "lost", "busy", "profile", "proxy", "account", "api_key", "scope", "persisted", "unknown"} {
+	for _, scenario := range []string{"ready", "lost", "busy", "profile", "session", "proxy", "account", "api_key", "scope", "persisted", "unknown"} {
 		test.Run(scenario, func(test *testing.T) {
 			manager := NewManager()
 			test.Cleanup(manager.Stop)
 			manager.probeFunc = func(*WsConnection) bool { return true }
 			connection := addConnectedConn(test, manager, 17, "lane")
 			headers := http.Header{"User-Agent": {"codex-tui/1"}}
+			headers.Set("Session-Id", "mapped-session")
 			connection.handshakeProfile = websocketConnectionProfile(headers)
 			manager.BindResponseConn("response-1", connection, "lane", 17, "key", "scope")
 			account := &auth.Account{DBID: 17, Status: auth.StatusReady}
@@ -127,6 +128,8 @@ func TestContinuationDoesNotFallBackWhenConnectionLocal(test *testing.T) {
 				connection.session.AddPendingRequest("busy")
 			case "profile":
 				headers.Set("User-Agent", "codex-tui/2")
+			case "session":
+				headers.Set("Session-Id", "different-session")
 			case "proxy":
 				proxyURL = "http://proxy.invalid:3128"
 			case "account":

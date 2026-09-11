@@ -661,8 +661,7 @@ func TestResponsesWebSocket1009FallbackExpandsPreviousResponseFromCache(t *testi
 	})
 	globalWSSizeRouter = websocketSizeRouter{}
 
-	// 匿名请求的缓存归属是 "anon"；历史含 function_call 才会入缓存。
-	cacheCompletedResponse("anon",
+	cacheCompletedResponse(continuationFixtureCacheOwner(),
 		[]byte(`[{"type":"message","role":"user","content":[{"type":"input_text","text":"earlier"}]}]`),
 		[]byte(`{"type":"response.completed","response":{"id":"resp_issue548","output":[{"type":"function_call","call_id":"call_548","name":"lookup","arguments":"{}"}]}}`))
 
@@ -690,7 +689,7 @@ func TestResponsesWebSocket1009FallbackExpandsPreviousResponseFromCache(t *testi
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/responses"
-	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, continuationFixtureHeaders(handler))
 	if err != nil {
 		if resp != nil {
 			t.Fatalf("dial websocket failed: %v status=%d", err, resp.StatusCode)
@@ -842,7 +841,7 @@ func TestResponsesWebSocketContinuationKeepsBoundAccountPastBoundedLimit(t *test
 func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousResponse(t *testing.T) {
 	resetResponseCacheForTest()
 	t.Cleanup(resetResponseCacheForTest)
-	setResponseCache("anon", "resp_stale", []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"earlier context"}`)})
+	setResponseCache(continuationFixtureCacheOwner(), "resp_stale", []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"earlier context"}`)})
 
 	previousResponseNotFoundBody := `{"error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response with id 'resp_stale' not found."}}`
 	completedSSE := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_new\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
@@ -980,7 +979,7 @@ func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousRespon
 			defer server.Close()
 
 			wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/responses"
-			conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			conn, resp, err := websocket.DefaultDialer.Dial(wsURL, continuationFixtureHeaders(handler))
 			if err != nil {
 				if resp != nil {
 					t.Fatalf("dial websocket failed: %v status=%d", err, resp.StatusCode)
@@ -1598,8 +1597,8 @@ func TestResponsesHTTPIngressFallsBackToHTTPWhenForcedWebsocketMessageTooBig(t *
 	expectedUpstreamID := resolveUpstreamSessionID(0, sessionIdentity.upstreamSeed, sessionIdentity.explicitUpstreamID, false)
 	httpSessionID := <-httpSessionIDs
 	httpCacheKey := <-httpCacheKeys
-	if httpSessionID != expectedUpstreamID || httpCacheKey != expectedUpstreamID {
-		t.Fatalf("HTTP fallback upstream identity = header %q body %q, want header-independent seed %q", httpSessionID, httpCacheKey, expectedUpstreamID)
+	if httpSessionID != "" || httpCacheKey != expectedUpstreamID {
+		t.Fatalf("HTTP fallback identity = header %q cache %q, want absent original session and independent cache %q", httpSessionID, httpCacheKey, expectedUpstreamID)
 	}
 	if localAffinityID := resolveDownstreamAffinityID(req.Header); httpSessionID == localAffinityID || httpCacheKey == localAffinityID {
 		t.Fatalf("local affinity id leaked into HTTP fallback: local=%q header=%q body=%q", localAffinityID, httpSessionID, httpCacheKey)

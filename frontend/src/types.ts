@@ -650,6 +650,9 @@ export interface ResetCreditsDetailResponse {
 export interface AccountHealthBucket {
   success: number
   failed: number
+  overloaded_500?: number
+  start_at?: ISODateString
+  end_at?: ISODateString
 }
 
 // AccountHealthBarsResponse 是 GET /api/accounts/health-bars 的响应。
@@ -2024,6 +2027,7 @@ export interface SystemSettings {
   fast_scheduler_enabled: boolean
   scheduler_engine: 'legacy' | 'shadow' | 'indexed'
   codex_force_websocket: boolean
+  codex_telemetry_enabled: boolean
   codex_request_compression: boolean
   codex_ws_weak_network_mode: boolean
   codex_ws_keepalive_enabled: boolean
@@ -2619,6 +2623,7 @@ export interface PromptRiskProfileDetailResponse {
 }
 
 export interface PromptRiskSessionWindow {
+  session_id_prefix?: string
   session_hash: string
   expanded?: boolean
   multiplier?: number
@@ -3455,6 +3460,7 @@ export interface APIKeyAccountStatsResponse {
 }
 
 export interface UsageLog {
+  session_id_prefix?: string
 	request_type?: string
   request_id?: string
   upstream_request_id?: string

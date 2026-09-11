@@ -312,7 +312,7 @@ func TestRunSingleBatchTestResponseFailedDoesNotRecoverCooldown(t *testing.T) {
 	}
 }
 
-func TestRunSingleBatchTestResponseFailedMarksReadyAccountError(t *testing.T) {
+func TestRunSingleBatchTestResponseFailedPreservesReadyAccount(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -337,14 +337,14 @@ func TestRunSingleBatchTestResponseFailedMarksReadyAccountError(t *testing.T) {
 	if status == "success" {
 		t.Fatalf("status = success, want failure for response.failed; message=%q", msg)
 	}
-	if got := account.RuntimeStatus(); got != "error" {
-		t.Fatalf("RuntimeStatus() = %q, want error", got)
+	if got := account.RuntimeStatus(); got != "active" {
+		t.Fatalf("RuntimeStatus() = %q, want active", got)
 	}
 	account.Mu().RLock()
 	errorMsg := account.ErrorMsg
 	account.Mu().RUnlock()
-	if !strings.Contains(errorMsg, "model unavailable") {
-		t.Fatalf("ErrorMsg = %q, want model unavailable", errorMsg)
+	if errorMsg != "" {
+		t.Fatalf("ErrorMsg = %q, want empty for a model-level failure", errorMsg)
 	}
 }
 

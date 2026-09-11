@@ -850,7 +850,8 @@ func TestPromptSessionCreationLimitStoresCurrentWindowDetailWithoutRefreshingExp
 	firstAccount := &auth.Account{DBID: 92, SessionCapacityEnabled: true, SessionCapacityMax: 5, SessionCapacityIdleTTLSeconds: 3600}
 	secondAccount := &auth.Account{DBID: 93, SessionCapacityEnabled: true, SessionCapacityMax: 5, SessionCapacityIdleTTLSeconds: 3600}
 	body := []byte(`{"model":"gpt-5.6-sol","reasoning":{"effort":"high"},"input":[{"role":"user","content":[{"type":"input_text","text":"hello active window"}]}]}`)
-	firstContext := promptSessionLimitTestContext("window-detail")
+	const sessionID = "01a09012-b9de-7b40-a04b-612ef4dc3d7d"
+	firstContext := promptSessionLimitTestContext(sessionID)
 	firstContext.Request.Header.Set("User-Agent", "codex_cli_rs/0.128.0")
 
 	status, exceeded := handler.checkPromptSessionCreationLimitForSelectedAccount(firstContext, body, firstAccount)
@@ -861,12 +862,15 @@ func TestPromptSessionCreationLimitStoresCurrentWindowDetailWithoutRefreshingExp
 	beforeExpiry := handler.promptSessionLimits[status.Subject][status.SessionHash]
 	before := handler.promptSessionWindowDetails[status.Subject][status.SessionHash]
 	handler.promptSessionLimitMu.Unlock()
+	if before.SessionIDPrefix != "01a09012" {
+		t.Fatalf("creation prefix = %q", before.SessionIDPrefix)
+	}
 	if before.CreatedAt.IsZero() || !before.ExpiresAt.Equal(beforeExpiry) || before.AccountID != 92 || before.Model != "gpt-5.6-sol" || before.ReasoningEffort != "high" || before.ClientUserAgent != "codex_cli_rs/0.128.0" || !strings.Contains(before.PromptPreview, "hello active window") {
 		t.Fatalf("first detail = %#v expiry=%v", before, beforeExpiry)
 	}
 
 	repeatBody := []byte(`{"model":"gpt-5.4","reasoning":{"effort":"low"},"input":"later prompt must not replace the creation prompt"}`)
-	repeatContext := promptSessionLimitTestContext("window-detail")
+	repeatContext := promptSessionLimitTestContext(sessionID)
 	repeatContext.Request.Header.Set("User-Agent", "later-client/9.9")
 	status, exceeded = handler.checkPromptSessionCreationLimitForSelectedAccount(repeatContext, repeatBody, secondAccount)
 	if exceeded || !status.Existing {
@@ -876,11 +880,29 @@ func TestPromptSessionCreationLimitStoresCurrentWindowDetailWithoutRefreshingExp
 	afterExpiry := handler.promptSessionLimits[status.Subject][status.SessionHash]
 	after := handler.promptSessionWindowDetails[status.Subject][status.SessionHash]
 	handler.promptSessionLimitMu.Unlock()
+	if after.SessionIDPrefix != before.SessionIDPrefix {
+		t.Fatalf("reuse changed prefix: before=%q after=%q", before.SessionIDPrefix, after.SessionIDPrefix)
+	}
 	if !afterExpiry.Equal(beforeExpiry) || !after.CreatedAt.Equal(before.CreatedAt) {
 		t.Fatalf("existing window timing changed: before=%#v after=%#v", before, after)
 	}
 	if after.AccountID != 93 || after.Model != before.Model || after.ReasoningEffort != before.ReasoningEffort || after.ClientUserAgent != before.ClientUserAgent || after.PromptPreview != before.PromptPreview {
 		t.Fatalf("existing window detail = %#v, want account update with creation metadata preserved", after)
+	}
+	handler.promptSessionLimitMu.Lock()
+	legacy := after
+	legacy.SessionIDPrefix = ""
+	handler.promptSessionWindowDetails[status.Subject][status.SessionHash] = legacy
+	handler.promptSessionLimitMu.Unlock()
+	status, exceeded = handler.checkPromptSessionCreationLimitForSelectedAccount(promptSessionLimitTestContext(sessionID), repeatBody, secondAccount)
+	if exceeded || !status.Existing {
+		t.Fatalf("backfill request: status=%#v exceeded=%v", status, exceeded)
+	}
+	handler.promptSessionLimitMu.Lock()
+	backfilled := handler.promptSessionWindowDetails[status.Subject][status.SessionHash]
+	handler.promptSessionLimitMu.Unlock()
+	if backfilled.SessionIDPrefix != "01a09012" || !backfilled.CreatedAt.Equal(before.CreatedAt) || !backfilled.ExpiresAt.Equal(beforeExpiry) {
+		t.Fatalf("invalid backfilled window: %#v", backfilled)
 	}
 }
 

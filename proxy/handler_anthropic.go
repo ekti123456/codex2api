@@ -842,7 +842,7 @@ func (h *Handler) Messages(c *gin.Context) {
 				sendAPIKeyModelRequestQuotaError(c, reqErr)
 				return
 			}
-			timedOut := ttftGuard.TimedOut()
+			timedOut := ttftGuard.TimedOut() && codexIdentityRequestError(reqErr) == nil
 			ttftGuard.Stop()
 			if timedOut {
 				reqErr = firstTokenTimeoutError(attemptFirstTokenTimeout)

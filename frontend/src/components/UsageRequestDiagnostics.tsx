@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { UsageLog } from '../types'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
 import { useToast } from '../hooks/useToast'
 import Modal from './Modal'
 import { Button } from './ui/button'
@@ -37,6 +37,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [reload, setReload] = useState(0)
+  const [decodeMetadata, setDecodeMetadata] = useState(false)
   const id = log?.id
 
   useEffect(() => {
@@ -61,7 +62,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
     ['request', { request_type: detail.request_type, ...diagnosticRecord(data.request), started_at: data.started_at, completed_at: data.completed_at, correlation_id: data.correlation_id, newapi_request_id: data.newapi_request_id, attempt: data.attempt, capture_status: data.capture_status, responses_input: data.responses_input }],
     ['client', diagnosticClientInfo(data.incoming)],
     ['upstream', upstream],
-    ['outbound', diagnosticOutboundIdentity(outboundIdentity)],
+    ['outbound', outboundIdentity],
     ['resolved', data.resolved],
     ['continuity', data.session_continuity],
     ['audit', data.audit],
@@ -73,7 +74,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(JSON.stringify(detail, null, 2))
+      await navigator.clipboard.writeText(JSON.stringify(diagnosticJSONDisplay(detail, decodeMetadata), null, 2))
       showToast(t('usage.diagnostics.copied'))
     } catch {
       showToast(t('usage.diagnostics.copyFailed'), 'error')
@@ -83,6 +84,10 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
   return <Modal show={log !== null} onClose={onClose} title={`${t('usage.diagnostics.title')} #${id ?? ''}`}
     contentClassName="sm:max-w-[820px]" footer={<Button size="sm" disabled={!data || loading} onClick={() => void copy()}>{t('usage.diagnostics.copy')}</Button>}>
     <p className="mb-4 text-xs leading-5 text-muted-foreground">{t('usage.diagnostics.hint')}</p>
+    <label className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
+      <input type="checkbox" checked={decodeMetadata} onChange={(event) => setDecodeMetadata(event.target.checked)} />
+      {t('usage.diagnostics.decodeMetadata')}
+    </label>
     {loading ? <p role="status" className="text-sm text-muted-foreground">{t('common.loading')}</p> : error ? <div role="alert" className="space-y-3 text-sm text-destructive">
       <p>{error}</p><Button variant="outline" size="sm" onClick={() => setReload((value) => value + 1)}>{t('usage.diagnostics.retry')}</Button>
     </div> : !data ? <p className="text-sm text-muted-foreground">{t('usage.diagnostics.unavailable')}</p> : <div className="space-y-4">
@@ -91,7 +96,10 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
       {sections.map(([title, value]) => <section key={title} className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{title === 'continuity' ? t('sessionContinuity.title') : t(`usage.diagnostics.sections.${title}`)}</h3>
         {title === 'client' && <p className="mb-3 text-xs leading-5 text-muted-foreground">{t('usage.diagnostics.clientHint')}</p>}
-        <DiagnosticFields value={value} />
+        {title === 'outbound' ? <>
+          <p className="mb-3 text-xs leading-5 text-muted-foreground">{t(diagnosticRecord(value).format_version === 2 ? 'usage.diagnostics.outboundJSONHint' : 'usage.diagnostics.outboundLegacyHint')}</p>
+          <pre className="max-h-[560px] overflow-auto rounded-md bg-muted/40 p-3 text-xs font-mono select-text" tabIndex={0}>{JSON.stringify(diagnosticJSONDisplay(value ?? null, decodeMetadata), null, 2)}</pre>
+        </> : <DiagnosticFields value={value} />}
       </section>)}
       <section className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{t('usage.diagnostics.sections.incoming')}</h3>

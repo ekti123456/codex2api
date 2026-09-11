@@ -10,8 +10,10 @@ import (
 )
 
 type CodexFingerprint struct {
-	ids     *codexFingerprintIDs
-	headers http.Header
+	ids                *codexFingerprintIDs
+	headers            http.Header
+	preserveSessionIDs bool
+	identityValues     []string
 }
 
 func NewCodexFingerprint(account *auth.Account, headers http.Header, body []byte) *CodexFingerprint {
@@ -38,6 +40,7 @@ func (fingerprint *CodexFingerprint) DownstreamHeaders() http.Header {
 
 func (fingerprint *CodexFingerprint) ApplyHeaders(outbound http.Header) {
 	applyCodexFingerprintHeaders(outbound, fingerprint.ids, fingerprint.headers)
+	fingerprint.ApplySessionHeaders(outbound)
 }
 
 func (fingerprint *CodexFingerprint) ApplyBody(body []byte) []byte {

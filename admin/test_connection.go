@@ -1577,7 +1577,6 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 		if msg, ok := batchTestContextFailure(testCtx, modelErr); ok {
 			return "failed", msg
 		}
-		h.store.MarkError(acc, "批量测试失败: "+modelErr.Error())
 		return "failed", modelErr.Error()
 	}
 	if output := batchTestOutputFromContext(testCtx); output != nil {
@@ -1605,7 +1604,6 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 			}
 			return "failed", msg
 		}
-		h.store.MarkError(acc, "批量测试请求失败: "+err.Error())
 		return "failed", err.Error()
 	}
 	defer resp.Body.Close()
@@ -1971,7 +1969,6 @@ func (h *Handler) readBatchTestStreamResult(ctx context.Context, acc *auth.Accou
 			if !hasContent {
 				resultStatus = "failed"
 				resultMessage = formatNoOutputUpstreamError(data)
-				h.markBatchTestStreamFailure(acc, resultMessage)
 				return false
 			}
 			resultStatus = "success"
@@ -1997,11 +1994,9 @@ func (h *Handler) readBatchTestStreamResult(ctx context.Context, acc *auth.Accou
 	}
 	if !gotTerminal {
 		msg := formatMissingTerminalUpstreamError(lastUpstreamEvent)
-		h.markBatchTestStreamFailure(acc, msg)
 		return "failed", msg
 	}
 	msg := "上游测试未返回明确结果"
-	h.markBatchTestStreamFailure(acc, msg)
 	return "failed", msg
 }
 
@@ -2010,12 +2005,12 @@ func (h *Handler) batchTestTerminalFailure(acc *auth.Account, resp *http.Respons
 	if h.applyResponsesUsageLimitFailure(acc, resp, model, payload) {
 		return "rate_limited", message
 	}
-	h.markBatchTestStreamFailure(acc, message)
+	h.markBatchTestStreamFailure(acc, message, payload)
 	return "failed", message
 }
 
-func (h *Handler) markBatchTestStreamFailure(acc *auth.Account, message string) {
-	if h == nil || h.store == nil || acc == nil {
+func (h *Handler) markBatchTestStreamFailure(acc *auth.Account, message string, payload []byte) {
+	if h == nil || h.store == nil || acc == nil || !shouldMarkBatchTestAccountError(http.StatusOK, payload) {
 		return
 	}
 	switch acc.RuntimeStatus() {
@@ -2038,7 +2033,6 @@ func (h *Handler) handleBatchTestReadError(ctx context.Context, acc *auth.Accoun
 		}
 		return "failed", msg
 	}
-	h.store.MarkError(acc, "批量测试读取响应失败: "+err.Error())
 	return "failed", err.Error()
 }
 
@@ -2053,6 +2047,23 @@ func batchTestContextFailure(ctx context.Context, err error) (string, bool) {
 }
 
 func shouldMarkBatchTestAccountError(statusCode int, body []byte) bool {
+	if statusCode == http.StatusOK {
+		for _, path := range []string{
+			"response.status_details.error.code", "response.status_details.error.type",
+			"response.error.code", "response.error.type", "error.code", "error.type",
+		} {
+			switch strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, path).String())) {
+			case "invalid_grant", "invalid_client", "unauthorized_client", "access_denied",
+				"authentication_error", "invalid_api_key", "unauthorized", "invalid_token", "token_invalid",
+				"token_revoked", "token_expired", "access_token_expired", "refresh_token_invalidated",
+				"account_banned", "account_deactivated", "account_disabled", "account_suspended",
+				"organization_disabled", "workspace_deactivated", "deactivated_workspace",
+				"unsupported_country_region_territory":
+				return true
+			}
+		}
+		return false
+	}
 	msg := strings.ToLower(string(body))
 	if statusCode == http.StatusPaymentRequired {
 		return true

@@ -10,6 +10,7 @@ import ChannelFilter, { useUsageChannel } from '../components/ChannelFilter'
 import ChannelLogo from '../components/ChannelLogo'
 import CompactionBadges from '../components/CompactionBadges'
 import UsageRequestDiagnostics, { UsageRequestTypeButton } from '../components/UsageRequestDiagnostics'
+import { usageRequestTypes, usageRequestTypeLabelKey } from '../lib/usageRequestDiagnostics'
 import ModelLogo from '../components/ModelLogo'
 import Modal from '../components/Modal'
 import ColumnSettingsMenu from '../components/ColumnSettingsMenu'
@@ -1515,12 +1516,13 @@ function EmptyPanel({ accent, icon, text }: { accent: PanelAccentKey; icon: Reac
   )
 }
 
-type UsageTableColumn = 'requestType' | 'status' | 'error' | 'model' | 'account' | 'apiKey' | 'newapiUser' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
+type UsageTableColumn = 'requestType' | 'sessionIDPrefix' | 'status' | 'error' | 'model' | 'account' | 'apiKey' | 'newapiUser' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
 
 const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string }> = [
   { key: 'status', labelKey: 'usage.tableStatus' },
   { key: 'model', labelKey: 'usage.tableModel' },
   { key: 'requestType', labelKey: 'usage.diagnostics.column' },
+  { key: 'sessionIDPrefix', labelKey: 'usage.sessionIDPrefix' },
   { key: 'account', labelKey: 'usage.tableAccount' },
   { key: 'apiKey', labelKey: 'usage.tableApiKey' },
   { key: 'newapiUser', labelKey: 'usage.tableNewAPIUser' },
@@ -1545,6 +1547,7 @@ const USAGE_TABLE_COLUMN_ORDER: readonly UsageTableColumn[] = USAGE_COLUMN_DEFIN
 const USAGE_VISIBLE_COLUMNS_KEY = 'codex2api:usage:visible-columns'
 const DEFAULT_USAGE_VISIBLE_COLUMNS: Record<UsageTableColumn, boolean> = {
   requestType: true,
+  sessionIDPrefix: true,
   status: true,
   error: true,
   model: true,
@@ -1783,6 +1786,7 @@ export default function Usage() {
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [filterStatus, setFilterStatus] = useState<UsageStatusFilter>('')
+  const [filterRequestType, setFilterRequestType] = useState('')
   const [filterModel, setFilterModel] = useState('')
   const [filterEndpoint, setFilterEndpoint] = useState('')
   const [filterApiKeyId, setFilterApiKeyId] = useState('')
@@ -1859,6 +1863,7 @@ export default function Usage() {
       start,
       end,
       q: searchQuery || undefined,
+      requestType: filterRequestType || undefined,
       model: filterModel || undefined,
       endpoint: filterEndpoint || undefined,
       apiKeyId: filterApiKeyId || undefined,
@@ -1874,7 +1879,7 @@ export default function Usage() {
       retry: filterRetry || undefined,
       viaWebsocket: filterTransport === 'ws' ? 'true' : filterTransport === 'http' ? 'false' : undefined,
     }
-  }, [timeRange, customRange, searchQuery, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterType, channel, filterStatus, filterErrorKind, filterRetry, filterTransport])
+  }, [timeRange, customRange, searchQuery, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterType, channel, filterStatus, filterRequestType, filterErrorKind, filterRetry, filterTransport])
 
   // 服务端分页加载日志
   const loadLogs = useCallback(async () => {
@@ -2026,6 +2031,7 @@ export default function Usage() {
   const hasActiveFilters = Boolean(
     searchInput
     || filterStatus
+    || filterRequestType
     || filterModel
     || filterEndpoint
     || filterApiKeyId
@@ -2063,6 +2069,7 @@ export default function Usage() {
     setSearchInput('')
     setSearchQuery('')
     setFilterStatus('')
+    setFilterRequestType('')
     setFilterModel('')
     setFilterEndpoint('')
     setFilterApiKeyId('')
@@ -2430,6 +2437,19 @@ export default function Usage() {
                   />
                 ) : null}
 
+                <Select
+                  className="w-full min-w-0 sm:w-52 shrink-0"
+                  compact
+                  value={filterRequestType}
+                  onValueChange={(value) => { setFilterRequestType(value); setPage(1) }}
+                  placeholder={t('usage.allRequestTypes')}
+                  options={[
+                    { label: t('usage.allRequestTypes'), value: '' },
+                    ...usageRequestTypes.map((value) => ({ label: t(usageRequestTypeLabelKey(value)), value })),
+                    { label: t(usageRequestTypeLabelKey()), value: 'not_recorded' },
+                  ]}
+                />
+
                 <button
                   type="button"
                   onClick={() => setShowAdvancedFilters((current) => !current)}
@@ -2647,6 +2667,7 @@ export default function Usage() {
                           />
                           <InternalRequestBadge log={log} />
                           {visibleColumns.requestType && <UsageRequestTypeButton log={log} onClick={() => setDiagnosticsLog(log)} />}
+                          {visibleColumns.sessionIDPrefix && <span className="text-xs" title={t('usage.sessionIDPrefixHint')}>{t('usage.sessionIDPrefix')}: {log.session_id_prefix ? <button type="button" className="font-mono text-primary hover:underline" onClick={() => handleSearchChange(log.session_id_prefix!)}>{log.session_id_prefix}</button> : '-'}</span>}
                         </div>
                         {visibleColumns.time && (
                           <div className="shrink-0 whitespace-nowrap text-right text-[11px] tabular-nums text-muted-foreground">
@@ -2774,6 +2795,7 @@ export default function Usage() {
                       {visibleColumns.status && <TableHead className={usageTableHeadClass}>{t('usage.tableStatus')}</TableHead>}
                       {visibleColumns.model && <TableHead className={usageTableHeadClass}>{t('usage.tableModel')}</TableHead>}
                       {visibleColumns.requestType && <TableHead className={usageTableHeadClass}>{t('usage.diagnostics.column')}</TableHead>}
+                      {visibleColumns.sessionIDPrefix && <TableHead className={usageTableHeadClass} title={t('usage.sessionIDPrefixHint')}>{t('usage.sessionIDPrefix')}</TableHead>}
                       {visibleColumns.account && <TableHead className={usageTableHeadClass}>{t('usage.tableAccount')}</TableHead>}
                       {visibleColumns.apiKey && <TableHead className={usageTableHeadClass}>{t('usage.tableApiKey')}</TableHead>}
                       {visibleColumns.newapiUser && <TableHead className={usageTableHeadClass}>{t('usage.tableNewAPIUser')}</TableHead>}
@@ -2872,6 +2894,7 @@ export default function Usage() {
                           </div>
                         </TableCell>}
                         {visibleColumns.requestType && <TableCell><UsageRequestTypeButton log={log} onClick={() => setDiagnosticsLog(log)} /></TableCell>}
+                        {visibleColumns.sessionIDPrefix && <TableCell className="font-mono text-xs" title={t('usage.sessionIDPrefixHint')}>{log.session_id_prefix ? <button type="button" className="text-primary hover:underline" onClick={() => handleSearchChange(log.session_id_prefix!)}>{log.session_id_prefix}</button> : '-'}</TableCell>}
                         {visibleColumns.account && <TableCell className={`${usageTableTextClass} text-muted-foreground`}>
                           <span className="block max-w-[180px] truncate whitespace-nowrap" title={formatUsageAccountTitle(log)}>
                             {formatUsageAccountLabel(log)}

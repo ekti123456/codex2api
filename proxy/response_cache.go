@@ -24,7 +24,7 @@ import (
 // 本模块在本地缓存每次响应的累积对话上下文，当下一个请求带 previous_response_id 时，
 // 自动将历史 items 注入回 input，使上游无需依赖服务端存储即可匹配 call_id。
 //
-// 隔离：缓存键 = owner(下游 API Key ID) + response_id。没有 owner 维度时，任何请求
+// 隔离：缓存键 = owner(下游 API Key 及已验证用户；匿名 WS 限当前连接) + response_id。没有 owner 维度时，任何请求
 // 只要带上（猜到/复用了）别人的 response_id 就能把别人的对话历史注入自己的 input，
 // 造成跨用户上下文泄露。owner 不匹配一律按缓存未命中处理。
 

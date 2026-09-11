@@ -17,9 +17,12 @@ import (
 	"github.com/codex2api/proxy"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) {
+	test.Setenv("CODEX_TELEMETRY_ENABLED", "false")
+	test.Setenv("CODEX_OUTBOUND_SESSION_MODE", "aligned")
 	for _, mode := range []string{auth.CodexFingerprintModeOff, auth.CodexFingerprintModeDevice, auth.CodexFingerprintModeSession, auth.CodexFingerprintModeFull} {
 		for _, pooled := range []bool{false, true} {
 			test.Run(fmt.Sprintf("%s/pooled=%t", mode, pooled), func(test *testing.T) {
@@ -92,13 +95,13 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 						thread += strconv.Itoa(turn)
 					}
 					canonical := map[string]any{
-						"installation_id": "device-" + strconv.Itoa(turn), "session_id": "root", "thread_id": thread,
+						"installation_id": "device", "session_id": "root", "thread_id": thread,
 						"window_id": fmt.Sprintf("%s:%d", thread, turn), "window_number": turn,
 						"context_window_id": "context-" + strconv.Itoa(turn), "turn_id": strconv.Itoa(turn),
 						"request_kind": "turn", "thread_source": "user",
 						"project_id": "project", "projectId": "project", "workspace_id": "workspace",
 					}
-					if turn == 0 {
+					if pooled && turn == 0 {
 						canonical["parent_thread_id"] = "root"
 						canonical["forked_from_thread_id"] = "fork-source"
 						canonical["subagent_kind"] = "review"
@@ -107,11 +110,16 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 					}
 					raw, _ := json.Marshal(canonical)
 					body, _ := json.Marshal(map[string]any{"model": "gpt-6-astra", "input": []any{}, "client_metadata": map[string]any{"x-codex-turn-metadata": string(raw), "project_id": "flat-project", "projectId": "flat-project", "workspace_id": "flat-workspace"}})
-					expected := proxy.NewCodexFingerprint(account, stale, body).ApplyBody(body)
 					sessionID := "gateway-cache"
 					if pooled {
 						sessionID = ""
 					}
+					if !pooled && turn > 0 {
+						body, _ = json.Marshal(map[string]any{"model": "gpt-6-astra", "input": []any{}, "previous_response_id": "resp_" + strconv.Itoa(turn-1), "client_metadata": map[string]any{"x-codex-turn-metadata": string(raw), "project_id": "flat-project", "projectId": "flat-project", "workspace_id": "flat-workspace"}})
+					}
+					expected := proxy.NewCodexTransportFingerprint(account, stale, body, sessionID).ApplyBody(body)
+					expectedMetadata, _ := sjson.Set(gjson.GetBytes(expected, codexTurnMetadataClientPath).String(), "analytics_enabled", false)
+					expected, _ = sjson.SetBytes(expected, codexTurnMetadataClientPath, expectedMetadata)
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					response, err := proxy.ExecuteRequest(ctx, account, body, sessionID, "", "same-key", nil, stale, true)
@@ -129,15 +137,28 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 					case <-ctx.Done():
 						test.Fatal("mock did not receive frame")
 					}
-					if sent.connection != 1 {
-						test.Fatalf("connection was not reused: %d", sent.connection)
+					expectedConnection := int64(1)
+					if pooled {
+						expectedConnection = int64(turn + 1)
 					}
-					for _, name := range []string{"X-Codex-Window-Id", "Thread-Id", "X-Client-Request-Id", "X-Codex-Turn-Metadata", "X-Codex-Parent-Thread-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "X-Codex-Turn-State", "X-Codex-Project-Id", "X-Codex-Workspace-Id"} {
+					if sent.connection != expectedConnection {
+						test.Fatalf("unexpected connection reuse: %d, want %d", sent.connection, expectedConnection)
+					}
+					for _, name := range []string{"X-Codex-Turn-State", "X-Codex-Project-Id", "X-Codex-Workspace-Id"} {
 						if sent.headers.Get(name) != "" {
 							test.Fatalf("frozen handshake contains per-request field %s", name)
 						}
 					}
 					metadata := gjson.GetBytes(sent.body, codexTurnMetadataClientPath).String()
+					if !pooled && turn > 0 && gjson.GetBytes(sent.body, "previous_response_id").String() != "resp_"+strconv.Itoa(turn-1) {
+						test.Fatal("existing response continuation was rewritten or removed")
+					}
+					if sent.headers.Get("Session-Id") != "root" || gjson.Get(metadata, "session_id").String() != "root" || sent.headers.Get("Thread-Id") != thread {
+						test.Fatal("reused WS frame session differs from handshake")
+					}
+					if turn > 0 && (sent.headers.Get("X-OpenAI-Memgen-Request") != "" || sent.headers.Get("X-OpenAI-Subagent") != "" || sent.headers.Get("X-Codex-Parent-Thread-Id") != "") {
+						test.Fatal("task identity inherited from an incompatible connection")
+					}
 					for _, field := range []string{"project_id", "projectId", "workspace_id"} {
 						if gjson.Get(metadata, field).Exists() || gjson.GetBytes(sent.body, "client_metadata."+field).Exists() {
 							test.Fatalf("project metadata survived in WS frame: %s", sent.body)

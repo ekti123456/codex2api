@@ -619,9 +619,9 @@ func TestExecuteCompactRequestConvergesBodyAndHeaders(t *testing.T) {
 
 	for _, tc := range []struct{ path, want string }{
 		{"client_metadata.x-codex-installation-id", ids.installationID},
-		{"client_metadata.session_id", ids.sessionID},
-		{"client_metadata.thread_id", ids.threadID},
-		{"client_metadata.x-codex-window-id", ids.windowID},
+		{"client_metadata.session_id", "client-session"},
+		{"client_metadata.thread_id", "client-thread"},
+		{"client_metadata.x-codex-window-id", "client-window:0"},
 	} {
 		if got := gjson.GetBytes(capturedBody, tc.path).String(); got != tc.want {
 			t.Fatalf("outbound %s = %q, want converged %q", tc.path, got, tc.want)

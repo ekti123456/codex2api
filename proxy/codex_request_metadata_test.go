@@ -167,6 +167,8 @@ func TestCodexFingerprintPreservesCurrentCompatibilityFields(test *testing.T) {
 }
 
 func TestExecuteRequestKeepsFingerprintCarriersAligned(test *testing.T) {
+	test.Setenv("CODEX_TELEMETRY_ENABLED", "false")
+	test.Setenv("CODEX_OUTBOUND_SESSION_MODE", "aligned")
 	test.Setenv("CODEX_SESSION_HEADER_MODE", "native")
 	test.Setenv("CODEX_SESSION_HEADER_ALIGN_CONVERGED", "false")
 	previousResin := GetResinConfig()
@@ -187,7 +189,9 @@ func TestExecuteRequestKeepsFingerprintCarriersAligned(test *testing.T) {
 		test.Run(mode, func(test *testing.T) {
 			account := &auth.Account{DBID: 1902, AccessToken: "dummy-token", CodexFingerprintMode: mode}
 			headers, body := fingerprintMetadataFixture(test, "root", "child", "parent", "fork", 4)
-			expected := NewCodexFingerprint(account, headers, body).ApplyBody(body)
+			expected := NewCodexTransportFingerprint(account, headers, body, "isolated-cache").ApplyBody(body)
+			expectedMetadata, _ := sjson.Set(gjson.GetBytes(expected, "client_metadata.x-codex-turn-metadata").String(), "analytics_enabled", false)
+			expected, _ = sjson.SetBytes(expected, "client_metadata.x-codex-turn-metadata", expectedMetadata)
 			response, err := ExecuteRequest(context.Background(), account, body, "isolated-cache", "", "key", nil, headers, false)
 			if err != nil {
 				test.Fatal(err)
@@ -202,8 +206,11 @@ func TestExecuteRequestKeepsFingerprintCarriersAligned(test *testing.T) {
 			if window := sent.headers.Get(codexWindowIDHeader); window == "" || window != gjson.Get(canonical, "window_id").String() {
 				test.Fatal("HTTP window header missing or mismatched")
 			}
-			if sent.headers.Get(codexSessionIDHeader) != "isolated-cache" {
-				test.Fatal("cache isolation changed")
+			if sent.headers.Get(codexSessionIDHeader) != "root" || gjson.GetBytes(sent.body, "prompt_cache_key").String() != "isolated-cache" {
+				test.Fatal("session identity or separate cache isolation changed")
+			}
+			if gjson.Get(canonical, "session_id").String() != "root" || gjson.GetBytes(sent.body, "client_metadata.session_id").String() != "root" {
+				test.Fatal("body session differs from HTTP session header")
 			}
 		})
 	}

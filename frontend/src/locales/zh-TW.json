@@ -162,6 +162,7 @@
     "modelCooldownCleared": "已清除 {{model}} 的模型冷卻",
     "allModelCooldownsCleared": "已清除 {{count}} 條模型冷卻",
     "planWorkspaceId": "空間 ID：{{id}}",
+    "planOverloadCount": "健康條統計時段（{{minutes}} 分鐘）內：500 · server_is_overloaded 共 {{count}} 次",
     "occupiedRequestsTooltip": "目前真實在途 {{active}}，佔用槽位 {{occupied}}（含 {{buffered}} 個會話緩衝槽）",
     "sessionCapacityTitle": "帳號活躍會話容量",
     "sessionCapacityHint": "預設關閉。限制此帳號同時保留的不同會話數；已有會話會刷新空閒時間，逾時自動釋放。",
@@ -268,6 +269,8 @@
     "proxyPoolLinkedHint": "已關聯代理池節點（按位址綁定）：在「代理」頁修改該節點位址會同步到所有綁定帳號，刪除則自動解除綁定。"
   },
   "settings": {
+    "codexTelemetry": "用戶端遙測（實驗性）",
+    "codexTelemetryDesc": "使用所選用戶端身分傳送模擬的 Codex 分析事件與 OTLP 指標。事件為合成，並非來自真實工具呼叫。預設關閉，關閉時出站 turn metadata 寫入 analytics_enabled: false；可用 CODEX_TELEMETRY_ENABLED=false 在部署層強制關閉。",
     "codexCapacityRetryEnabled": "容量不足自動重試",
     "codexCapacityRetryEnabledDesc": "預設關閉，容量不足或過載時直接結束。開啟後僅依對應通道的有限重試次數在閘道內補試，不受持續重試放大；耗盡後仍保留原始錯誤碼與訊息，不再改寫為用戶端可重試錯誤。HTTP 使用 400 避免一般 5xx/429 重試，內部日誌保留上游狀態。獨立於過載熔斷開關。",
     "pricing": {
@@ -1412,7 +1415,10 @@
       "clientHint": "用戶端入站聲明按來源分別展示，不合併有差異的安裝/裝置 ID，也不等同於上游帳號收斂後的裝置 ID。未傳送或舊日誌未採集的欄位不推測；SDK、版本和系統資訊僅在實際攜帶時顯示。",
       "sections": { "request": "請求資訊", "client": "用戶端與裝置", "upstream": "上游出口、連線與錯誤階段", "outbound": "最終出站身分（HTTP／WS 握手／本文）", "resolved": "實際解析結果", "audit": "內容審核階段", "dispatch": "模型調度階段", "windows": "視窗處理結果", "routing": "帳號選擇結果", "recent": "無根最近帳號回溯", "incoming": "入口欄位（按來源區分）" }
     },
-    "searchLogs": "搜尋錯誤、模型、端點、帳號、NewAPI 使用者、IP、用戶端 UA 或 API Key…",
+    "searchLogs": "搜尋會話前綴、錯誤、模型、端點、帳號、NewAPI 使用者、IP、用戶端 UA 或 API Key…",
+    "sessionIDPrefix": "會話 ID 前綴",
+    "allRequestTypes": "全部請求類別",
+    "sessionIDPrefixHint": "入站 session_id 的前 8 位，僅用於關聯觀察，不代表父子關係；未擷取、無有效 UUID 或欄位衝突時顯示 -。",
     "tableCached": "快取",
     "cacheReadTooltip": "讀取快取：{{tokens}}",
     "cacheCreateTooltip": "建立快取：{{tokens}}（5 分鐘 {{m5}} · 1 小時 {{h1}}）",

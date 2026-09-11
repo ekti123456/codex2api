@@ -199,6 +199,7 @@ import {
 import { useTranslation } from "react-i18next";
 import AccountUsageModal from "../components/AccountUsageModal";
 import AccountHealthBar from "../components/AccountHealthBar";
+import { accountHealthOverloadSummary } from "../lib/accountHealth";
 import AccountDetailSheet from "../components/AccountDetailSheet";
 import RequestCountPills, {
   CountBreakdownTooltip,
@@ -1562,6 +1563,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                   <PlanBadge
                                     planType={account.plan_type}
                                     workspaceId={accountWorkspaceId(account)}
+                                    healthBuckets={healthBuckets}
                                   />
                                   <ExpiryBadge
                                     expiresAt={account.subscription_expires_at}
@@ -3072,7 +3074,7 @@ export default function Accounts() {
         console.warn("account health bars load failed:", err);
       });
     return () => { cancelled = true; };
-  }, [accountPageIDsKey]);
+  }, [accountPageIDsKey, data.snapshotAt]);
 
   useEffect(() => {
     if (!accountPageIDsKey) {
@@ -13479,13 +13481,16 @@ function accountWorkspaceId(account: Pick<AccountRow, "effective_workspace_id" |
 function PlanBadge({
   planType,
   workspaceId,
+  healthBuckets,
 }: {
   planType?: string;
   workspaceId?: string;
+  healthBuckets?: AccountHealthBucket[];
 }) {
   const { t } = useTranslation();
   const label = formatPlanLabel(planType);
-  if (label === "-")
+  const overload = accountHealthOverloadSummary(healthBuckets);
+  if (label === "-" && !overload.overloaded)
     return <span className="text-[12px] text-muted-foreground">-</span>;
 
   const style: Record<string, string> = {
@@ -13501,10 +13506,14 @@ function PlanBadge({
   const normalized = normalizePlanType(planType);
   const key =
     normalized === "pro" && label === "ProLite" ? "prolite" : normalized;
-  const cls =
-    style[key] ||
-    "bg-slate-100 text-slate-600 ring-slate-400/20 dark:bg-slate-500/15 dark:text-slate-300 dark:ring-slate-400/20";
+  const cls = overload.overloaded
+    ? "bg-red-100 text-red-700 ring-red-500/30 dark:bg-red-500/20 dark:text-red-300 dark:ring-red-400/30"
+    : style[key] || "bg-slate-100 text-slate-600 ring-slate-400/20 dark:bg-slate-500/15 dark:text-slate-300 dark:ring-slate-400/20";
   const trimmedWorkspaceId = workspaceId?.trim() ?? "";
+  const showWorkspace = isWorkspacePlan(planType) && !!trimmedWorkspaceId;
+  const overloadTitle = overload.overloaded
+    ? t("accounts.planOverloadCount", { count: overload.count, minutes: overload.minutes })
+    : "";
   const badge = (
     <span
       className={`inline-flex min-w-0 max-w-full items-center truncate rounded-md px-2.5 py-1 text-[13px] font-semibold ring-1 ring-inset ${cls}`}
@@ -13512,7 +13521,7 @@ function PlanBadge({
       {label}
     </span>
   );
-  if (!isWorkspacePlan(planType) || !trimmedWorkspaceId) {
+  if (!showWorkspace && !overload.overloaded) {
     return badge;
   }
 
@@ -13520,16 +13529,26 @@ function PlanBadge({
     <TooltipProvider delayDuration={0} skipDelayDuration={0}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex min-w-0 max-w-full cursor-help">
+          <span className="inline-flex min-w-0 max-w-full cursor-help" tabIndex={0} aria-label={overloadTitle ? `${label}: ${overloadTitle}` : undefined}>
             {badge}
           </span>
         </TooltipTrigger>
         <TooltipContent
           side="top"
           sideOffset={6}
-          className="max-w-[360px] font-mono text-[11px]"
+          className="max-w-[360px] space-y-1 text-[11px]"
         >
-          {t("accounts.planWorkspaceId", { id: trimmedWorkspaceId })}
+          {overload.overloaded && (
+            <>
+              <div className="font-semibold">{overloadTitle}</div>
+              {overload.startAt !== undefined && overload.endAt !== undefined && (
+                <div className="opacity-70">
+                  {new Date(overload.startAt).toLocaleString()} – {new Date(overload.endAt).toLocaleString()}
+                </div>
+              )}
+            </>
+          )}
+          {showWorkspace && <div className="font-mono">{t("accounts.planWorkspaceId", { id: trimmedWorkspaceId })}</div>}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -14133,6 +14152,7 @@ function AccountMobileCard({
               <PlanBadge
                 planType={account.plan_type}
                 workspaceId={accountWorkspaceId(account)}
+                healthBuckets={healthBuckets}
               />
               <SchedulerPriorityBadge account={account} />
               <UsingCreditsBadge account={account} />
@@ -14427,6 +14447,7 @@ function AccountMobileCard({
                     <PlanBadge
                       planType={account.plan_type}
                       workspaceId={accountWorkspaceId(account)}
+                      healthBuckets={healthBuckets}
                     />
                   )}
                   {(!visibleColumns || visibleColumns.priority) && (

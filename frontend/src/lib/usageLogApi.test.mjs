@@ -8,6 +8,7 @@ test("usage log search params include diagnostic and traffic filters", () => {
     start: "2026-08-05T00:00:00Z",
     end: "2026-08-05T01:00:00Z",
     q: "rate limit",
+    requestType: "related_internal",
     model: "gpt-5.6-sol",
     endpoint: "/v1/responses",
     apiKeyId: "12",
@@ -29,6 +30,7 @@ test("usage log search params include diagnostic and traffic filters", () => {
     start: "2026-08-05T00:00:00Z",
     end: "2026-08-05T01:00:00Z",
     q: "rate limit",
+    request_type: "related_internal",
     model: "gpt-5.6-sol",
     endpoint: "/v1/responses",
     api_key_id: "12",
@@ -54,10 +56,20 @@ test("usage log search params omit empty optional filters", () => {
     q: "",
     status: "",
     retry: "",
+    requestType: "",
   });
 
   assert.deepEqual(Object.fromEntries(params), {
     start: "2026-08-05T00:00:00Z",
     end: "2026-08-05T01:00:00Z",
   });
+});
+
+test("session prefix search uses the shared server-side log filters", () => {
+  const params = buildUsageLogSearchParams({ q: "01a09012", accountId: "1706", model: "gpt-5.6-sol", status: "5xx", requestType: "compaction" });
+  assert.equal(params.get("q"), "01a09012");
+  assert.equal(params.get("account_id"), "1706");
+  assert.equal(params.get("model"), "gpt-5.6-sol");
+  assert.equal(params.get("status"), "5xx");
+  assert.equal(params.get("request_type"), "compaction");
 });

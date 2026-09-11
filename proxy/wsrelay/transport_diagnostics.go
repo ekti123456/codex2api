@@ -15,7 +15,7 @@ import (
 
 func websocketConnectionProfile(headers http.Header) string {
 	filtered := headers.Clone()
-	stripCodexFrameScopedHandshakeHeaders(filtered)
+	stripCodexHandshakeSnapshotFromProfile(filtered)
 	filtered.Del("Sec-WebSocket-Key")
 	filtered.Del("X-Request-Id")
 	values := make(map[string][]string, len(filtered))

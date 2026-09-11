@@ -624,7 +624,16 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	requestBody = normalizeCodexStructuredOutputForTransport(requestBody, false, responsesLite)
 	requestBody = normalizeCompactionTriggerFinal(requestBody, false)
 
-	fingerprint := NewCodexFingerprint(account, headers, requestBody)
+	cacheKey := strings.TrimSpace(gjson.GetBytes(requestBody, "prompt_cache_key").String())
+	if sessionID != "" {
+		cacheKey = sessionID
+	}
+	cacheKey = ScopeCodexPromptCacheKey(ctx, cacheKey)
+	requestBody, headers = ApplyCodexAnalyticsMetadata(requestBody, headers)
+	fingerprint := NewCodexTransportFingerprint(account, headers, requestBody, cacheKey)
+	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
+		return nil, err
+	}
 	requestBody = fingerprint.ApplyBody(requestBody)
 
 	account.Mu().RLock()
@@ -672,10 +681,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	requestBody, _ = sjson.DeleteBytes(requestBody, "type")
 
 	// 3. 注入 prompt_cache_key（如果请求体中没有，且 sessionID 不为空）
-	existingCacheKey := strings.TrimSpace(gjson.GetBytes(requestBody, "prompt_cache_key").String())
-	cacheKey := existingCacheKey
-	if sessionID != "" {
-		cacheKey = sessionID
+	if cacheKey != "" {
 		requestBody, _ = sjson.SetBytes(requestBody, "prompt_cache_key", cacheKey)
 	}
 
@@ -703,6 +709,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 
 		// ==================== 请求头（伪装 Codex CLI） ====================
 		applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers, fingerprint)
+		ApplyCodexAnalyticsHeader(req.Header, requestBody)
 		// Content-Encoding 在通用头装配之后设置：真实客户端也是在编码完成时才补这个头
 		// （codex-rs/http-client/src/request.rs prepare_encoded_json），且账号自定义头
 		// 不该有能力声明一个与实际字节不符的编码。
@@ -721,7 +728,9 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 			return nil, err
 		}
+		observeTelemetry := BeginCodexTelemetry(account, requestBody, req.Header, proxyURL, false)
 		resp, err := doTracedUpstreamRequest(client, req, account, proxyURL, requestBody)
+		observeTelemetry(resp, err)
 		if err != nil {
 			if shouldRecyclePooledClient(err) {
 				recyclePooledClient(account, proxyURL)
@@ -1005,15 +1014,21 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	// 真实标识，上游看到「头说设备 A、体说设备 B」这种真实客户端不会有的矛盾。
 	// 必须用 prepareCodexResponsesLiteTransport 之后的 headers（它可能返回克隆），
 	// 与下方 applyCodexRequestHeaders 取同一份下游头，两处推导结果才一致。
-	fingerprint := NewCodexFingerprint(account, headers, requestBody)
+	cacheKey := strings.TrimSpace(gjson.GetBytes(requestBody, "prompt_cache_key").String())
+	if sessionID != "" {
+		cacheKey = sessionID
+	}
+	cacheKey = ScopeCodexPromptCacheKey(ctx, cacheKey)
+	requestBody, headers = ApplyCodexAnalyticsMetadata(requestBody, headers)
+	fingerprint := NewCodexTransportFingerprint(account, headers, requestBody, cacheKey)
+	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
+		return nil, err
+	}
 	headers = fingerprint.DownstreamHeaders()
 	requestBody = fingerprint.ApplyBody(requestBody)
 	requestBody = ApplyCodexEnvironment(ctx, requestBody, proxyURL)
 
-	existingCacheKey := strings.TrimSpace(gjson.GetBytes(requestBody, "prompt_cache_key").String())
-	cacheKey := existingCacheKey
-	if sessionID != "" {
-		cacheKey = sessionID
+	if cacheKey != "" {
 		requestBody, _ = sjson.SetBytes(requestBody, "prompt_cache_key", cacheKey)
 	}
 
@@ -1035,6 +1050,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	}
 
 	applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers, fingerprint)
+	ApplyCodexAnalyticsHeader(req.Header, requestBody)
 	// routing hint 由网关按最终出站 body 合成，须在账号自定义头之后设置。
 	ApplyCodexRoutingHint(req.Header, account, requestBody)
 
@@ -1259,6 +1275,9 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 	// 可整体退回旧的 Session_id 形态。
 	ApplyCodexSessionHeaders(req.Header, account, cacheKey, downstreamHeaders, false, fingerprints...)
 	applyAccountCustomHeaders(req, account)
+	if len(fingerprints) > 0 {
+		fingerprints[0].ApplySessionHeaders(req.Header)
+	}
 	StripCodexProjectMetadataHeaders(req.Header)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
 }
@@ -1474,6 +1493,7 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	status, policyContext := h.cachedNewAPIPolicyAuditState(c)
 	verifiedPolicy := (status == "verified" || status == "signed_response") && policyContext.MetaVerified
 	bindTransportOwner(c, policyContext, verifiedPolicy)
+	h.bindCodexIdentityClaims(c)
 	accountingBypass := h.verifiedNewAPISessionAccountingBypass(c)
 	rootIdentity := h.resolveRequestRootSessionIdentityForContext(c, body)
 	identity.requiresRootAccount = requiresBackgroundRootAccount(rootIdentity.threadSource)
@@ -1485,23 +1505,8 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	}
 	setLocalSessionAccountingBypass(c, accountingBypass)
 	identity.bypassWindowAccounting = accountingBypass
-	if h != nil && h.store != nil && h.store.CodexUnlinkedAccountFallbackEnabled() {
-		scope := unlinkedFallbackScopeForRequest(c, body, policyContext, verifiedPolicy)
-		if scope != "" {
-			identity.unlinkedFallbackScope = scope
-			identity.unlinkedFallbackOnly = !rootIdentity.stable && !rootIdentity.conflict
-			if identity.unlinkedFallbackOnly {
-				// Keep upstreamSeed untouched, but remove the implicit local
-				// affinity key so this request cannot create/refresh a durable
-				// session binding while using the temporal bridge.
-				identity.affinityID = ""
-			}
-			c.Set(unlinkedFallbackContextKey, unlinkedFallbackContext{
-				Scope: scope, RecordRoot: rootIdentity.stable && !rootIdentity.related && !accountingBypass,
-				RequestStarted: time.Now(),
-			})
-		}
-	}
+	identity.unlinkedFallbackScope = unlinkedFallbackScopeForRequest(c, body, policyContext, verifiedPolicy)
+	identity.unlinkedFallbackOnly = false
 	if rootIdentity.stable && !rootIdentity.conflict {
 		if fingerprint := strings.TrimSpace(rootIdentity.fingerprint); verifiedPolicy && fingerprint != "" {
 			identity.affinityID = "newapi-root-session:" + fingerprint

@@ -80,7 +80,7 @@ func TestOutboundIdentityHTTPRecordsFinalOverridesAndBody(test *testing.T) {
 	require.NotEqual(test, incomingDevice, actualDevice)
 	require.Equal(test, customHeaderDevice, actualDevice)
 	require.Equal(test, actualDevice, gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.body.client_metadata.x-codex-installation-id").String())
-	require.Equal(test, actualDevice, gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.body.turn_metadata.installation_id").String())
+	require.Equal(test, actualDevice, gjson.Get(gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.body.client_metadata.x-codex-turn-metadata").String(), "installation_id").String())
 	require.NotContains(test, usage.RequestDiagnostics, "private-")
 }
 
@@ -161,4 +161,63 @@ func TestOutboundIdentityOversizeDoesNotEraseRequestDiagnostic(test *testing.T) 
 	require.True(test, gjson.Get(usage.RequestDiagnostics, "truncated").Bool())
 	require.True(test, gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.truncated").Bool())
 	require.False(test, snapshotUpstreamTrace(request.Request.Context()).Transport.OutboundIdentity.Truncated)
+}
+
+func TestOutboundSessionConsistencyUsesActualCarriers(test *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		headers http.Header
+		body    string
+		want    string
+	}{
+		{"matched", http.Header{"Session-Id": {"mapped"}}, `{"client_metadata":{"session_id":"mapped","x-codex-turn-metadata":{"session_id":"mapped"}}}`, "matched"},
+		{"legacy", http.Header{"Session_id": {"mapped"}}, `{"client_metadata":{"session_id":"mapped"}}`, "matched"},
+		{"old_body", http.Header{"Session-Id": {"mapped"}}, `{"client_metadata":{"session_id":"original"}}`, "mismatched"},
+		{"flat_mismatch", http.Header{"Session-Id": {"mapped"}}, `{"client_metadata":{"session_id":"stale","x-codex-turn-metadata":{"session_id":"mapped"}}}`, "mismatched"},
+		{"metadata_header", http.Header{"Session-Id": {"mapped"}, "X-Codex-Turn-Metadata": {`{"session_id":"stale"}`}}, `{"client_metadata":{"session_id":"mapped"}}`, "mismatched"},
+		{"multiple", http.Header{"Session-Id": {"mapped", "other"}}, `{"client_metadata":{"session_id":"mapped"}}`, "mismatched"},
+		{"stateless", http.Header{}, `{"client_metadata":{"session_id":"original"}}`, "missing_header"},
+		{"no_metadata", http.Header{"Session-Id": {"mapped"}}, `{"input":[]}`, "missing_body"},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			for _, websocket := range []bool{false, true} {
+				request := transportTestContext()
+				beginUpstreamTrace(request.Request.Context(), &auth.Account{DBID: 17}, "", websocket)
+				observer := UpstreamTransportObserver(request.Request.Context())
+				observer.ResponsesInput([]byte(scenario.body), nil, "")
+				if websocket {
+					observer.OutboundWebsocketHandshake(CaptureOutboundIdentityHeaders(scenario.headers))
+				} else {
+					observer.OutboundHTTPIdentity(scenario.headers)
+				}
+				captured := snapshotUpstreamTrace(request.Request.Context()).Transport.OutboundIdentity
+				require.Equal(test, scenario.want, captured.SessionConsistency)
+				observer.ResponsesInput([]byte(`{"input":[]}`), nil, "")
+				require.Equal(test, scenario.want, captured.SessionConsistency)
+			}
+		})
+	}
+}
+
+func TestOutboundDiagnosticJSONPreservesWireLocationsAndTypes(test *testing.T) {
+	for _, embedded := range []string{`{"session_id":"31811466-ec40-4690-b07b-b4828d3095ff","window_number":2,"prompt":"private-prompt"}`, `"{\"session_id\":\"31811466-ec40-4690-b07b-b4828d3095ff\",\"window_number\":2,\"prompt\":\"private-prompt\"}"`} {
+		body := []byte(`{"client_metadata":{"x-codex-turn-metadata":` + embedded + `},"prompt_cache_key":"private-cache","input":[{"content":"private-prompt"}]}`)
+		captured := captureOutboundIdentityBody(body)
+		encoded, err := json.Marshal(captured)
+		require.NoError(test, err)
+		original := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata")
+		shown := gjson.GetBytes(encoded, "client_metadata.x-codex-turn-metadata")
+		require.Equal(test, original.Type, shown.Type)
+		require.EqualValues(test, 2, gjson.Get(shown.String(), "window_number").Int())
+		require.Equal(test, gjson.Number, gjson.Get(shown.String(), "window_number").Type)
+		require.True(test, strings.HasPrefix(gjson.GetBytes(encoded, "prompt_cache_key").String(), "hash:"))
+		require.False(test, gjson.GetBytes(encoded, "links").Exists())
+		require.False(test, gjson.GetBytes(encoded, "turn_metadata").Exists())
+		require.NotContains(test, string(encoded), "private-")
+		var restored outboundBodyDiagnostic
+		require.NoError(test, json.Unmarshal(encoded, &restored))
+		again, err := json.Marshal(restored)
+		require.NoError(test, err)
+		require.JSONEq(test, string(encoded), string(again))
+	}
 }

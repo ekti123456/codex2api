@@ -84,9 +84,6 @@ func TestRootlessPassiveRequestsRejectRecentAccountWithoutMainBinding(test *test
 			if err := handler.cache.SetRuntime(test.Context(), unlinkedFallbackRuntimeNamespace, identity.unlinkedFallbackScope, observation, time.Minute); err != nil {
 				test.Fatal(err)
 			}
-			if selected, _ := handler.takeUnlinkedRecentAccount(requestContext, identity, 101, nil, nil, auth.DispatchPolicyStandard); selected != nil {
-				test.Fatal("background borrowed an unproven recent account")
-			}
 			if waitError := handler.waitForBackgroundRootAccount(requestContext, identity); waitError == nil {
 				test.Fatal("background proceeded without a main binding")
 			}

@@ -166,7 +166,7 @@ func TestCodexProjectMetadataStrippedFromHTTPAndCompact(test *testing.T) {
 				sent := <-received
 				requireNoCodexProjectMetadata(test, sent.body, sent.headers)
 				require.Equal(test, "api-project", sent.headers.Get("OpenAI-Project"))
-				require.Equal(test, "custom-thread", gjson.Get(sent.headers.Get(codexTurnMetadataHeader), "thread_id").String())
+				require.Equal(test, "thread", gjson.Get(sent.headers.Get(codexTurnMetadataHeader), "thread_id").String())
 				require.Equal(test, int64(71), gjson.Get(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata").String(), "window_number").Int())
 				require.Equal(test, originalBody, body)
 				require.Equal(test, originalHeaders, headers)

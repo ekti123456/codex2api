@@ -4597,6 +4597,7 @@ function PromptRiskSessionWindows({ windows, manualLocks, onLock, onUnlock, busy
             </div>
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <PromptPolicyDetailField label={t('usage.sessionIDPrefix')} value={<span className="font-mono">{session.session_id_prefix || '-'}</span>} title={t('usage.sessionIDPrefixHint')} />
             <PromptPolicyDetailField label={t('promptFilter.risk.sessionLimit.createdAt')} value={session.created_at ? formatBeijingTime(session.created_at) : '-'} />
             <PromptPolicyDetailField label={t('promptFilter.risk.sessionLimit.expiresAt')} value={formatBeijingTime(session.expires_at)} />
             <PromptPolicyDetailField label={t('promptFilter.risk.sessionLimit.account')} value={<span className="flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 break-all">{account}</span>{session.last_500_at ? <Badge variant="destructive" className="shrink-0 gap-1" tabIndex={0} title={t('promptFilter.risk.sessionLimit.account500Hint', { time: formatBeijingTime(session.last_500_at) })} aria-label={t('promptFilter.risk.sessionLimit.account500Hint', { time: formatBeijingTime(session.last_500_at) })}><AlertTriangle className="size-3" />500</Badge> : null}</span>} />

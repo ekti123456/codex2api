@@ -15,6 +15,7 @@ const PromptSessionLimitRuntimeNamespace = "prompt-session-limit-v1"
 // The authoritative expiry remains in PromptSessionLimitState.Sessions for
 // backward compatibility with the original v1 payload.
 type PromptSessionWindowDetail struct {
+	SessionIDPrefix string    `json:"session_id_prefix,omitempty"`
 	GrantID         string    `json:"grant_id,omitempty"`
 	Expanded        bool      `json:"expanded,omitempty"`
 	Multiplier      float64   `json:"multiplier,omitempty"`

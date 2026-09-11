@@ -1,0 +1,62 @@
+package proxy
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+)
+
+// sendCodexTelemetryJob 使用账号网络配置发送一批遥测数据。
+//
+// 遥测与 /responses 一样携带账号身份打 chatgpt.com。Resin 启用时必须同样经反代
+// 发出，否则所有账号会共享本机出口 IP 直连，与该账号 /responses 流量的出口不一致
+// （issue #372 的不变量）。metrics 端点虽不带 Bearer，但真实客户端从同一出口发出，
+// 这里保持一致。
+func sendCodexTelemetryJob(job codexTelemetryJob) error {
+	ctx, cancel := context.WithTimeout(context.Background(), codexTelemetryTimeout)
+	defer cancel()
+	finalURL, resinClient, viaResin := resinMaintenanceTarget(job.client.account, job.url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, finalURL, bytes.NewReader(job.body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
+	if job.metrics {
+		req.Header.Set("User-Agent", "OTel-OTLP-Exporter-Rust/0.31.0")
+		req.Header.Set("statsig-api-key", codexStatsigAPIKey())
+	} else {
+		applyCodexAnalyticsHeaders(req.Header, job.client)
+	}
+	client := getPooledClient(job.client.account, job.client.proxyURL)
+	if viaResin {
+		req.Header.Set("X-Resin-Account", ResinAccountID(job.client.account))
+		client = resinClient
+	}
+	isolatedClient := *client
+	isolatedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := isolatedClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return &codexTelemetryHTTPError{status: resp.StatusCode}
+	}
+	return nil
+}
+
+type codexTelemetryHTTPError struct{ status int }
+
+// Error 返回遥测上游的 HTTP 状态描述。
+func (e *codexTelemetryHTTPError) Error() string { return http.StatusText(e.status) }
+
+// applyCodexAnalyticsHeaders 添加 Codex 分析接口要求的客户端身份头。
+func applyCodexAnalyticsHeaders(headers http.Header, client codexTelemetryClient) {
+	headers.Set("Authorization", "Bearer "+client.accessToken)
+	headers.Set("Chatgpt-Account-Id", client.accountID)
+	headers.Set("User-Agent", client.userAgent)
+	headers.Set("Originator", client.originator)
+}

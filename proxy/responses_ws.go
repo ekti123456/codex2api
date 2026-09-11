@@ -428,7 +428,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	turnContinuation := codexWSTurnContinuationToken(rawBody) != ""
 	boundAccountID, turnHasBinding := h.store.SessionAffinityAccountID(affinityKey)
 	recordUsageRootAccount(c, boundAccountID, turnHasBinding)
-	respCacheOwner := responseCacheOwner(apiKeyID)
+	respCacheOwner := responseCacheOwnerForRequest(c, apiKeyID)
 	var previousResponseAffinity responseAccountAffinity
 	var previousResponseAffinityFound bool
 	if prevID := strings.TrimSpace(gjson.GetBytes(rawBody, "previous_response_id").String()); prevID != "" {
@@ -632,9 +632,6 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 					stickyProxyURL = account.GetProxyURL()
 				}
 			}
-			if account == nil && attempt == 0 {
-				account, stickyProxyURL = h.takeUnlinkedRecentAccount(c, sessionIdentity, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy)
-			}
 			if !continuationPinned && hasPreviousResponse && !continuationDegraded {
 				// 绑定账号已被本次请求硬排除（上一轮 429/5xx 等）时不必再等它 30s：
 				// 排除在本请求内不会解除，直接剥离 previous_response_id 换号。
@@ -794,6 +791,11 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		}
 
 		if reqErr != nil {
+			if identityError := codexIdentityRequestError(reqErr); identityError != nil {
+				ttftGuard.Stop()
+				h.store.Release(account)
+				return writeAuditedResponsesWSError(c, conn, identityError)
+			}
 			if quotaErr := apiKeyModelRequestError(reqErr); quotaErr != nil {
 				ttftGuard.Stop()
 				h.store.Release(account)

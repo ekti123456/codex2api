@@ -62,13 +62,14 @@ Codex2API 采用三层配置架构：
 | `CODEX_TRANSPORT_MODE` | 否 | `standard` | Codex HTTP transport：默认标准 Go TLS；`utls_chrome` 可回滚旧 Chrome uTLS 行为 |
 | `CODEX_WS_SEND_USER_AGENT` | 否 | `true` | WS 握手是否发送 Codex `User-Agent`/`Version`；设为 `false` 可关闭 |
 | `CODEX_SESSION_HEADER_MODE` | 否 | `native` | 出站会话头形态。`native` 发送真实客户端的 `Session-Id` / `Thread-Id` / `X-Client-Request-Id`；`legacy` 回退到旧的 `Session_id`（WS 另带 `Conversation_id`） |
-| `CODEX_SESSION_HEADER_ALIGN_CONVERGED` | 否 | `false` | 开启后 `Session-Id` 使用指纹收敛后的会话身份；默认保持独立的上游会话/缓存键，仅让 `Thread-Id` 遵循对应指纹策略 |
+| `CODEX_SESSION_HEADER_ALIGN_CONVERGED` | 否 | `false` | 旧版开关，开启后握手使用账号收敛会话；默认出站 `preserve` 模式优先于此开关和 `CODEX_SESSION_HEADER_MODE`，保留原始会话 / 线程 ID |
+| `CODEX_OUTBOUND_SESSION_MODE` | 否 | `preserve` | Codex HTTP/compact/WS 保留原始 session/thread/lineage，缓存及连接独立隔离；握手保留身份和建连快照，turn state 仅进帧。`observe`、`legacy`（或 `off`）回退旧出站策略；`aligned` 和未知值按 preserve。部署注意旧续链兼容边界，详见 [出站会话一致性](codex-outbound-session.md) |
 | `CODEX_SESSION_AFFINITY_TTL` | 否 | `1h` | Codex 会话到账号/代理的黏性 TTL，支持 `1h`、`90m` 或秒数 |
 | `CODEX_COMPACTION_AFFINITY_TTL` | 否 | `168h` | 加密压缩状态的来源亲和 TTL。缓存仅保存密文的 SHA-256 摘要、来源账号和兼容域；已知状态不会跨 Codex 官方、不同 Responses 中转或 Grok 上游流转 |
 | `CODEX_FINGERPRINT_DEBUG` | 否 | `false` | 输出脱敏指纹策略诊断日志，不记录 token |
+| `CODEX_TELEMETRY_ENABLED` | 否 | 跟随系统设置（默认关闭） | `false` 在部署层强制关闭模拟遥测，Codex 出站 turn metadata 写 `analytics_enabled: false`；详见 [客户端遥测](codex-telemetry.md) |
+| `CODEX_STATSIG_API_KEY` | 否 | 内置公开 key | 覆盖 Codex Desktop/CLI 共用的公开 Statsig SDK key，仅遥测开启时使用 |
 | `CODEX_REQUEST_COMPRESSION` | 否 | 跟随系统设置 | 覆盖系统设置「Codex HTTP 请求体压缩」。`zstd`/`on`/`true`/`1` 强制开启，`off`/`false`/`0` 强制关闭，未设置或取值无法识别时以系统设置为准。作为部署级逃生阀存在：DB 不可达或后台打不开时仍可整机切换 |
-| `CODEX_SESSION_HEADER_MODE` | 否 | `native` | 出站会话头形态。`native` 发真实客户端的 `session-id` / `thread-id` / `x-client-request-id`；`legacy` 回退到旧的 `Session_id`（WS 另带 `Conversation_id`） |
-| `CODEX_SESSION_HEADER_ALIGN_CONVERGED` | 否 | `false` | 开启后 `session-id` 头改用指纹收敛后的会话身份，与 turn metadata 的 `session_id` 对齐。默认关：请求体 `prompt_cache_key` 始终独立隔离，但上游是否也拿该头参与缓存分组无法从客户端源码确认 |
 
 > `CODEX_UPSTREAM_TRANSPORT` 只控制 HTTP 入站请求转发到 Codex 上游时使用 `http` 还是 `ws`。客户端侧 WebSocket 入口独立可用：使用 `GET ws://<host>/v1/responses` 建连，首帧发送 `response.create` JSON，服务端会通过 Codex 上游 WS 返回 Responses 事件帧。
 

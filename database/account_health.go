@@ -9,9 +9,17 @@ import (
 
 // AccountHealthBucket 是单个时间窗口内某账号的请求成败计数。
 type AccountHealthBucket struct {
-	Success int `json:"success"`
-	Failed  int `json:"failed"`
+	Success       int       `json:"success"`
+	Failed        int       `json:"failed"`
+	Overloaded500 int       `json:"overloaded_500"`
+	StartAt       time.Time `json:"start_at,omitzero"`
+	EndAt         time.Time `json:"end_at,omitzero"`
 }
+
+const accountHealthOverloaded500SQL = `CASE WHEN status_code = 500 AND (
+	TRIM(COALESCE(error_message, '')) = 'server_is_overloaded'
+	OR SUBSTR(TRIM(COALESCE(error_message, '')), 1, LENGTH('server_is_overloaded · ')) = 'server_is_overloaded · '
+) THEN 1 ELSE 0 END`
 
 // GetAccountsHealthBuckets 返回每个账号最近 blockCount 个时间桶（由旧到新）的请求
 // 成败计数，每个桶跨度 bucketDuration，整体覆盖 [now-blockCount*dur, now]。用于账号
@@ -42,7 +50,7 @@ func (db *DB) GetAccountsHealthBucketsByIDs(ctx context.Context, ids []int64, no
 	startArg, endArg := db.timeRangeArgs(windowStart, now)
 
 	query := `
-		SELECT account_id, created_at, status_code
+		SELECT account_id, created_at, status_code, ` + accountHealthOverloaded500SQL + ` AS overloaded_500
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at <= $2
 		  AND status_code <> 499
@@ -70,7 +78,8 @@ func (db *DB) GetAccountsHealthBucketsByIDs(ctx context.Context, ids []int64, no
 		var accountID int64
 		var createdRaw interface{}
 		var statusCode int
-		if err := rows.Scan(&accountID, &createdRaw, &statusCode); err != nil {
+		var overloaded500 int
+		if err := rows.Scan(&accountID, &createdRaw, &statusCode, &overloaded500); err != nil {
 			return nil, err
 		}
 		if accountID <= 0 {
@@ -99,6 +108,7 @@ func (db *DB) GetAccountsHealthBucketsByIDs(ctx context.Context, ids []int64, no
 		} else {
 			buckets[idx].Failed++
 		}
+		buckets[idx].Overloaded500 += overloaded500
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -123,9 +133,10 @@ func (db *DB) getPostgresAccountHealthBuckets(ctx context.Context, ids []int64, 
 	query := `
 		SELECT account_id, bucket_index,
 			SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) AS success,
-			SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END) AS failed
+			SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END) AS failed,
+			SUM(overloaded_500) AS overloaded_500
 		FROM (
-			SELECT account_id, status_code,
+			SELECT account_id, status_code, ` + accountHealthOverloaded500SQL + ` AS overloaded_500,
 				GREATEST(0, LEAST($3 - 1,
 					FLOOR((EXTRACT(EPOCH FROM created_at) - EXTRACT(EPOCH FROM $1::timestamptz)) / $4)::integer
 				)) AS bucket_index
@@ -144,8 +155,8 @@ func (db *DB) getPostgresAccountHealthBuckets(ctx context.Context, ids []int64, 
 	result := make(map[int64][]AccountHealthBucket)
 	for rows.Next() {
 		var accountID int64
-		var bucketIndex, success, failed int
-		if err := rows.Scan(&accountID, &bucketIndex, &success, &failed); err != nil {
+		var bucketIndex, success, failed, overloaded500 int
+		if err := rows.Scan(&accountID, &bucketIndex, &success, &failed, &overloaded500); err != nil {
 			return nil, err
 		}
 		if bucketIndex < 0 || bucketIndex >= blockCount {
@@ -156,7 +167,7 @@ func (db *DB) getPostgresAccountHealthBuckets(ctx context.Context, ids []int64, 
 			buckets = make([]AccountHealthBucket, blockCount)
 			result[accountID] = buckets
 		}
-		buckets[bucketIndex] = AccountHealthBucket{Success: success, Failed: failed}
+		buckets[bucketIndex] = AccountHealthBucket{Success: success, Failed: failed, Overloaded500: overloaded500}
 	}
 	return result, rows.Err()
 }

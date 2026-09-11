@@ -118,8 +118,10 @@ func TestBusyOverflowCreatesSiblingConnection(t *testing.T) {
 		s.CodexWSBusyPatienceSec = 0
 	})
 
+	received := make(chan http.Header, 1)
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Header.Clone()
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
@@ -143,7 +145,8 @@ func TestBusyOverflowCreatesSiblingConnection(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	got, pr, err := manager.AcquireConnection(ctx, account, wsURL, "session-1", http.Header{}, "")
+	headers := http.Header{"Session-Id": {"original-session"}, "Thread-Id": {"original-thread"}, "X-Client-Request-Id": {"original-thread"}}
+	got, pr, err := manager.AcquireConnection(ctx, account, wsURL, "session-1", headers, "")
 	if err != nil {
 		t.Fatalf("AcquireConnection() error = %v", err)
 	}
@@ -155,6 +158,16 @@ func TestBusyOverflowCreatesSiblingConnection(t *testing.T) {
 	}
 	if !strings.Contains(got.session.ID, busyOverflowKeyInfix) {
 		t.Fatalf("sibling session ID = %q, want overflow slot key", got.session.ID)
+	}
+	select {
+	case actual := <-received:
+		for _, name := range []string{"Session-Id", "Thread-Id", "X-Client-Request-Id"} {
+			if actual.Get(name) != headers.Get(name) || strings.Contains(actual.Get(name), busyOverflowKeyInfix) {
+				t.Fatalf("overflow changed outbound identity %s: %s", name, actual.Get(name))
+			}
+		}
+	case <-ctx.Done():
+		t.Fatal("overflow handshake not captured")
 	}
 	got.session.RemovePendingRequest(pr.RequestID)
 	manager.DiscardConnection(got)

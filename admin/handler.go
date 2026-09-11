@@ -8250,6 +8250,13 @@ func parseUsageLogStatusFilter(c *gin.Context, filter *database.UsageLogFilter) 
 }
 
 func parseUsageLogsFilter(c *gin.Context, startTime, endTime time.Time) (database.UsageLogFilter, bool) {
+	requestType := strings.TrimSpace(c.Query("request_type"))
+	switch requestType {
+	case "", "user", "related_internal", "independent_internal", "related_unclassified", "compaction", "gateway_internal", "unknown", "not_recorded":
+	default:
+		writeError(c, http.StatusBadRequest, "无效的请求类别")
+		return database.UsageLogFilter{}, false
+	}
 	apiKeyID, ok := parseOpsErrorPositiveInt64(c, "api_key_id")
 	if !ok {
 		return database.UsageLogFilter{}, false
@@ -8262,6 +8269,7 @@ func parseUsageLogsFilter(c *gin.Context, startTime, endTime time.Time) (databas
 	filter := database.UsageLogFilter{
 		RequestID:         strings.TrimSpace(c.Query("request_id")),
 		UpstreamRequestID: strings.TrimSpace(c.Query("upstream_request_id")),
+		RequestType:       requestType,
 		Start:             startTime,
 		End:               endTime,
 		Page:              1,
@@ -9312,6 +9320,7 @@ type settingsResponse struct {
 	ClientCompatMode                   string                           `json:"client_compat_mode"`
 	CodexMinCLIVersion                 string                           `json:"codex_min_cli_version"`
 	CodexUserAgentConfig               string                           `json:"codex_user_agent_config"`
+	CodexTelemetryEnabled              bool                             `json:"codex_telemetry_enabled"`
 	UsageLogMode                       string                           `json:"usage_log_mode"`
 	UsageLogBatchSize                  int                              `json:"usage_log_batch_size"`
 	UsageLogFlushIntervalSeconds       int                              `json:"usage_log_flush_interval_seconds"`
@@ -9483,6 +9492,7 @@ type updateSettingsReq struct {
 	ClientCompatMode                    *string                          `json:"client_compat_mode"`
 	CodexMinCLIVersion                  *string                          `json:"codex_min_cli_version"`
 	CodexUserAgentConfig                *string                          `json:"codex_user_agent_config"`
+	CodexTelemetryEnabled               *bool                            `json:"codex_telemetry_enabled"`
 	UsageLogMode                        *string                          `json:"usage_log_mode"`
 	UsageLogBatchSize                   *int                             `json:"usage_log_batch_size"`
 	UsageLogFlushIntervalSeconds        *int                             `json:"usage_log_flush_interval_seconds"`
@@ -10321,6 +10331,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		ClientCompatMode:                    runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
 		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
+		CodexTelemetryEnabled:               runtimeCfg.CodexTelemetryEnabled,
 		UsageLogMode:                        h.db.GetUsageLogMode(),
 		UsageLogBatchSize:                   h.db.GetUsageLogBatchSize(),
 		UsageLogFlushIntervalSeconds:        h.db.GetUsageLogFlushIntervalSeconds(),
@@ -11404,6 +11415,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.CodexUserAgentConfig = normalized
 		log.Printf("设置已更新: codex_user_agent_config")
 	}
+	if req.CodexTelemetryEnabled != nil {
+		runtimeCfg.CodexTelemetryEnabled = *req.CodexTelemetryEnabled
+		log.Printf("设置已更新: codex_telemetry_enabled = %t", runtimeCfg.CodexTelemetryEnabled)
+	}
 	if req.StreamFlushPolicy != nil {
 		runtimeCfg.StreamFlushPolicy = proxy.NormalizeStreamFlushPolicy(*req.StreamFlushPolicy)
 		log.Printf("设置已更新: stream_flush_policy = %s", runtimeCfg.StreamFlushPolicy)
@@ -11824,6 +11839,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ClientCompatMode:                    runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
 		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
+		CodexTelemetryEnabled:               runtimeCfg.CodexTelemetryEnabled,
 		UsageLogMode:                        usageLogMode,
 		UsageLogBatchSize:                   usageLogBatchSize,
 		UsageLogFlushIntervalSeconds:        usageLogFlushIntervalSeconds,
@@ -12174,6 +12190,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ClientCompatMode:                    runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:                  runtimeCfg.CodexMinCLIVersion,
 		CodexUserAgentConfig:                runtimeCfg.CodexUserAgentConfig,
+		CodexTelemetryEnabled:               runtimeCfg.CodexTelemetryEnabled,
 		UsageLogMode:                        usageLogMode,
 		UsageLogBatchSize:                   usageLogBatchSize,
 		UsageLogFlushIntervalSeconds:        usageLogFlushIntervalSeconds,

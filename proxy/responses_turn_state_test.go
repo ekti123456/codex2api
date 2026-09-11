@@ -609,7 +609,7 @@ func TestResponsesWebSocketUpgradeTurnStateDoesNotAuthorizeFreshFrame(t *testing
 func TestResponsesWebSocketPinnedTurnDegradesPreviousResponseFailure(t *testing.T) {
 	resetResponseCacheForTest()
 	t.Cleanup(resetResponseCacheForTest)
-	setResponseCache("anon", "resp_missing", []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"earlier context"}`)})
+	setResponseCache(continuationFixtureCacheOwner(), "resp_missing", []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"earlier context"}`)})
 
 	gin.SetMode(gin.TestMode)
 	previousExec := WebsocketExecuteFunc
@@ -647,7 +647,7 @@ func TestResponsesWebSocketPinnedTurnDegradesPreviousResponseFailure(t *testing.
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 
-	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", nil)
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", continuationFixtureHeaders(handler))
 	if err != nil {
 		if response != nil {
 			t.Fatalf("dial websocket failed: %v status=%d", err, response.StatusCode)

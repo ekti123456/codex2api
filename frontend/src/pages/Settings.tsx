@@ -2152,6 +2152,7 @@ export default function Settings() {
     const normalized = {
       ...cacheNormalized,
       codex_images_main_model: cacheNormalized.codex_images_main_model ?? '',
+      codex_telemetry_enabled: cacheNormalized.codex_telemetry_enabled ?? false,
       billing_tier_policy: normalizeBillingTierPolicyValue(cacheNormalized.billing_tier_policy),
       first_token_mode: normalizeFirstTokenModeValue(cacheNormalized.first_token_mode),
       models_list_read_max_bytes:
@@ -2202,6 +2203,7 @@ export default function Settings() {
     auto_reset_credits_before_expiry_min: 60,
     auto_activate_5h_window_enabled: false,
     codex_force_websocket: false,
+    codex_telemetry_enabled: false,
     codex_request_compression: true,
     codex_ws_weak_network_mode: false,
     codex_ws_keepalive_enabled: false,
@@ -4060,6 +4062,15 @@ export default function Settings() {
                         )}
                       </div>
                     </SettingField>
+                    <SettingField
+                      label={t('settings.codexTelemetry')}
+                      description={t('settings.codexTelemetryDesc')}
+                    >
+                      <Switch
+                        checked={settingsForm.codex_telemetry_enabled}
+                        onCheckedChange={(checked) => autoSaveBooleanField('codex_telemetry_enabled', checked)}
+                      />
+                    </SettingField>
                     {/* CLI 版本自动同步：开关 + 间隔成对横排，行高一致 */}
                     <div className="sm:col-span-2 grid gap-0 overflow-hidden rounded-lg border border-border/60 bg-muted/15 sm:grid-cols-2 sm:divide-x sm:divide-border/60">
                       <div className="flex min-h-[48px] items-center justify-between gap-3 px-3 py-2.5">
@@ -5466,42 +5477,6 @@ export default function Settings() {
                       <Switch
                         checked={settingsForm.passive_internal_models_enabled}
                         onCheckedChange={(checked) => autoSaveBooleanField('passive_internal_models_enabled', checked)}
-                      />
-                    </SettingField>
-                    <SettingField
-                      label={t('settings.codexUnlinkedAccountFallback')}
-                      description={t('settings.codexUnlinkedAccountFallbackDesc')}
-                      layout="switch"
-                    >
-                      <Switch
-                        checked={settingsForm.codex_unlinked_account_fallback_enabled}
-                        onCheckedChange={(checked) => autoSaveBooleanField('codex_unlinked_account_fallback_enabled', checked)}
-                      />
-                    </SettingField>
-                    <SettingField
-                      label={t('settings.codexUnlinkedAccountFallbackSeconds')}
-                      description={t('settings.codexUnlinkedAccountFallbackSecondsDesc')}
-                    >
-                      <Input
-                        aria-label={t('settings.codexUnlinkedAccountFallbackSeconds')}
-                        type="number"
-                        min={1}
-                        max={3600}
-                        step={1}
-                        value={settingsForm.codex_unlinked_account_fallback_seconds}
-                        disabled={!settingsForm.codex_unlinked_account_fallback_enabled}
-                        onChange={(event) => {
-                          const value = Number(event.target.value)
-                          setSettingsForm((current) => ({
-                            ...current,
-                            codex_unlinked_account_fallback_seconds: Number.isFinite(value) ? value : 300,
-                          }))
-                        }}
-                        onBlur={(event) => {
-                          const value = Math.max(1, Math.min(3600, Number(event.target.value) || 300))
-                          setSettingsForm((current) => ({ ...current, codex_unlinked_account_fallback_seconds: value }))
-                          void autoSaveSettingsPatch({ codex_unlinked_account_fallback_seconds: value })
-                        }}
                       />
                     </SettingField>
                   </div>

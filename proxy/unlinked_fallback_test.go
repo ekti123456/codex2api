@@ -1,45 +1,20 @@
 package proxy
 
 import (
-	"context"
-	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/codex2api/auth"
-	"github.com/codex2api/cache"
-	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
 )
 
-func TestUnlinkedFallbackPrefersRecentAccountWithoutCreatingAffinity(t *testing.T) {
-	tc := cache.NewMemory(1)
-	defer tc.Close()
-	store := auth.NewStore(nil, tc, &database.SystemSettings{MaxConcurrency: 2, TestConcurrency: 1, TestModel: "gpt-5.6-sol", CodexUnlinkedAccountFallbackEnabled: true, CodexUnlinkedAccountFallbackSeconds: 300})
-	account := &auth.Account{DBID: 17, AccessToken: "access", Status: auth.StatusReady, HealthTier: auth.HealthTierHealthy, BaseConcurrencyEffective: 2, DynamicConcurrencyLimit: 2}
-	store.AddAccount(account)
-	handler := &Handler{store: store, cache: tc}
+const unlinkedFallbackRuntimeNamespace = "codex-unlinked-account-fallback"
 
-	started := time.Now()
-	scope := "scope-test"
-	record, _ := json.Marshal(unlinkedFallbackRuntimeRecord{AccountID: account.ID(), ObservedAt: started.Add(-time.Second)})
-	if err := tc.SetRuntime(context.Background(), unlinkedFallbackRuntimeNamespace, scope, record, 5*time.Minute); err != nil {
-		t.Fatalf("SetRuntime: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = req
-	ctx.Set(unlinkedFallbackContextKey, unlinkedFallbackContext{Scope: scope, RequestStarted: started})
-	selected, _ := handler.takeUnlinkedRecentAccount(ctx, requestSessionIdentity{unlinkedFallbackOnly: true, unlinkedFallbackScope: scope}, 0, nil, nil, auth.DispatchPolicyStandard)
-	if selected == nil || selected.ID() != account.ID() {
-		t.Fatalf("selected account = %#v, want %d", selected, account.ID())
-	}
-	store.Release(selected)
-	if key := capacityAwareSessionAffinityKey(requestSessionIdentity{unlinkedFallbackOnly: true}, 0); key != "" {
-		t.Fatalf("unlinked request affinity key = %q, want empty request-local key", key)
-	}
+type unlinkedFallbackRuntimeRecord struct {
+	AccountID  int64     `json:"account_id"`
+	ObservedAt time.Time `json:"observed_at"`
 }
 
 func TestUnlinkedFallbackVerifiedNewAPIScopeIgnoresDownstreamChannelCredential(t *testing.T) {
@@ -72,24 +47,26 @@ func TestUnlinkedFallbackVerifiedNewAPIScopeIgnoresDownstreamChannelCredential(t
 	}
 }
 
-func TestUnlinkedFallbackRejectsObservationAfterRequestStart(t *testing.T) {
-	tc := cache.NewMemory(1)
-	defer tc.Close()
-	store := auth.NewStore(nil, tc, &database.SystemSettings{MaxConcurrency: 1, TestConcurrency: 1, TestModel: "gpt-5.6-sol", CodexUnlinkedAccountFallbackEnabled: true})
-	account := &auth.Account{DBID: 18, AccessToken: "access", Status: auth.StatusReady, HealthTier: auth.HealthTierHealthy, BaseConcurrencyEffective: 1, DynamicConcurrencyLimit: 1}
-	store.AddAccount(account)
-	handler := &Handler{store: store, cache: tc}
-	started := time.Now()
-	scope := "scope-future"
-	record, _ := json.Marshal(unlinkedFallbackRuntimeRecord{AccountID: account.ID(), ObservedAt: started.Add(time.Second)})
-	if err := tc.SetRuntime(context.Background(), unlinkedFallbackRuntimeNamespace, scope, record, time.Minute); err != nil {
-		t.Fatalf("SetRuntime: %v", err)
-	}
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	ctx.Set(unlinkedFallbackContextKey, unlinkedFallbackContext{Scope: scope, RequestStarted: started})
-	if selected, _ := handler.takeUnlinkedRecentAccount(ctx, requestSessionIdentity{unlinkedFallbackOnly: true, unlinkedFallbackScope: scope}, 0, nil, nil, auth.DispatchPolicyStandard); selected != nil {
-		store.Release(selected)
-		t.Fatal("future observation was accepted")
+func TestUnlinkedFallbackSettingCannotRestoreTemporalSelection(test *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		test.Run(fmt.Sprint(enabled), func(test *testing.T) {
+			handler := newRootlessPassiveModelTestHandler(test)
+			body := []byte(`{"model":"gpt-5.6-sol","input":"background"}`)
+			handler.store.SetCodexUnlinkedAccountFallbackEnabled(enabled)
+			requestContext, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body,
+				newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "agent_created_thread", RequestKind: "turn"})
+			handler.primeNewAPIPolicyContext(requestContext, body)
+			identity := handler.resolveRequestSessionIdentityForContext(requestContext, body)
+			if identity.unlinkedFallbackOnly || identity.unlinkedFallbackScope == "" || !identity.requiresRootAccount {
+				test.Fatalf("legacy switch changed strict routing: %+v", identity)
+			}
+			if err := handler.waitForBackgroundRootAccount(requestContext, identity); err == nil {
+				test.Fatal("rootless request bypassed required root binding")
+			}
+			diagnostic := usageRequestDiagnosticState(requestContext)
+			if diagnostic.Recent.Enabled || diagnostic.Recent.Scope == "" {
+				test.Fatalf("invalid retired fallback diagnostic: %+v", diagnostic.Recent)
+			}
+		})
 	}
 }

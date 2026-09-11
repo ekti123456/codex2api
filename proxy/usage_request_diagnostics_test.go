@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/codex2api/security/promptfilter"
 	"github.com/gin-gonic/gin"
@@ -129,46 +128,6 @@ func TestUsageRequestDiagnosticsStageRetryAndWSIsolation(test *testing.T) {
 	fresh := usageRequestDiagnosticState(requestContext)
 	if fresh == state || fresh.Resolved != nil || fresh.Dispatch != nil || fresh.Recent.AccountID != 0 || fresh.CorrelationID == first.CorrelationID || passiveInternalRequestAuthorized(requestContext) {
 		test.Fatalf("WS frame retained previous state: %+v", fresh)
-	}
-}
-
-func TestUsageRequestDiagnosticsRecentSelectionDecisions(test *testing.T) {
-	for _, outcome := range []string{"missing", "expired", "after_request_start", "account_unavailable", "selected"} {
-		test.Run(outcome, func(test *testing.T) {
-			handler := newRootlessPassiveModelTestHandler(test)
-			account := &auth.Account{DBID: 17, AccessToken: "test-token", Status: auth.StatusReady}
-			handler.store.AddAccount(account)
-			body := []byte(`{"model":"gpt-5.6-sol","input":"background"}`)
-			requestContext, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionUnavailable, ThreadSource: "user", RequestKind: "turn"})
-			handler.primeNewAPIPolicyContext(requestContext, body)
-			identity := handler.resolveRequestSessionIdentityForContext(requestContext, body)
-			if !identity.unlinkedFallbackOnly || identity.unlinkedFallbackScope == "" {
-				test.Fatalf("not a rootless request: %+v", identity)
-			}
-			observed := time.Now().Add(-time.Second)
-			if outcome == "expired" {
-				observed = time.Now().Add(-time.Hour)
-			} else if outcome == "after_request_start" {
-				observed = time.Now().Add(time.Hour)
-			}
-			if outcome != "missing" {
-				payload, err := json.Marshal(unlinkedFallbackRuntimeRecord{AccountID: account.ID(), ObservedAt: observed})
-				if err != nil {
-					test.Fatal(err)
-				}
-				if err := handler.cache.SetRuntime(test.Context(), unlinkedFallbackRuntimeNamespace, identity.unlinkedFallbackScope, payload, time.Minute); err != nil {
-					test.Fatal(err)
-				}
-			}
-			excluded := map[int64]bool{17: outcome == "account_unavailable"}
-			selected, _ := handler.takeUnlinkedRecentAccount(requestContext, identity, 101, excluded, nil, auth.DispatchPolicyStandard)
-			if selected != nil {
-				handler.store.Release(selected)
-			}
-			if got := usageRequestDiagnosticState(requestContext).Recent.Result; got != outcome {
-				test.Fatalf("recent result = %q, want %q", got, outcome)
-			}
-		})
 	}
 }
 

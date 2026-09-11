@@ -27,9 +27,8 @@ import (
 //   - 请求体 client_metadata（Codex 官方路径同样原样透传）
 //
 // 明确不改写的部分：
-//   - 出站 Session_id 头：由 resolveUpstreamSessionID 独立决定（默认隔离模式下每请求
-//     随机），收敛不介入，否则会改变 prompt cache 隔离语义。注意它与 metadata 里的
-//     session_id 是两套独立身份，开启收敛后两者取值不同属预期。
+//   - 最终会话头：由传输快照决定。默认 preserve 模式只使用本文件的设备处理，
+//     头与体保留原始会话、线程及血缘；缓存隔离键不再用于出站会话标识。
 //   - turn_id / turn_started_at_unix_ms：客户端逐轮随机值，不标识设备或会话；
 //     重算反而会让头与体、turn_id 与其时间戳彼此不一致，本身就是特征。
 //   - 客户端未携带的字段：只改写已存在的键，绝不新增，避免改变 metadata 的形状。

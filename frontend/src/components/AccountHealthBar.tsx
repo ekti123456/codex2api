@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AccountHealthBucket } from '../types'
+import { ACCOUNT_HEALTH_BLOCK_COUNT, ACCOUNT_HEALTH_BLOCK_MINUTES } from '../lib/accountHealth'
 
 // 「健康状态」条：把账号最近的请求成败分桶渲染成一排色块 + 成功率。
 // 移植自 CLIProxyAPI 的 ProviderStatusBar，改为 Tailwind 实现。
@@ -61,7 +62,7 @@ function statusBarDataFromBuckets(
 ): StatusBarData {
   const blockDurationMs = blockMinutes * 60 * 1000
   const padCount = Math.max(0, blockCount - buckets.length)
-  const stats = [
+  const stats: AccountHealthBucket[] = [
     ...Array.from({ length: padCount }, () => ({ success: 0, failed: 0 })),
     ...buckets.slice(-blockCount),
   ]
@@ -80,13 +81,16 @@ function statusBarDataFromBuckets(
     totalSuccess += success
     totalFailure += failure
 
-    const start = windowStart + index * blockDurationMs
+    const recordedStart = Date.parse(bucket.start_at ?? '')
+    const recordedEnd = Date.parse(bucket.end_at ?? '')
+    const recordedRange = Number.isFinite(recordedStart) && recordedEnd > recordedStart
+    const start = recordedRange ? recordedStart : windowStart + index * blockDurationMs
     blockDetails.push({
       success,
       failure,
       rate: total > 0 ? success / total : -1,
       startTime: start,
-      endTime: start + blockDurationMs,
+      endTime: recordedRange ? recordedEnd : start + blockDurationMs,
     })
   })
 
@@ -107,8 +111,8 @@ interface Props {
 
 export default function AccountHealthBar({
   buckets,
-  blockCount = 20,
-  blockMinutes = 10,
+  blockCount = ACCOUNT_HEALTH_BLOCK_COUNT,
+  blockMinutes = ACCOUNT_HEALTH_BLOCK_MINUTES,
 }: Props) {
   const { t } = useTranslation()
   const [activeTooltip, setActiveTooltip] = useState<number | null>(null)

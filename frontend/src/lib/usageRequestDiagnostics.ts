@@ -3,7 +3,8 @@ export interface UsageRequestDiagnosticDetail {
   diagnostics: Record<string, unknown> | null
 }
 
-const requestTypes = new Set(['user', 'related_internal', 'independent_internal', 'related_unclassified', 'compaction', 'gateway_internal', 'unknown'])
+export const usageRequestTypes = ['user', 'related_internal', 'independent_internal', 'related_unclassified', 'compaction', 'gateway_internal', 'unknown'] as const
+const requestTypes = new Set<string>(usageRequestTypes)
 
 export function usageRequestTypeLabelKey(value?: string): string {
   if (!value) return 'usage.diagnostics.types.not_recorded'
@@ -50,6 +51,9 @@ export function diagnosticOutboundIdentity(value: unknown): Record<string, unkno
   const identity = diagnosticRecord(value)
   const result: Record<string, unknown> = {}
   if (identity.truncated === true) result.capture_truncated = true
+  if (typeof identity.session_consistency === 'string' && ['matched', 'mismatched', 'missing_header', 'missing_body'].includes(identity.session_consistency)) {
+    result.session_consistency = identity.session_consistency
+  }
   for (const source of ['http', 'ws_handshake', 'body']) {
     const groups = diagnosticRecord(identity[source])
     const names = source === 'body' ? ['client_metadata', 'turn_metadata', 'links'] : ['headers', 'turn_metadata']
@@ -68,4 +72,20 @@ export function diagnosticValueText(value: unknown): string | null {
   if (typeof value === 'boolean' || typeof value === 'number') return String(value)
   if (Array.isArray(value)) return value.length ? value.map(String).join(', ') : null
   return JSON.stringify(value)
+}
+
+export function diagnosticJSONDisplay(value: unknown, decodeMetadata = false, depth = 0): unknown {
+  if (!decodeMetadata || depth > 24 || value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map((item) => diagnosticJSONDisplay(item, true, depth + 1))
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (key.toLowerCase() === 'x-codex-turn-metadata' && typeof item === 'string' && item.length <= 16384) {
+      try {
+        const decoded: unknown = JSON.parse(item)
+        if (decoded !== null && typeof decoded === 'object' && !Array.isArray(decoded)) return [key, decoded]
+      } catch {
+        return [key, item]
+      }
+    }
+    return [key, diagnosticJSONDisplay(item, true, depth + 1)]
+  }))
 }

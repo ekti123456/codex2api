@@ -348,7 +348,9 @@ func TestResponsesWSContextOnDemandBootstrapsFromStoreSignal(t *testing.T) {
 		resetResponseCacheForTest()
 	})
 	var turn atomic.Int32
-	WebsocketExecuteFunc = func(context.Context, *auth.Account, []byte, string, string, string, *DeviceProfileConfig, http.Header, string) (*http.Response, error) {
+	owners := make(chan string, 4)
+	WebsocketExecuteFunc = func(ctx context.Context, account *auth.Account, body []byte, session, proxyURL, key string, config *DeviceProfileConfig, headers http.Header, route string) (*http.Response, error) {
+		owners <- "anonymous-connection:" + DownstreamWebsocketConnectionID(ctx)
 		id := fmt.Sprintf("resp_%d", turn.Add(1))
 		sse := wsContextTestSSE(id, `{"type":"message","id":"msg_x","role":"assistant","content":[{"type":"output_text","text":"ok"}]}`)
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(sse))}, nil
@@ -366,6 +368,7 @@ func TestResponsesWSContextOnDemandBootstrapsFromStoreSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	owner := ""
 	send := func(payload string) {
 		t.Helper()
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
@@ -375,21 +378,26 @@ func TestResponsesWSContextOnDemandBootstrapsFromStoreSignal(t *testing.T) {
 		if terminal := readResponsesWSTerminalEvent(t, conn); gjson.GetBytes(terminal, "type").String() != "response.completed" {
 			t.Fatalf("unexpected terminal: %s", terminal)
 		}
+		currentOwner := <-owners
+		if owner != "" && owner != currentOwner {
+			t.Fatal("anonymous connection cache owner changed between frames")
+		}
+		owner = currentOwner
 	}
 	// 缓存写入发生在终态帧写给客户端之后；帧循环是串行的，所以上一轮的写入
 	// 决定在下一轮终态到达时必然已经落定，断言按这个顺序排。
 	send(`{"type":"response.create","model":"gpt-5.5","store":false,"input":[{"type":"message","role":"user","content":"full context every turn"}]}`)
 	send(`{"type":"response.create","model":"gpt-5.5","input":[{"type":"message","role":"user","content":"incremental root"}]}`)
-	if getResponseCache("anon", "resp_1") != nil {
+	if getResponseCache(owner, "resp_1") != nil {
 		t.Fatal("store:false root turn was cached under on_demand")
 	}
 	send(`{"type":"response.create","model":"gpt-5.5","previous_response_id":"resp_2","input":[{"type":"message","role":"user","content":"second turn"}]}`)
-	if getResponseCache("anon", "resp_2") == nil {
+	if getResponseCache(owner, "resp_2") == nil {
 		t.Fatal("continuation-capable root turn was not cached under on_demand")
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		if cached := getResponseCache("anon", "resp_3"); len(cached) == 4 {
+		if cached := getResponseCache(owner, "resp_3"); len(cached) == 4 {
 			break
 		} else if time.Now().After(deadline) {
 			t.Fatalf("continuation snapshot has %d items, want root + answer + new message + answer", len(cached))

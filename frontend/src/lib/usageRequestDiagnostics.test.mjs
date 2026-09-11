@@ -1,8 +1,24 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey } from './usageRequestDiagnostics.ts'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
+
+test('JSON display preserves actual nesting and carrier types unless explicitly decoded', () => {
+  const value = { format_version: 2, body: { prompt_cache_key: 'hash:cache', client_metadata: { 'x-codex-turn-metadata': '{"session_id":"session","window_number":2}' } } }
+  assert.equal(diagnosticJSONDisplay(value), value)
+  const decoded = diagnosticJSONDisplay(value, true)
+  assert.deepEqual(decoded.body.client_metadata['x-codex-turn-metadata'], { session_id: 'session', window_number: 2 })
+  assert.equal(typeof value.body.client_metadata['x-codex-turn-metadata'], 'string')
+  assert.equal('links' in decoded.body, false)
+  assert.equal('turn_metadata' in decoded.body, false)
+  const old = { body: { turn_metadata: { session_id: 'old' }, links: { prompt_cache_key: 'hash:old' } } }
+  assert.deepEqual(diagnosticJSONDisplay(old, true), old)
+  assert.deepEqual(diagnosticJSONDisplay({ 'x-codex-turn-metadata': 'invalid' }, true), { 'x-codex-turn-metadata': 'invalid' })
+})
 
 test('historical and unknown request types are not inferred', () => {
+  for (const value of usageRequestTypes) {
+    assert.equal(usageRequestTypeLabelKey(value), `usage.diagnostics.types.${value}`)
+  }
   assert.equal(usageRequestTypeLabelKey(), 'usage.diagnostics.types.not_recorded')
   assert.equal(usageRequestTypeLabelKey(''), 'usage.diagnostics.types.not_recorded')
   assert.equal(usageRequestTypeLabelKey('future'), 'usage.diagnostics.types.unknown')
@@ -67,4 +83,13 @@ test('outbound identity separates actual handshake values from current frame val
   assert.equal(JSON.stringify(info).includes('not displayed'), false)
   assert.deepEqual(diagnosticOutboundIdentity(undefined), {})
   assert.deepEqual(diagnosticOutboundIdentity({ truncated: true }), { capture_truncated: true })
+})
+
+test('outbound session consistency displays recorded results without inferring historical values', () => {
+  for (const result of ['matched', 'mismatched', 'missing_header', 'missing_body']) {
+    assert.deepEqual(diagnosticOutboundIdentity({ session_consistency: result }), { session_consistency: result })
+  }
+  assert.deepEqual(diagnosticOutboundIdentity({ session_consistency: 'private-value' }), {})
+  assert.deepEqual(diagnosticOutboundIdentity({ session_consistency: null }), {})
+  assert.deepEqual(diagnosticOutboundIdentity({}), {})
 })

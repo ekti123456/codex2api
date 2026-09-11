@@ -30,10 +30,11 @@ func (h *Handler) GetAccountHealthBars(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
 	buckets, err := h.db.GetAccountsHealthBucketsByIDs(
 		ctx,
 		ids,
-		time.Now(),
+		now,
 		accountHealthBlockCount,
 		accountHealthBlockMinutes*time.Minute,
 	)
@@ -43,8 +44,12 @@ func (h *Handler) GetAccountHealthBars(c *gin.Context) {
 	}
 
 	out := make(map[string][]database.AccountHealthBucket, len(buckets))
-	for id, b := range buckets {
-		out[strconv.FormatInt(id, 10)] = b
+	for id, accountBuckets := range buckets {
+		for index := range accountBuckets {
+			accountBuckets[index].StartAt = now.Add(-time.Duration(accountHealthBlockCount-index) * accountHealthBlockMinutes * time.Minute)
+			accountBuckets[index].EndAt = accountBuckets[index].StartAt.Add(accountHealthBlockMinutes * time.Minute)
+		}
+		out[strconv.FormatInt(id, 10)] = accountBuckets
 	}
 
 	c.JSON(http.StatusOK, gin.H{

@@ -72,6 +72,7 @@ type promptRiskSessionLimitUpdateRequest struct {
 }
 
 type promptRiskSessionWindowResponse struct {
+	SessionIDPrefix  string     `json:"session_id_prefix,omitempty"`
 	SessionHash      string     `json:"session_hash"`
 	Expanded         bool       `json:"expanded"`
 	Multiplier       float64    `json:"multiplier"`
@@ -279,7 +280,8 @@ func (h *Handler) promptRiskSessionWindows(ctx context.Context, profile *databas
 		detail := state.Details[sessionHash]
 		remaining := int64((expiresAt.Sub(now) + time.Second - 1) / time.Second)
 		item := promptRiskSessionWindowResponse{
-			SessionHash: sessionHash, ExpiresAt: expiresAt.UTC(), RemainingSeconds: remaining,
+			SessionIDPrefix: detail.SessionIDPrefix,
+			SessionHash:     sessionHash, ExpiresAt: expiresAt.UTC(), RemainingSeconds: remaining,
 			Expanded: detail.Expanded, Multiplier: 1,
 			AccountID: detail.AccountID, Model: strings.TrimSpace(detail.Model), ReasoningEffort: strings.TrimSpace(detail.ReasoningEffort),
 			ClientUserAgent: strings.TrimSpace(detail.ClientUserAgent), PromptPreview: strings.TrimSpace(detail.PromptPreview),

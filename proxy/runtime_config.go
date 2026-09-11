@@ -64,9 +64,10 @@ const (
 )
 
 type RuntimeSettings struct {
-	ClientCompatMode     string
-	CodexMinCLIVersion   string
-	CodexUserAgentConfig string
+	ClientCompatMode      string
+	CodexMinCLIVersion    string
+	CodexUserAgentConfig  string
+	CodexTelemetryEnabled bool
 	// CodexImagesMainModel 为空时沿用环境变量或内置生图文本驱动模型。
 	CodexImagesMainModel  string
 	StreamFlushPolicy     string
@@ -173,6 +174,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		ClientCompatMode:                 defaultClientCompatMode,
 		CodexMinCLIVersion:               defaultCodexMinCLIVersion,
 		CodexUserAgentConfig:             DefaultCodexUserAgentConfigJSON(),
+		CodexTelemetryEnabled:            false,
 		StreamFlushPolicy:                defaultStreamFlushPolicy,
 		StreamFlushIntervalMS:            defaultStreamFlushIntervalMS,
 		FirstTokenMode:                   defaultFirstTokenMode,
@@ -342,6 +344,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.ClientCompatMode = settings.ClientCompatMode
 		next.CodexMinCLIVersion = settings.CodexMinCLIVersion
 		next.CodexUserAgentConfig = settings.CodexUserAgentConfig
+		next.CodexTelemetryEnabled = settings.CodexTelemetryEnabled
 		next.CodexImagesMainModel = settings.CodexImagesMainModel
 		next.StreamFlushPolicy = settings.StreamFlushPolicy
 		next.StreamFlushIntervalMS = settings.StreamFlushIntervalMS
@@ -425,7 +428,11 @@ func currentRuntimeSettings() RuntimeSettings {
 
 func storeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	settings = NormalizeRuntimeSettings(settings)
+	telemetryWasEnabled := currentRuntimeSettings().CodexTelemetryEnabled
 	runtimeSettings.Store(settings)
+	if telemetryWasEnabled && !settings.CodexTelemetryEnabled {
+		codexTelemetryGlobal.disable()
+	}
 	return settings
 }
 

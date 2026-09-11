@@ -165,6 +165,11 @@ func promptSessionWindowRequestDetail(c *gin.Context, body []byte, account *auth
 	if c != nil {
 		detail.ClientUserAgent = normalizeUsageLogUserAgent(c.GetHeader("User-Agent"))
 	}
+	var headers http.Header
+	if c != nil && c.Request != nil {
+		headers = c.Request.Header
+	}
+	detail.SessionIDPrefix = requestSessionIDPrefix(headers, body)
 	if len(body) == 0 {
 		return detail
 	}
@@ -463,6 +468,10 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 		current, found := details[status.SessionHash]
 		if !found {
 			current.ExpiresAt = sessions[status.SessionHash]
+		}
+		if !reuseOnlyRequest && current.SessionIDPrefix == "" && requestDetail.SessionIDPrefix != "" {
+			current.SessionIDPrefix = requestDetail.SessionIDPrefix
+			detailChanged = true
 		}
 		// AccountID represents the current binding, so it may be refreshed by a
 		// reuse-only request. Model, effort, client UA, and prompt describe

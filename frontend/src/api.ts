@@ -490,6 +490,7 @@ function buildOpsErrorSearchParams(params: {
 }
 
 export type UsageLogQueryParams = {
+  requestType?: string
   start: string
   end: string
   email?: string
@@ -513,6 +514,7 @@ export type UsageLogQueryParams = {
 
 export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   const search = new URLSearchParams()
+  if (params.requestType) search.set('request_type', params.requestType)
   search.set('start', params.start)
   search.set('end', params.end)
   if (params.email) search.set('email', params.email)

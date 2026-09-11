@@ -3,9 +3,23 @@ package database
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 const MaxUsageRequestDiagnosticsBytes = 12 * 1024
+
+func normalizeUsageSessionIDPrefix(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) != 8 {
+		return ""
+	}
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return ""
+		}
+	}
+	return value
+}
 
 type UsageRequestDiagnosticDetail struct {
 	RequestType string          `json:"request_type"`

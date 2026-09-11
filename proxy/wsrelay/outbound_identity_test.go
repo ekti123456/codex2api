@@ -53,7 +53,6 @@ func TestOutboundIdentityUsesOriginalHandshakeOnReuse(test *testing.T) {
 	}
 	require.NotContains(test, first.upstreamIdentity.Headers, "Authorization")
 	releaseUnsentConnection(manager, first, pending)
-	headers.Set("X-Codex-Installation-Id", "41811466-ec40-4690-b07b-b4828d3095ff")
 	headers.Set("X-Codex-Turn-Metadata", `{"window_number":2}`)
 	reused, pending, err := manager.AcquireConnection(ctx, account, wsURL, "identity-session", headers, "")
 	require.NoError(test, err)
@@ -61,4 +60,10 @@ func TestOutboundIdentityUsesOriginalHandshakeOnReuse(test *testing.T) {
 	require.Equal(test, actual.Get("X-Codex-Installation-Id"), reused.upstreamIdentity.Headers["X-Codex-Installation-Id"])
 	require.Equal(test, "1", reused.upstreamIdentity.TurnMetadata["window_number"])
 	releaseUnsentConnection(manager, reused, pending)
+	headers.Set("X-Codex-Installation-Id", "41811466-ec40-4690-b07b-b4828d3095ff")
+	rotated, pending, err := manager.AcquireConnection(ctx, account, wsURL, "identity-session", headers, "")
+	require.NoError(test, err)
+	require.NotSame(test, first, rotated)
+	require.Equal(test, headers.Get("X-Codex-Installation-Id"), rotated.upstreamIdentity.Headers["X-Codex-Installation-Id"])
+	releaseUnsentConnection(manager, rotated, pending)
 }

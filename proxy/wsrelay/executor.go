@@ -111,7 +111,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	deviceCfg *proxy.DeviceProfileConfig,
 	ginHeaders http.Header,
 	poolRouteKey string,
-) (*WsResponse, error) {
+) (response *WsResponse, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -129,13 +129,20 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 
 	// 准备请求体
 	wsBody := e.prepareWebsocketBody(requestBody, sessionID)
+	if cacheKey := gjson.GetBytes(wsBody, "prompt_cache_key").String(); cacheKey != "" {
+		wsBody, _ = sjson.SetBytes(wsBody, "prompt_cache_key", proxy.ScopeCodexPromptCacheKey(ctx, cacheKey))
+	}
 	ginHeaders = proxy.CodexRequestMetadataHeaders(ginHeaders, wsBody)
 	wsBody = applyCodexFrameMetadata(wsBody, ginHeaders)
-	fingerprint := proxy.NewCodexFingerprint(account, ginHeaders, wsBody)
+	wsBody, ginHeaders = proxy.ApplyCodexAnalyticsMetadata(wsBody, ginHeaders)
+	headerSessionID := resolveHandshakeSessionID(sessionID, poolRouteKey, wsBody)
+	fingerprint := proxy.NewCodexTransportFingerprint(account, ginHeaders, wsBody, headerSessionID)
+	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
+		return nil, err
+	}
 	ginHeaders = fingerprint.DownstreamHeaders()
 	wsBody = fingerprint.ApplyBody(wsBody)
 
-	headerSessionID := resolveHandshakeSessionID(sessionID, poolRouteKey, wsBody)
 	baseKey := strings.TrimSpace(poolRouteKey)
 	if baseKey == "" && headerSessionID != sessionID {
 		baseKey = headerSessionID
@@ -156,10 +163,14 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 
 	// 准备请求头
 	headers := e.prepareWebsocketHeaders(accessToken, account, accountIDStr, headerSessionID, apiKey, deviceCfg, ginHeaders, wsBody, fingerprint)
+	proxy.ApplyCodexAnalyticsHeader(headers, wsBody)
 	wsBody = applyCodexFrameMetadata(wsBody, headers)
-	if !proxy.IsStatelessWebsocketSessionID(sessionID) || !statelessOneShotEnabled() {
+	if fingerprint.PreservesSessionIdentity() {
+		prepareCodexHandshakeSnapshot(headers)
+	} else if !proxy.IsStatelessWebsocketSessionID(sessionID) || !statelessOneShotEnabled() {
 		stripCodexFrameScopedHandshakeHeaders(headers)
 	}
+	headers.Del("X-Codex-Turn-State")
 	// Record the attempted handshake UA immediately so failed handshakes are
 	// still auditable. A reused connection replaces this below with the UA that
 	// was actually sent when that connection was established.
@@ -179,10 +190,8 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// poolRouteKey（来自上游确定性键）非空时优先用它作 baseKey：连接复用按 API Key
 	// 稳定命中同一组 8 槽。
 	//
-	// 隔离说明：默认隔离模式下，每请求的上游身份隔离由写入每个 response.create 帧体的
-	// 每请求唯一 prompt_cache_key 保证（见 proxy/executor.go 注入处）。握手头里的
-	// Session_id/Conversation_id 是逐连接冻结的，绝不能携带任何单个请求的身份
-	// （见 resolveHandshakeSessionID）。
+	// 隔离说明：prompt_cache_key 独立分区；preserve 模式的握手保留当前原始身份，
+	// 连接池同时按用户、线程和握手配置校验，不把缓存键或本地池键写进会话字段。
 	//
 	// CODEX_WS_STATELESS_ONESHOT=1 时禁用槽位复用：每个无会话请求独享一条连接、
 	// 用完即毁（彻底杜绝任何连接级状态跨请求泄漏，代价是逐请求握手）。
@@ -253,6 +262,12 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		wc.session.RemovePendingRequest(pr.RequestID)
 		return nil, err
 	}
+	observeTelemetry := proxy.BeginCodexTelemetry(account, wsBody, headers, wc.proxyURL, true)
+	defer func() {
+		if resultErr != nil {
+			observeTelemetry(nil, resultErr)
+		}
+	}()
 	sendErr := e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
 	for retries := 0; !connectionLocal && shouldRetryWebsocketSendError(sendErr) && retries < 2; retries++ {
 		wc.session.RemovePendingRequest(pr.RequestID)
@@ -294,16 +309,17 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	e.manager.StartHeartbeat(wc)
 
 	return &WsResponse{
-		connectionLocal: connectionLocal,
-		oneShot:         oneShot,
-		observer:        observer,
-		conn:            wc,
-		pendingReq:      pr,
-		sessionID:       poolSessionID,
-		requestScope:    requestScope,
-		manager:         e.manager,
-		apiKey:          apiKey,
-		readErrChan:     make(chan error, 1),
+		observeTelemetry: observeTelemetry,
+		connectionLocal:  connectionLocal,
+		oneShot:          oneShot,
+		observer:         observer,
+		conn:             wc,
+		pendingReq:       pr,
+		sessionID:        poolSessionID,
+		requestScope:     requestScope,
+		manager:          e.manager,
+		apiKey:           apiKey,
+		readErrChan:      make(chan error, 1),
 	}, nil
 }
 
@@ -557,8 +573,7 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 		}
 	}
 	// 指纹收敛：在透传之后覆盖客户端原值，在账号自定义头之前保留运维覆盖优先级。
-	// 握手头是逐连接冻结的，复用连接沿用建连时的取值；收敛值按账号恒定，正好与
-	// 这一语义相容。off 档为空操作。
+	// 握手头是逐连接冻结的；preserve 模式仅收敛设备，原始会话和线程参与复用校验。
 	if len(fingerprints) > 0 {
 		fingerprints[0].ApplyHeaders(headers)
 	} else {
@@ -582,6 +597,9 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 			continue
 		}
 		headers.Set(name, value)
+	}
+	if len(fingerprints) > 0 {
+		fingerprints[0].ApplySessionHeaders(headers)
 	}
 
 	proxy.StripCodexProjectMetadataHeaders(headers)
@@ -612,16 +630,17 @@ func (e *Executor) sendRequest(wc *WsConnection, body []byte, requestID string, 
 
 // WsResponse WebSocket 响应包装器
 type WsResponse struct {
-	connectionLocal bool
-	oneShot         bool
-	observer        *proxy.TransportObserver
-	conn            *WsConnection
-	pendingReq      *PendingRequest
-	sessionID       string
-	requestScope    string
-	manager         *Manager
-	readErrChan     chan error
-	closed          bool
+	observeTelemetry func(*http.Response, error)
+	connectionLocal  bool
+	oneShot          bool
+	observer         *proxy.TransportObserver
+	conn             *WsConnection
+	pendingReq       *PendingRequest
+	sessionID        string
+	requestScope     string
+	manager          *Manager
+	readErrChan      chan error
+	closed           bool
 	// apiKey 发起本请求的下游 API Key，用于 response_id → 连接绑定的归属校验。
 	apiKey string
 	// connBroken 标记读流因上游 WS 异常(非正常关闭)或下游写入失败而终止；
@@ -965,6 +984,9 @@ func ExecuteRequestWebsocket(ctx context.Context, account *auth.Account, request
 	statusCode, handshakeHeader, handshakeFailed := normalizeWebsocketHandshakeResponse(handshakeResp)
 	if handshakeFailed {
 		detail := formatFailedHandshakeHTTPBody(statusCode, handshakeResp)
+		if wsResp.observeTelemetry != nil {
+			wsResp.observeTelemetry(handshakeResp, nil)
+		}
 		wsResp.Close()
 		return &http.Response{
 			StatusCode: statusCode,
@@ -986,6 +1008,9 @@ func websocketResponseToHTTP(ctx context.Context, wsResp *WsResponse, statusCode
 		StatusCode: statusCode,
 		Header:     make(http.Header),
 		Body:       pr,
+	}
+	if wsResp.observeTelemetry != nil {
+		wsResp.observeTelemetry(resp, nil)
 	}
 
 	// 从 HTTP 握手响应中复制头信息

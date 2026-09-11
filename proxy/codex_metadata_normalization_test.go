@@ -135,7 +135,8 @@ func TestCodexMetadataConflictsNormalizeOnHTTPAndCompact(test *testing.T) {
 				for flat, field := range map[string]string{"thread_id": "thread_id", "x-codex-window-id": "window_id", "parent_thread_id": "parent_thread_id", "x-codex-parent-thread-id": "parent_thread_id"} {
 					require.Equal(test, gjson.Get(canonical, field).String(), gjson.GetBytes(sent.body, "client_metadata."+flat).String(), flat)
 				}
-				require.Equal(test, "isolated-cache", sent.headers.Get(codexSessionIDHeader))
+				require.Equal(test, "root", sent.headers.Get(codexSessionIDHeader))
+				require.Equal(test, "isolated-cache", gjson.GetBytes(sent.body, "prompt_cache_key").String())
 			})
 		}
 	}

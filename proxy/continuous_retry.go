@@ -151,6 +151,9 @@ func isExplicitUpstreamCyberPolicyError(err error) bool {
 }
 
 func continuousRetryRequestErrorSelected(policy database.ContinuousRetryPolicy, err error) bool {
+	if codexIdentityRequestError(err) != nil {
+		return false
+	}
 	if TransportReplayBlocked(err) {
 		return false
 	}

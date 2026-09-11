@@ -32,11 +32,12 @@ type encryptedDigest = [sha256.Size]byte
 // prompt_cache_key). That stable identity is derived from the credential with
 // SHA-256; the original credential is never retained in this memory.
 type encryptedScopeKey struct {
-	owner       int64
-	keyIdentity string
-	account     int64
-	generation  int64
-	session     encryptedDigest
+	owner        int64
+	keyIdentity  string
+	verifiedUser string
+	account      int64
+	generation   int64
+	session      encryptedDigest
 }
 
 type encryptedMemoryEntry struct {
@@ -215,11 +216,12 @@ func prepareEncryptedContentAttempt(ctx context.Context, account *auth.Account, 
 	// non-secret identity too; neither credentials nor raw conversation IDs
 	// are kept.
 	key := encryptedScopeKey{
-		owner:       owner,
-		keyIdentity: deterministicPromptCacheKey(strings.TrimPrefix(strings.TrimSpace(downstreamAuthorizationHeader(&http.Request{Header: headers})), "Bearer "), nil),
-		account:     account.ID(),
-		generation:  account.GetCredentialGeneration(),
-		session:     sha256.Sum256([]byte(session)),
+		verifiedUser: verifiedTransportUser(ctx),
+		owner:        owner,
+		keyIdentity:  deterministicPromptCacheKey(strings.TrimPrefix(strings.TrimSpace(downstreamAuthorizationHeader(&http.Request{Header: headers})), "Bearer "), nil),
+		account:      account.ID(),
+		generation:   account.GetCredentialGeneration(),
+		session:      sha256.Sum256([]byte(session)),
 	}
 	a := &encryptedContentAttempt{memory: rejectedEncryptedContent, key: key}
 	return stripRememberedEncryptedContent(body, a.memory.get(key)), a
