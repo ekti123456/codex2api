@@ -25,6 +25,7 @@ import (
 const windowGrantContextKey = "newapi_window_grant_v1"
 const windowGrantDomain = "codex2api-window-grant-v1"
 const windowGrantResponseHeader = "X-Codex2API-Window-Grant"
+const windowControlOperationContextKey = "window_control_operation"
 
 var errWindowAdmissionDenied = errors.New("window admission denied")
 var errWindowGrantRefresh = errors.New("窗口预留需要重新确认，尚未调用上游")
@@ -134,24 +135,46 @@ func (handler *Handler) userWindowControlSnapshot(subject string, now time.Time)
 }
 
 func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
+	request.Set(windowControlOperationContextKey, "unparsed")
 	if handler == nil || handler.db == nil || handler.store == nil {
-		request.JSON(http.StatusServiceUnavailable, gin.H{"message": "window service unavailable"})
+		writeWindowControlError(request, http.StatusServiceUnavailable, "window_service_unavailable", "窗口服务暂时不可用")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(request.Request.Body, 8193))
 	if err != nil || len(body) > 8192 {
-		request.JSON(http.StatusBadRequest, gin.H{"message": "invalid window request"})
+		writeWindowControlError(request, http.StatusBadRequest, "window_request_invalid", "窗口控制请求过大或读取失败")
 		return
 	}
 	config := handler.promptFilterConfigForRequest(request)
 	identity, verified := handler.verifyNewAPIPolicyContext(request, config.Advanced.NewAPI, body)
 	if !verified || !identity.MetaVerified || identity.Identity.UserID == "" {
-		request.JSON(http.StatusUnauthorized, gin.H{"message": "verified NewAPI identity required"})
+		writeWindowControlError(request, http.StatusUnauthorized, "window_identity_required", "需要已验证的 NewAPI 身份")
 		return
 	}
 	var input windowControlRequest
-	if json.Unmarshal(body, &input) != nil || len(input.ReservationID) > 64 || input.ExtraLimit < 0 || input.ExtraLimit > 100 || input.Multiplier < 1 || input.Multiplier > 10 || math.IsNaN(input.Multiplier) || math.IsInf(input.Multiplier, 0) {
-		request.JSON(http.StatusBadRequest, gin.H{"message": "invalid window policy"})
+	if json.Unmarshal(body, &input) != nil {
+		request.Set(windowControlOperationContextKey, "invalid")
+		writeWindowControlError(request, http.StatusBadRequest, "window_request_invalid", "窗口控制请求格式无效")
+		return
+	}
+	switch input.Operation {
+	case "list", "quote", "release", "upgrade":
+		request.Set(windowControlOperationContextKey, input.Operation)
+	default:
+		request.Set(windowControlOperationContextKey, "unsupported")
+		writeWindowControlError(request, http.StatusBadRequest, "window_operation_unsupported", "不支持的窗口操作")
+		return
+	}
+	if len(input.ReservationID) > 64 {
+		writeWindowControlError(request, http.StatusBadRequest, "window_reservation_invalid", "窗口预留标识长度不能超过 64")
+		return
+	}
+	if input.ExtraLimit < 0 || input.ExtraLimit > 100 {
+		writeWindowControlError(request, http.StatusBadRequest, "window_extra_limit_invalid", "额外窗口上限必须在 0–100 之间")
+		return
+	}
+	if input.Multiplier < 1 || input.Multiplier > 10 || math.IsNaN(input.Multiplier) || math.IsInf(input.Multiplier, 0) {
+		writeWindowControlError(request, http.StatusBadRequest, "window_multiplier_invalid", "窗口扩容倍率必须在 1–10 之间")
 		return
 	}
 	now := time.Now().UTC()
@@ -167,7 +190,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		grants, readErr := handler.db.ReadUserWindowAdmissions(lookup, subject)
 		stop()
 		if readErr != nil {
-			request.JSON(http.StatusServiceUnavailable, gin.H{"message": "窗口授权服务暂时不可用"})
+			writeWindowControlError(request, http.StatusServiceUnavailable, "window_storage_unavailable", "窗口授权服务暂时不可用")
 			return
 		}
 		items := make([]personalWindow, 0, len(windows))
@@ -200,10 +223,6 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		request.JSON(http.StatusOK, gin.H{"version": 1, "server_now": now, "limit": limit, "window_seconds": seconds, "used": len(windows), "windows": items, "truncated": len(windows) > len(items), "creation_available_at": recovery, "cooldown_unavailable": unavailable})
 		return
 	}
-	if input.Operation != "quote" && input.Operation != "release" {
-		request.JSON(http.StatusBadRequest, gin.H{"message": "unsupported window operation"})
-		return
-	}
 	if identity.Meta.RootSessionState != newAPIPolicyRootSessionResolved || identity.Meta.RootSessionFingerprint == "" {
 		request.JSON(http.StatusOK, gin.H{"version": 1, "multiplier": 1, "ticket": "", "reason": "root_unavailable"})
 		return
@@ -214,7 +233,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 	if input.Operation == "quote" {
 		ownerAccountID, ownerKey, err = handler.windowQuoteOwner(request, identity)
 		if err != nil {
-			request.JSON(http.StatusServiceUnavailable, gin.H{"message": "会话账号归属暂时无法确认，请稍后重试"})
+			writeWindowControlError(request, http.StatusServiceUnavailable, "window_owner_unavailable", "会话账号归属暂时无法确认，请稍后重试")
 			return
 		}
 	}
@@ -353,7 +372,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 				}
 			}
 		}
-		request.JSON(statusCode, gin.H{"message": message, "code": "window_admission_failed"})
+		writeWindowControlError(request, statusCode, "window_admission_failed", message)
 		return
 	}
 	if granted == nil {
@@ -364,7 +383,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 	signed := signedWindowGrant{Version: 1, Platform: identity.Platform, UserID: identity.Identity.UserID, APIKeyID: identity.APIKeyID, Fingerprint: identity.Meta.RootSessionFingerprint, Grant: *granted, ReservationID: input.ReservationID}
 	ticket, err := encodeWindowGrant(identity.VerificationSecret, signed)
 	if err != nil {
-		request.JSON(http.StatusInternalServerError, gin.H{"message": "could not issue window grant"})
+		writeWindowControlError(request, http.StatusInternalServerError, "window_grant_issue_failed", "无法签发窗口授权")
 		return
 	}
 	request.JSON(http.StatusOK, gin.H{"version": 1, "ticket": ticket, "grant": granted, "multiplier": granted.Multiplier})

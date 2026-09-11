@@ -8,6 +8,7 @@ import StateShell from '../components/StateShell'
 import { StatTile } from '../components/StatTile'
 import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
+import { writeClipboardText } from '../lib/clipboard'
 import { getTimeRangeISO, type TimeRangeKey } from '../lib/timeRange'
 import { SERVICE_ERROR_STAGES, serviceErrorCollectorHasLoss, type ServiceErrorEvent, type ServiceErrorPage } from '../lib/serviceErrors'
 import { formatBeijingTime } from '../utils/time'
@@ -113,11 +114,13 @@ export default function ServiceErrors() {
 
 export function ServiceErrorResults({ items }: { items: ServiceErrorEvent[] }) {
   const { t } = useTranslation()
-  const { toast, showToast } = useToast()
+  const { showToast } = useToast()
   const [selected, setSelected] = useState<ServiceErrorEvent | null>(null)
+  const copyContainer = useRef<HTMLDivElement>(null)
   const copy = async () => {
+    if (!selected) return
     try {
-      await navigator.clipboard.writeText(JSON.stringify(selected, null, 2))
+      await writeClipboardText(JSON.stringify(selected, null, 2), copyContainer.current)
       showToast(t('opsErrors.copySuccess'))
     } catch {
       showToast(t('opsErrors.copyFailed'), 'error')
@@ -147,20 +150,19 @@ export function ServiceErrorResults({ items }: { items: ServiceErrorEvent[] }) {
                 <TableCell className="max-w-52 text-xs"><div className="truncate font-medium" title={item.model}>{item.model || '—'}</div><div className="mt-1 truncate text-muted-foreground" title={item.endpoint}>{item.method} {item.endpoint}</div><div className="mt-1 truncate text-muted-foreground" title={item.thread_source || item.request_type}>{item.thread_source || item.request_type}</div></TableCell>
                 <TableCell className="max-w-44 text-xs"><div className="truncate" title={item.api_key_name}>{item.api_key_name || (item.api_key_id ? `Key #${item.api_key_id}` : t('serviceErrors.unidentified'))}</div><div className="mt-1 truncate font-geist-mono text-muted-foreground" title={item.request_id}>{item.request_id}</div></TableCell>
                 <TableCell className="max-w-80"><div className="truncate font-geist-mono text-xs" title={item.code}>{item.code}</div><p className="mt-1 line-clamp-2 whitespace-normal break-words text-sm text-muted-foreground">{item.message}</p></TableCell>
-                <TableCell><Button size="sm" variant="ghost" onClick={() => setSelected(item)}>{t('opsErrors.details')}</Button></TableCell>
+                <TableCell><Button type="button" size="sm" variant="ghost" onClick={() => setSelected(item)}>{t('opsErrors.details')}</Button></TableCell>
               </TableRow>
             ))}</TableBody>
           </Table>
         )}
       </Card>
       <Dialog open={selected !== null} onOpenChange={open => { if (!open) setSelected(null) }}>
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent ref={copyContainer} className="sm:max-w-3xl">
           <DialogHeader><DialogTitle>{t('serviceErrors.details')}</DialogTitle><DialogDescription>{t('serviceErrors.detailsDescription')}</DialogDescription></DialogHeader>
-          <div className="flex items-start justify-between gap-4"><p className="min-w-0 break-words text-sm">{selected?.message}</p><Button variant="outline" size="sm" onClick={() => void copy()}><Copy className="size-3.5" />{t('serviceErrors.copy')}</Button></div>
+          <div className="flex items-start justify-between gap-4"><p className="min-w-0 break-words text-sm">{selected?.message}</p><Button type="button" variant="outline" size="sm" onClick={() => void copy()}><Copy className="size-3.5" />{t('serviceErrors.copy')}</Button></div>
           <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-all rounded-lg border bg-muted/40 p-4 font-geist-mono text-xs leading-relaxed">{JSON.stringify(selected, null, 2)}</pre>
         </DialogContent>
       </Dialog>
-      {toast}
     </>
   )
 }

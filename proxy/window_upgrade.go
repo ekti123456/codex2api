@@ -112,7 +112,7 @@ func (handler *Handler) windowQuoteOwner(request *gin.Context, identity verified
 
 func (handler *Handler) upgradePersonalWindow(request *gin.Context, identity verifiedNewAPIPolicyContext, input windowControlRequest, windows map[string]personalWindow) {
 	if !input.AllowExpansion || input.Multiplier <= 1 || input.ExtraLimit <= 0 || len(input.Root) > 64 || len(input.GrantID) > 64 || strings.TrimSpace(input.GrantID) == "" {
-		request.JSON(http.StatusBadRequest, gin.H{"message": "请先开启扩容并单独确认此窗口的新倍率"})
+		writeWindowControlError(request, http.StatusBadRequest, "window_upgrade_confirmation_required", "请先开启扩容并单独确认此窗口的新倍率")
 		return
 	}
 	subject := cache.PromptSessionLimitSubject(identity.Platform, identity.Identity.UserID)
@@ -120,12 +120,12 @@ func (handler *Handler) upgradePersonalWindow(request *gin.Context, identity ver
 	defer stop()
 	state, err := handler.db.ReadUserWindowAdmissions(ctx, subject)
 	if err != nil {
-		request.JSON(http.StatusServiceUnavailable, gin.H{"message": errWindowGrantStorage.Error()})
+		writeWindowControlError(request, http.StatusServiceUnavailable, "window_storage_unavailable", errWindowGrantStorage.Error())
 		return
 	}
 	grant := state.Windows[input.Root]
 	if grant == nil || grant.ID != input.GrantID || !grant.Confirmed || !grant.ExpiresAt.After(time.Now()) || grant.OwnerAccountID <= 0 || grant.OwnerKey == "" || grant.NoWindow {
-		request.JSON(http.StatusBadRequest, gin.H{"message": "窗口状态已变化或尚无可恢复的账号归属，请刷新后重试"})
+		writeWindowControlError(request, http.StatusBadRequest, "window_upgrade_stale", "窗口状态已变化或尚无可恢复的账号归属，请刷新后重试")
 		return
 	}
 	if grant.Expanded {
@@ -161,7 +161,7 @@ func (handler *Handler) upgradePersonalWindow(request *gin.Context, identity ver
 		})
 	})
 	if err != nil {
-		request.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		writeWindowControlError(request, http.StatusBadRequest, "window_upgrade_rejected", err.Error())
 		return
 	}
 	handler.cacheWindowTariff(subject, upgraded)

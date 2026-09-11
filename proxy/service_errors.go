@@ -105,19 +105,34 @@ func (handler *Handler) beginServiceErrorAudit(ctx *gin.Context) func() {
 		body := append([]byte(nil), writer.body...)
 		writer.mu.Unlock()
 		message, code, errorType := "Service request rejected", fmt.Sprintf("http_%d", writer.Status()), "server_error"
+		if writer.Status() < 500 {
+			errorType = string(api.ErrorTypeInvalidRequest)
+		}
+		switch writer.Status() {
+		case http.StatusUnauthorized:
+			errorType = string(api.ErrorTypeAuthentication)
+		case http.StatusForbidden:
+			errorType = string(api.ErrorTypePermission)
+		case http.StatusNotFound:
+			errorType = string(api.ErrorTypeNotFound)
+		case http.StatusTooManyRequests:
+			errorType = string(api.ErrorTypeRateLimit)
+		}
 		if gjson.ValidBytes(body) {
-			parsed := gjson.GetBytes(body, "error")
-			if parsed.Type == gjson.String {
-				message = parsed.String()
+			parsed := gjson.ParseBytes(body)
+			for _, fields := range []gjson.Result{parsed, parsed.Get("error")} {
+				if value := fields.Get("message"); value.Type == gjson.String && value.String() != "" {
+					message = value.String()
+				}
+				if value := fields.Get("code"); value.Type == gjson.String && value.String() != "" {
+					code = value.String()
+				}
+				if value := fields.Get("type"); value.Type == gjson.String && value.String() != "" {
+					errorType = value.String()
+				}
 			}
-			if value := parsed.Get("message"); value.Type == gjson.String {
-				message = value.String()
-			}
-			if value := parsed.Get("code"); value.Type == gjson.String {
-				code = value.String()
-			}
-			if value := parsed.Get("type"); value.Type == gjson.String {
-				errorType = value.String()
+			if failure := parsed.Get("error"); failure.Type == gjson.String && failure.String() != "" {
+				message = failure.String()
 			}
 		}
 		failure := api.NewAPIError(api.ErrorCode(code), message, api.ErrorType(errorType))
@@ -276,6 +291,14 @@ func (handler *Handler) recordServiceError(ctx *gin.Context, status int, apiErro
 		}
 	}
 	event.ClientInfo = usageDiagnosticClientInfo(incoming)
+	if endpoint == "/v1/session-windows" {
+		if operation := ctx.GetString(windowControlOperationContextKey); operation != "" {
+			if event.ClientInfo == nil {
+				event.ClientInfo = make(map[string]string)
+			}
+			event.ClientInfo["window_control.operation"] = operation
+		}
+	}
 	value, _ := ctx.Get(newAPIPolicyMetaContextKey)
 	frameDiagnostics, _ := ctx.Get(usageRequestDiagnosticsContextKey)
 	if policy, valid := value.(verifiedNewAPIPolicyContext); valid && policy.MetaVerified && (!state.websocket || frameDiagnostics != nil) {
@@ -303,6 +326,9 @@ func (handler *Handler) recordServiceError(ctx *gin.Context, status int, apiErro
 	}
 	if selection := selectionTraceForRequest(ctx); selection != nil {
 		event.CandidateRejections = selection.Snapshot().Reasons
+	}
+	if endpoint == "/v1/session-windows" {
+		event.RequestType, event.RequestKind = "gateway_internal", "window_control"
 	}
 	handler.db.EnqueueServiceError(event)
 }
