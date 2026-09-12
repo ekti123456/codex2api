@@ -91,11 +91,12 @@ busy 同会话溢出功能保留，只使用同账号、同隔离分区及兼容
 - 同用户、同实际 `Chatgpt-Account-Id`、同完整原始 ID 的结果稳定；HTTP、compact、WS、重试和重启一致。同上游账号重复导入不会因为本地账号编号不同而改变映射。实际账号不同则独立映射，默认仍禁止自动换号；只有显式开启下述开关才允许受保护的迁移。
 - Session-Id、Thread-Id、正文 session/thread、父线程、fork 来源、context_window_id 及窗口 ID 前缀共用映射。原本相等仍相等，子线程不会折叠成父线程，窗口序号不变。X-Client-Request-Id 及正文投影只在其值引用这些身份时同步替换，不改写独立的请求跟踪 ID。
 - prompt_cache_key 使用独立 `prompt-cache` 派生域并按账号、用户分区，不把缓存键拿来作为握手 Session-Id。日志仍只保存缓存键摘要。
-- 不改入站 NewAPI 签名、本地主会话解析、黑名单、永久绑定或日志搜索前缀。turn_id、root_turn_id、parent_turn_id、时间戳、设备级处理、connection_id、上游 response_id、previous_response_id、工具 call_id 和 encrypted_content 均不在此映射范围。
+- turn_id 与 root_turn_id 在账号映射模式下也保留 UUIDv7 前 27 个字符，仅稳定改写末 9 位，使用独立的轮次映射域；同一个原始轮次同时出现在两种字段时得到同一个出站值。旧 preserve 会话继续保留轮次值。
+- 不改入站 NewAPI 签名、本地主会话解析、黑名单、永久绑定或日志搜索前缀。原始 turn_id/root_turn_id 仍用于本地找根、关联和入口日志，改写只作用于最终 HTTP 头、WS 握手元数据和出站正文副本。parent_turn_id、时间戳、设备级处理、connection_id、上游 response_id、previous_response_id、工具 call_id 和 encrypted_content 不在此映射范围。
 
 ### 旧会话与故障保护
 
-首次登记策略时检查已有 `codex_identity_claims`：已发送并登记的会话继续 preserve，避免活跃会话突然变号。账号隔离模式下，新 fork/父引用使用对应账号的出站映射，不回退到用户原始父 ID；只有旧 preserve 策略而无法核实映射时拒绝请求。既有 account 映射在环境变量切回 preserve 后仍继续原映射，不破坏恢复链；不要通过删除记录强制重新生成。
+首次登记策略时检查已有 `codex_identity_claims`：已发送并登记的会话继续 preserve，避免活跃会话突然变号。账号隔离模式下，新 fork/父引用优先使用对应账号的出站映射；旧 preserve 父会话仅在核实原账号、未迁移阶段后允许保留原始父引用，具体条件见下文。既有 account 映射在环境变量切回 preserve 后仍继续原映射，不破坏恢复链；不要通过删除记录强制重新生成。
 
 部署前完整备份数据库，包括 `codex_identity_claims`、`codex_identity_mapping_secret`、`codex_identity_mapping_policies`、`codex_identity_alias_claims`、`codex_identity_epochs`、`codex_identity_references` 和 `codex_session_context_tokens`。映射密钥不得手动轮换、复制到日志或只恢复部分表。新版本多实例应共享数据库；不能与不识别该策略的旧版本混跑同一会话。无法追溯未曾登记的历史请求，因此不保证首次接入服务的外部旧会话保持历史出站身份。
 
@@ -118,7 +119,13 @@ busy 同会话溢出功能保留，只使用同账号、同隔离分区及兼容
 }
 ```
 
-`mapped` 表示已执行映射；`preserved_existing` 表示保留既有会话身份；`preserved_with_mapped_references` 表示自身身份与缓存键保留，仅父引用使用对应账号的映射；`preserved_ids` 列出需继续保留的关联身份。`references` 记录原始父 ID、解析出的 `policy`、迁移代数和段摘要，包括映射拒绝时的结果。失败状态不代表已经发送。映射日志不含 HMAC 密钥或认证凭据。最终 HTTP 头、实际 WS 握手、当前帧正文仍分别展示，不用本次期望头覆盖旧连接的握手快照。
+`mapped` 表示已执行映射；`preserved_existing` 表示保留既有会话身份；`preserved_with_mapped_references` 表示自身身份与缓存键保留，仅父引用使用对应账号的映射；`mapped_with_legacy_references` / `preserved_with_legacy_references` 表示包含已核实的旧原始父引用，前者自身仍映射，后者自身继续旧策略。`preserved_ids` 列出需继续保留的关联身份。`references` 记录原始父 ID、解析出的 `policy`、迁移代数和段摘要，以及 `action` / `reason`，包括映射拒绝时的结果。失败状态不代表已经发送。映射日志不含 HMAC 密钥或认证凭据。最终 HTTP 头、实际 WS 握手、当前帧正文仍分别展示，不用本次期望头覆盖旧连接的握手快照。
+
+使用日志分开显示“出站身份快照”和“本地改写诊断（不发送上游）”：前者仅包含 `http`、`ws_handshake`、`body` 的脱敏摘录，后者包含 `account_mapping`、日志版本、一致性结果等。`account_mapping.changes` 中轮次记录用 `fields` 标明 `turn_id` / `root_turn_id`。复制与下载仍保留完整诊断结构以兼容旧日志解析器，并非上游请求原文。
+
+轮次映射沿用持久化身份表，按用户、实际 ChatGPT 账号、原始轮次 ID 记录其来源阶段，再按当前会话阶段固定引用。关联后台请求和 fork 查询同一原始根轮次时复用其已登记映射，不将根轮次按每个子线程重新随机生成；来源未登记时先以当前已解析阶段建立映射，冲突则发送前拒绝而非覆盖。当前主会话 A→B→A 后本轮映射随迁移代数变化；仍留在原阶段的历史子会话引用保持固定，不随父会话后来的换号漂移。重启或请求重试不会重抽随机值。
+
+WS 握手中的轮次信息是建连时的已改写快照；复用连接后，本轮值以当前帧正文为准。不会为了更新每轮 turn_id 重建连接，也不会把旧握手快照的轮次值重新灌入当前正文。
 
 此功能是账号隔离，不承诺匿名、不可关联或消除 500。UUID 前缀/时间、未改动的轮次、设备、内容、账号和出口等仍可能具有相关性；上游不透明响应及加密上下文不能通过改 UUID 迁移到其他账号。
 
@@ -164,6 +171,10 @@ NewAPI 先在已验证用户范围内按**原始 session_id 前缀**解析唯一
 
 父会话 S 的出站 ID 若已是结合实际账号和迁移段派生的 S′，新 fork T 的握手和正文父引用均指向 S′，而不是入站 S，也不是套用 T 自己的迁移段重新派生一个错误父 ID。T 自己的会话/线程 ID 仍按自己的账号隔离规则生成，不复用父线程 ID。
 
-父引用按用户、实际账号和 fork 自己的出站段持久固定。父会话之后再次换号或回切，不会使既有 fork 的父引用漂移；新 fork 则使用对应账号已登记的父段。没有历史父段且没有旧 preserve 声明时，使用该账号的稳定派生映射；无法核实已有父段或存在策略冲突时拒绝，不发送原始父 ID。关闭自动换号后，引用已映射父会话的新 fork 仍沿用账号映射。日志 `account_mapping.changes` 和最终握手/正文快照可核对原始与出站父 ID。
+父引用按用户、实际账号和 fork 自己的出站段持久固定。父会话之后再次换号或回切，不会使既有 fork 的父引用漂移；新 fork 则使用对应账号已登记的父段。没有历史父段且没有旧 preserve 声明时，使用该账号的稳定派生映射；无法核实已有父段或存在策略冲突时拒绝，不任意回退到原始父 ID。关闭自动换号后，引用已映射父会话的新 fork 仍沿用账号映射。日志 `account_mapping.changes` 和最终握手/正文快照可核对原始与出站父 ID。
 
-旧 fork 自身的 `preserve` 策略不再一律阻止父引用映射：本地仍按用户隔离后的原始 ID 查询，自己的 session/thread/window 与提示缓存键保持历史值，父引用单独解析对应账号的历史段并在握手和正文同步改写。父会话本身只有旧 `preserve` 策略时仍拒绝，不自动把新生成的 ID 当成已存在的历史父会话，也不退回发送原始父 ID。
+旧 fork 自身的 `preserve` 策略不再一律阻止父引用映射：本地仍按用户隔离后的原始 ID 查询，自己的 session/thread/window 与提示缓存键保持历史值，父引用单独解析对应账号的历史段并在握手和正文同步改写。
+
+旧父会话使用 `preserve` 时，只有当前请求具备一致的账号与持久化阶段、当前阶段从未迁移，而且父会话同账号的零代历史归属已核实，才允许在握手和正文保留原始父 ID。首次依据原始父 ID 回查父会话归属，成功后沿用已有引用表按用户、实际 ChatGPT 账号和子会话阶段固定父段；父会话单独迁移不改变仍留在原账号的既有子会话引用。新子会话自身仍使用账号映射，不因为父会话为旧策略而整体回退。日志标记 `action=preserved_legacy_parent`、`reason=original_account_unmigrated`。
+
+子会话一旦换号，兼容许可不随迁移转移：包括 A→B→A，任何已迁移阶段都不再允许旧原始父引用；当前会话及其他关联身份也不能回退 preserve。目标账号有可核实的父映射时使用其映射，没有则发送前拒绝，不自动删除父引用或加密上下文。`request_migrated`、`request_epoch_unavailable`、`parent_owner_unavailable` 等日志说明具体拒绝原因。这项兼容不保证所有旧上下文都能无感换号，原有续链来源和加密上下文检查保持不变。

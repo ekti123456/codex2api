@@ -2266,6 +2266,7 @@
       "copied": "已复制脱敏诊断",
       "decodeMetadata": "解析元数据 JSON 字符串（仅方便阅读；勾选后展示与复制不代表原始字段类型）",
       "outboundJSONHint": "按实际 HTTP 头／WS 握手／正文层级展示的脱敏字段快照，并非完整请求。WS 握手是建连时快照，后续窗口与轮次以当前正文为准。",
+      "outboundLocalHint": "以下均为网关本地诊断，不发送上游：包括 account_mapping、原始值与出站值对照、日志版本和一致性结果。复制／下载的是完整诊断记录，不是上游请求原文。",
       "outboundLegacyHint": "历史诊断摘要：旧日志中的 turn_metadata／links 是解析分组，不代表上游 JSON 层级；无法还原当时的原始载体类型。",
       "accountMapped": "已使用账号级稳定身份映射。account_mapping.changes 展示原始值与出站值；入站身份、根绑定和黑名单不变。",
       "accountMappingPreserved": "此会话已固定为保留原始身份，不会因启用映射而中途改变出站会话 ID。",
@@ -2273,7 +2274,7 @@
       "retry": "重新加载",
       "types": { "user": "用户主请求", "related_internal": "关联被动", "independent_internal": "独立后台", "related_unclassified": "关联请求（未判被动）", "compaction": "压缩请求", "gateway_internal": "网关内部", "unknown": "未识别", "not_recorded": "未记录" },
       "clientHint": "客户端入站声明按来源分别展示，不合并有差异的安装/设备 ID，也不等同于上游账号收敛后的设备 ID。未发送或旧日志未采集的字段不推测；SDK、版本和系统信息仅在实际携带时显示。",
-      "sections": { "request": "请求信息", "client": "客户端与设备", "upstream": "上游出口、连接与错误阶段", "outbound": "最终出站身份（HTTP／WS 握手／正文）", "resolved": "实际解析结果", "audit": "内容审核阶段", "dispatch": "模型调度阶段", "windows": "窗口处理结果", "routing": "账号选择结果", "recent": "无根最近账号回溯", "incoming": "入口字段（按来源分开）" }
+      "sections": { "request": "请求信息", "client": "客户端与设备", "upstream": "上游出口、连接与错误阶段", "outbound": "出站身份快照（HTTP／WS 握手／正文）", "outboundDiagnostics": "本地改写诊断（不发送上游）", "resolved": "实际解析结果", "audit": "内容审核阶段", "dispatch": "模型调度阶段", "windows": "窗口处理结果", "routing": "账号选择结果", "recent": "无根最近账号回溯", "incoming": "入口字段（按来源分开）" }
     },
     "imageInputTokens": "图片输入 token",
     "imageOutputTokens": "图片输出 token",

@@ -15,6 +15,16 @@ export function diagnosticRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+export function splitOutboundIdentityDiagnostic(value: unknown): { snapshot: Record<string, unknown>; local: Record<string, unknown> } {
+  const snapshot: Record<string, unknown> = {}
+  const local: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(diagnosticRecord(value))) {
+    if (['http', 'ws_handshake', 'body'].includes(key)) snapshot[key] = item
+    else local[key] = item
+  }
+  return { snapshot, local }
+}
+
 const clientMetadataFields = new Set([
   'installation_id', 'installationId', 'device_id', 'deviceId',
   'x-codex-installation-id', 'x_codex_installation_id', 'x-device-id', 'x_device_id',

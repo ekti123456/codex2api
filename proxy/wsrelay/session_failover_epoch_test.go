@@ -85,6 +85,8 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 	}
 	const root = "01a09351-7b81-7ae0-afd0-225e178ea131"
 	var captures []capture
+	const originalTurn = "01a095b5-86a3-7ec2-af42-0bb1111ef330"
+	var mappedTurns []string
 	for number := 0; number < 5; number++ {
 		if number == 2 {
 			atomic.StoreInt32(&first.Disabled, 1)
@@ -95,6 +97,12 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 			atomic.StoreInt32(&second.Disabled, 1)
 		}
 		body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":true,"input":"full plaintext context","client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","thread_source":"user","request_kind":"turn","window_id":"%s:%d","window_number":%d}}}`, root, root, root, root, root, number, number))
+		for _, field := range []string{"turn_id", "root_turn_id"} {
+			body, err = sjson.SetBytes(body, "client_metadata."+field, originalTurn)
+			require.NoError(test, err)
+			body, err = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata."+field, originalTurn)
+			require.NoError(test, err)
+		}
 		if number == 1 || number == 3 {
 			body, err = sjson.SetRawBytes(body, "input", []byte(fmt.Sprintf(`[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"epoch-state-%d"},{"role":"user","content":"continue"}]`, number/2+1)))
 			require.NoError(test, err)
@@ -116,6 +124,14 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 			require.EqualValues(test, number%2, meta.Get("window_number").Uint())
 			require.Equal(test, sent.headers.Get("Thread-Id")+fmt.Sprintf(":%d", number%2), meta.Get("window_id").String())
 			require.Equal(test, sent.headers.Get("Session-Id"), meta.Get("session_id").String())
+			mappedTurn := meta.Get("turn_id").String()
+			require.NotEqual(test, originalTurn, mappedTurn)
+			require.Equal(test, mappedTurn, meta.Get("root_turn_id").String())
+			require.Equal(test, mappedTurn, gjson.GetBytes(sent.body, "client_metadata.turn_id").String())
+			require.Equal(test, mappedTurn, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").String())
+			mappedTurns = append(mappedTurns, mappedTurn)
+			require.False(test, gjson.GetBytes(sent.body, "account_mapping").Exists())
+			require.Equal(test, originalTurn, gjson.GetBytes(body, "client_metadata.turn_id").String())
 		case <-time.After(time.Second):
 			test.Fatal("upstream frame missing")
 		}
@@ -126,4 +142,8 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 	require.NotEqual(test, captures[0].connection, captures[4].connection)
 	require.NotEqual(test, captures[0].headers.Get("Session-Id"), captures[4].headers.Get("Session-Id"))
 	require.EqualValues(test, 3, connections.Load())
+	require.Equal(test, mappedTurns[0], mappedTurns[1])
+	require.Equal(test, mappedTurns[2], mappedTurns[3])
+	require.NotEqual(test, mappedTurns[0], mappedTurns[2])
+	require.NotEqual(test, mappedTurns[0], mappedTurns[4])
 }

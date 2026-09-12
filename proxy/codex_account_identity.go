@@ -38,8 +38,9 @@ func WithCodexIdentityStore(ctx context.Context, store CodexIdentityStore) conte
 }
 
 type codexAccountIdentityChange struct {
-	Original string `json:"original"`
-	Outbound string `json:"outbound"`
+	Original string   `json:"original"`
+	Outbound string   `json:"outbound"`
+	Fields   []string `json:"fields,omitempty"`
 }
 
 type codexAccountIdentityDiagnosticKey struct{}
@@ -49,6 +50,8 @@ type codexAccountReferenceDiagnostic struct {
 	Policy      string `json:"policy"`
 	Generation  uint64 `json:"generation"`
 	SegmentHash string `json:"segment_hash,omitempty"`
+	Action      string `json:"action,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 type codexAccountIdentityDiagnostic struct {
@@ -73,6 +76,7 @@ type codexAccountIdentity struct {
 	preserveRoot bool
 	windowBases  map[string]uint64
 	aliases      map[string]string
+	turnAliases  map[string]string
 	diagnostic   codexAccountIdentityDiagnostic
 }
 
@@ -173,6 +177,9 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 	diagnostic.ScopeHash = rootKey[:24]
 	diagnostic.Version = policy.Mode
 	preserveRoot := policy.Mode == "preserve"
+	if preserveRoot && codexIdentityEpochMigrated(epoch) {
+		return codexAccountIdentityError("已换号的会话不能恢复原始出站身份，已停止发送，请核实迁移记录。")
+	}
 	if preserveRoot && (len(fingerprint.accountIdentityReferences) == 0 || !fingerprint.accountIdentityRequested && !mappedReference) {
 		diagnostic.Status = "preserved_existing"
 		return nil
@@ -213,6 +220,7 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 	sort.Strings(ordered)
 	claims := make([]database.CodexIdentityAliasClaim, 0, len(ordered))
 	references := make(map[string]database.CodexIdentityEpoch)
+	legacyParentPreserved := false
 	currentEpoch := database.CodexIdentityEpoch{Segment: epochKey}
 	if epoch != nil {
 		currentEpoch.RootKey, currentEpoch.Generation = epoch.key, epoch.record.FailoverCount
@@ -225,15 +233,21 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		baseIdentityKey := codexIdentityDigest("codex-account-root-v1", owner, upstreamAccount, original)
 		identityKey := baseIdentityKey
 		identityEpoch := currentEpoch
+		legacyParentVerified := false
+		var referenceDiagnostic *codexAccountReferenceDiagnostic
 		if fingerprint.accountIdentityReferences[original] {
+			diagnostic.References = append(diagnostic.References, codexAccountReferenceDiagnostic{Original: original, Action: "blocked"})
+			referenceDiagnostic = &diagnostic.References[len(diagnostic.References)-1]
 			identityEpoch = database.CodexIdentityEpoch{}
 			referenceKey := codexIdentityDigest("codex-account-reference-v1", rootKey, original)
 			resolved, found, bound, err := store.ReadCodexIdentityReference(ctx, referenceKey, baseIdentityKey)
 			if err != nil {
+				referenceDiagnostic.Reason = "reference_lookup_failed"
 				return codexAccountIdentityError("暂时无法核实父会话出站身份，请稍后重试。")
 			}
 			if found {
 				identityEpoch = resolved
+				legacyParentVerified = bound && resolved.RootKey != ""
 				if !bound && resolved.RootKey != "" && resolved.RootKey == currentEpoch.RootKey && resolved.Generation < currentEpoch.Generation {
 					identityEpoch = currentEpoch
 				}
@@ -241,8 +255,10 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 			if !bound {
 				sourceKey, sourceRecord, exists, err := lookupCodexReferenceRoot(ctx, original)
 				if err != nil || exists && !found && sourceRecord.AccountID != account.ID() {
+					referenceDiagnostic.Reason = "parent_account_unavailable"
 					return codexAccountIdentityError("无法核实该账号对应的父会话出站段，已停止发送父引用。")
 				}
+				legacyParentVerified = exists && sourceRecord.AccountID == account.ID() && sourceRecord.FailoverCount == 0 && !sourceRecord.OutboundWindowReset
 				if exists && sourceRecord.AccountID == account.ID() && (!found || sourceRecord.FailoverCount > identityEpoch.Generation) {
 					sourceEpoch := &sessionOutboundEpoch{key: sourceKey, record: sourceRecord}
 					identityEpoch = database.CodexIdentityEpoch{RootKey: sourceKey, Generation: sourceRecord.FailoverCount, Segment: sourceEpoch.identityKey()}
@@ -262,16 +278,22 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		if err != nil {
 			return codexAccountIdentityError("暂时无法核实关联会话身份映射，请稍后重试。")
 		}
-		if fingerprint.accountIdentityReferences[original] {
-			reference := codexAccountReferenceDiagnostic{Original: original, Policy: identityPolicy.Mode, Generation: identityEpoch.Generation}
+		if referenceDiagnostic != nil {
+			referenceDiagnostic.Policy, referenceDiagnostic.Generation = identityPolicy.Mode, identityEpoch.Generation
 			if identityEpoch.Segment != "" {
-				reference.SegmentHash = diagnosticIdentifier(identityEpoch.Segment)
+				referenceDiagnostic.SegmentHash = diagnosticIdentifier(identityEpoch.Segment)
 			}
-			diagnostic.References = append(diagnostic.References, reference)
 		}
 		if identityPolicy.Mode == "preserve" {
-			if fingerprint.accountIdentityReferences[original] {
-				return codexAccountIdentityError("父会话尚无可确认的账号级出站映射，已停止发送原始父会话 ID；请先恢复父会话或新开对话。")
+			if referenceDiagnostic != nil {
+				referenceDiagnostic.Reason = legacyCodexParentReferenceBlock(epoch, account.ID(), identityEpoch, legacyParentVerified)
+				if referenceDiagnostic.Reason != "" {
+					return codexAccountIdentityError("父会话尚无可确认的账号级出站映射，且不符合原账号旧会话兼容条件，已停止发送原始父会话 ID。")
+				}
+				referenceDiagnostic.Action, referenceDiagnostic.Reason = "preserved_legacy_parent", "original_account_unmigrated"
+				legacyParentPreserved = true
+			} else if codexIdentityEpochMigrated(epoch) {
+				return codexAccountIdentityError("已换号的会话不能发送旧的原始关联身份，已停止发送，请核实迁移记录。")
 			}
 			diagnostic.PreservedIDs = append(diagnostic.PreservedIDs, original)
 			continue
@@ -292,6 +314,9 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 			return codexAccountIdentityError("出站会话标识发生冲突，已停止请求，请联系管理员。")
 		}
 		mapping.aliases[original] = outbound
+		if referenceDiagnostic != nil {
+			referenceDiagnostic.Action = "mapped"
+		}
 		diagnostic.Changes = append(diagnostic.Changes, codexAccountIdentityChange{Original: original, Outbound: outbound})
 		sourceKey := codexIdentityDigest("codex-account-alias-source-v1", owner, upstreamAccount, original)
 		if identityEpoch.Segment != "" {
@@ -302,6 +327,11 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 			SourceKey: sourceKey,
 		})
 	}
+	turnPlan, err := fingerprint.prepareAccountTurnIdentity(ctx, store, mapping, rootKey, currentEpoch, &diagnostic)
+	if err != nil {
+		return err
+	}
+	claims = append(claims, turnPlan.claims...)
 	if err := store.ClaimCodexIdentityAliases(ctx, claims); err != nil {
 		if errors.Is(err, database.ErrCodexIdentityAliasCollision) {
 			return codexAccountIdentityError("出站会话标识发生冲突，已停止请求，请联系管理员。")
@@ -311,6 +341,16 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 	if epoch == nil || !epoch.preview {
 		if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
 			return err
+		}
+		for identityKey, turnEpoch := range turnPlan.epochs {
+			if err := store.PublishCodexIdentityEpoch(ctx, identityKey, turnEpoch); err != nil {
+				return codexAccountIdentityError("轮次映射阶段已变化或暂时不可用，已停止发送，请重试。")
+			}
+		}
+		for referenceKey, turnEpoch := range turnPlan.references {
+			if err := store.ClaimCodexIdentityReference(ctx, referenceKey, turnEpoch); err != nil {
+				return codexAccountIdentityError("轮次引用映射已变化或暂时不可用，已停止发送，请重试。")
+			}
 		}
 		for referenceKey, referenceEpoch := range references {
 			if err := store.ClaimCodexIdentityReference(ctx, referenceKey, referenceEpoch); err != nil {
@@ -331,6 +371,12 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 	if preserveRoot {
 		diagnostic.Status = "preserved_with_mapped_references"
 	}
+	if legacyParentPreserved {
+		diagnostic.Status = "mapped_with_legacy_references"
+		if preserveRoot {
+			diagnostic.Status = "preserved_with_legacy_references"
+		}
+	}
 	mapping.diagnostic = diagnostic
 	fingerprint.accountIdentity = mapping
 	fingerprint.headers = mapping.rewriteHeaders(fingerprint.headers)
@@ -339,6 +385,26 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 
 func codexAccountIdentityError(message string) *Error {
 	return &Error{Code: "codex_session_identity_unavailable", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: message}
+}
+
+func codexIdentityEpochMigrated(epoch *sessionOutboundEpoch) bool {
+	return epoch != nil && (epoch.record.FailoverCount > 0 || epoch.record.OutboundWindowReset)
+}
+
+func legacyCodexParentReferenceBlock(epoch *sessionOutboundEpoch, accountID int64, parent database.CodexIdentityEpoch, verified bool) string {
+	if epoch == nil || epoch.key == "" || epoch.record.AccountID != accountID {
+		return "request_epoch_unavailable"
+	}
+	if codexIdentityEpochMigrated(epoch) {
+		return "request_migrated"
+	}
+	if parent.Generation > 0 || parent.Segment != "" {
+		return "parent_migrated"
+	}
+	if !verified || parent.RootKey == "" {
+		return "parent_owner_unavailable"
+	}
+	return ""
 }
 
 func (mapping *codexAccountIdentity) digest(domain, original string) string {
@@ -410,6 +476,14 @@ func (mapping *codexAccountIdentity) rewriteMetadata(raw string, fallbackThreads
 		}
 		if updated != value.String() {
 			raw, _ = sjson.Set(raw, field, updated)
+		}
+	}
+	for _, field := range []string{"turn_id", "root_turn_id"} {
+		value := gjson.Get(raw, field)
+		if value.Type == gjson.String {
+			if alias := mapping.rewriteTurnValue(value.String()); alias != value.String() {
+				raw, _ = sjson.Set(raw, field, alias)
+			}
 		}
 	}
 	return raw

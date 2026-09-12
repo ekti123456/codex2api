@@ -16,6 +16,7 @@ type CodexFingerprint struct {
 	identityValues            []string
 	accountIdentityRequested  bool
 	accountIdentityInputs     []string
+	accountTurnIdentityInputs map[string]codexTurnIdentityInput
 	accountIdentityReferences map[string]bool
 	accountWindowInputs       map[string]uint64
 	accountWindowInputError   error

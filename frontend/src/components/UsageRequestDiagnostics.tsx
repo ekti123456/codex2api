@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { UsageLog } from '../types'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
 import { useToast } from '../hooks/useToast'
 import Modal from './Modal'
 import { Button } from './ui/button'
@@ -59,11 +59,13 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
   const data = detail?.diagnostics
   const { outbound_identity: outboundIdentity, ...upstream } = diagnosticRecord(data?.upstream)
   const accountMapping = diagnosticRecord(diagnosticRecord(outboundIdentity).account_mapping)
+  const outbound = splitOutboundIdentityDiagnostic(outboundIdentity)
   const sections: [string, unknown][] = data ? [
     ['request', { request_type: detail.request_type, ...diagnosticRecord(data.request), started_at: data.started_at, completed_at: data.completed_at, correlation_id: data.correlation_id, newapi_request_id: data.newapi_request_id, attempt: data.attempt, capture_status: data.capture_status, responses_input: data.responses_input }],
     ['client', diagnosticClientInfo(data.incoming)],
     ['upstream', upstream],
-    ['outbound', outboundIdentity],
+    ['outbound', outbound.snapshot],
+    ['outboundDiagnostics', outbound.local],
     ['resolved', data.resolved],
     ['continuity', data.session_continuity],
     ['audit', data.audit],
@@ -97,10 +99,10 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
       {sections.map(([title, value]) => <section key={title} className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{title === 'continuity' ? t('sessionContinuity.title') : t(`usage.diagnostics.sections.${title}`)}</h3>
         {title === 'client' && <p className="mb-3 text-xs leading-5 text-muted-foreground">{t('usage.diagnostics.clientHint')}</p>}
-        {title === 'outbound' ? <>
-          <p className="mb-3 text-xs leading-5 text-muted-foreground">{t(diagnosticRecord(value).format_version === 2 ? 'usage.diagnostics.outboundJSONHint' : 'usage.diagnostics.outboundLegacyHint')}</p>
-          {accountMapping.status === 'mapped' && <p className="mb-3 rounded-md bg-primary/10 p-2 text-xs">{t('usage.diagnostics.accountMapped')}</p>}
-          {accountMapping.status === 'preserved_existing' && <p className="mb-3 rounded-md bg-muted p-2 text-xs">{t('usage.diagnostics.accountMappingPreserved')}</p>}
+        {title === 'outbound' || title === 'outboundDiagnostics' ? <>
+          <p className="mb-3 text-xs leading-5 text-muted-foreground">{t(title === 'outboundDiagnostics' ? 'usage.diagnostics.outboundLocalHint' : diagnosticRecord(outboundIdentity).format_version === 2 ? 'usage.diagnostics.outboundJSONHint' : 'usage.diagnostics.outboundLegacyHint')}</p>
+          {title === 'outboundDiagnostics' && String(accountMapping.status || '').startsWith('mapped') && <p className="mb-3 rounded-md bg-primary/10 p-2 text-xs">{t('usage.diagnostics.accountMapped')}</p>}
+          {title === 'outboundDiagnostics' && String(accountMapping.status || '').startsWith('preserved') && <p className="mb-3 rounded-md bg-muted p-2 text-xs">{t('usage.diagnostics.accountMappingPreserved')}</p>}
           <pre className="max-h-[560px] overflow-auto rounded-md bg-muted/40 p-3 text-xs font-mono select-text" tabIndex={0}>{JSON.stringify(diagnosticJSONDisplay(value ?? null, decodeMetadata), null, 2)}</pre>
         </> : <DiagnosticFields value={value} />}
       </section>)}

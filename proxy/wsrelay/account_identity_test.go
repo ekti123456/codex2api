@@ -90,13 +90,14 @@ func TestWebsocketAccountIdentityReuseFailureHTTPAndAccountBoundary(test *testin
 	second := &auth.Account{DBID: 1696, AccountID: "761373c1-f1a9-4ca9-8682-a0594b30c36c", AccessToken: "other-test-token", CodexFingerprintMode: auth.CodexFingerprintModeDevice, DynamicConcurrencyLimit: 1}
 	const root = "01a09302-49f4-7b53-b545-91ef29610317"
 	headers := http.Header{"Session-Id": {root}, "Thread-Id": {root}, "Originator": {"codex-tui"}}
-	var firstSession, firstCache string
+	var firstSession, firstCache, firstTurn string
 	for index := 0; index < 4; index++ {
 		account := first
 		if index == 3 {
 			account = second
 		}
-		body := []byte(fmt.Sprintf(`{"model":"gpt-6-astra","input":[],"client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","context_window_id":"01a09302-49f4-7b53-b545-91fb553a57b4","window_id":"%s:%d","window_number":%d,"turn_id":"turn-%d","request_kind":"turn","thread_source":"user"}}}`, root, root, root, root, root, index, index, index))
+		originalTurn := fmt.Sprintf("01a095b5-86a3-7ec2-af42-%012x", index+1)
+		body := []byte(fmt.Sprintf(`{"model":"gpt-6-astra","input":[],"client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","context_window_id":"01a09302-49f4-7b53-b545-91fb553a57b4","window_id":"%s:%d","window_number":%d,"turn_id":"%s","request_kind":"turn","thread_source":"user"}}}`, root, root, root, root, root, index, index, originalTurn))
 		response, err := proxy.ExecuteRequest(ctx, account, body, "cache", "", "test-key", nil, headers, index != 2)
 		require.NoError(test, err)
 		output, err := io.ReadAll(response.Body)
@@ -132,9 +133,18 @@ func TestWebsocketAccountIdentityReuseFailureHTTPAndAccountBoundary(test *testin
 		metadata := gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata").String()
 		require.Equal(test, session, gjson.Get(metadata, "thread_id").String())
 		require.Equal(test, fmt.Sprintf("%s:%d", session, index), gjson.Get(metadata, "window_id").String())
-		require.Equal(test, fmt.Sprintf("turn-%d", index), gjson.Get(metadata, "turn_id").String())
+		mappedTurn := gjson.Get(metadata, "turn_id").String()
+		require.NotEqual(test, originalTurn, mappedTurn)
+		require.Equal(test, originalTurn[:27], mappedTurn[:27])
+		if index == 0 {
+			firstTurn = mappedTurn
+		}
 		if index == 1 {
 			require.Equal(test, firstSession+":0", sent.headers.Get("X-Codex-Window-Id"))
+			require.Equal(test, firstTurn, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").String())
+			require.NotEqual(test, firstTurn, mappedTurn)
+		} else {
+			require.Equal(test, mappedTurn, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").String())
 		}
 	}
 	require.EqualValues(test, 2, connections.Load())

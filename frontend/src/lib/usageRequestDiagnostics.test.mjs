@@ -1,6 +1,36 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
+
+test('outbound snapshots exclude gateway mapping and consistency diagnostics without mutating exports', () => {
+  const mapping = Object.freeze({ changes: [{ original: 'original-turn', outbound: 'mapped-turn' }] })
+  const source = Object.freeze({
+    format_version: 2, session_consistency: 'matched', truncated: true, account_mapping: mapping,
+    http: { headers: { 'Session-Id': 'session' } },
+    ws_handshake: { headers: { 'X-Codex-Turn-Metadata': '{"turn_id":"mapped-turn"}' } },
+    body: { client_metadata: { turn_id: 'mapped-turn' } },
+    future_diagnostic: { local: true },
+  })
+  const original = JSON.stringify(source)
+  const { snapshot, local } = splitOutboundIdentityDiagnostic(source)
+  assert.deepEqual(Object.keys(snapshot), ['http', 'ws_handshake', 'body'])
+  assert.equal(snapshot.body.client_metadata.turn_id, 'mapped-turn')
+  assert.equal(snapshot.ws_handshake.headers['X-Codex-Turn-Metadata'], '{"turn_id":"mapped-turn"}')
+  assert.equal(local.account_mapping, mapping)
+  assert.equal(local.format_version, 2)
+  assert.equal(local.session_consistency, 'matched')
+  assert.equal(local.truncated, true)
+  assert.deepEqual(local.future_diagnostic, { local: true })
+  assert.equal(JSON.stringify(source), original)
+})
+
+test('outbound diagnostic split supports missing and historical captures', () => {
+  for (const empty of [undefined, null, [], 'invalid']) {
+    assert.deepEqual(splitOutboundIdentityDiagnostic(empty), { snapshot: {}, local: {} })
+  }
+  const historical = { body: { turn_metadata: { turn_id: 'old-turn' }, links: { prompt_cache_key: 'hash:old' } } }
+  assert.deepEqual(splitOutboundIdentityDiagnostic(historical), { snapshot: historical, local: {} })
+})
 
 test('account mapping audit survives JSON display and copy without changing the input', () => {
   const mapping = { version: 'account-suffix-v1', status: 'mapped', changes: [{ original: 'original-id', outbound: 'account-id' }], cache_partitioned: true }
