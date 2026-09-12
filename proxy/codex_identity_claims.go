@@ -37,6 +37,41 @@ func codexIdentityRequestError(err error) *api.APIError {
 	}
 }
 
+func sendCodexIdentityRequestError(ctx *gin.Context, err error, protocol continuousRetryHTTPProtocol) bool {
+	identityError := codexIdentityRequestError(err)
+	if identityError == nil {
+		return false
+	}
+	if !claimContinuousRetryTerminal(ctx, protocol) {
+		return true
+	}
+	api.ObserveError(ctx, http.StatusBadRequest, identityError)
+	if retryKeepaliveCommitted(ctx) {
+		if ctx.Request.Context().Err() != nil {
+			return true
+		}
+		payload := gin.H{"error": identityError}
+		prefix := "data: "
+		switch protocol {
+		case continuousRetryProtocolResponses:
+			payload = gin.H{"type": "response.failed", "response": gin.H{"created_at": time.Now().Unix(), "status": "failed", "error": identityError}}
+		case continuousRetryProtocolAnthropic:
+			payload["type"] = "error"
+			prefix = "event: error\ndata: "
+		}
+		encoded, _ := json.Marshal(payload)
+		_, _ = ctx.Writer.WriteString(prefix + string(encoded) + "\n\n")
+		ctx.Writer.Flush()
+		return true
+	}
+	if protocol == continuousRetryProtocolAnthropic {
+		ctx.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": identityError})
+	} else {
+		ctx.JSON(http.StatusBadRequest, api.ErrorResponse{Error: *identityError})
+	}
+	return true
+}
+
 type localCodexIdentityClaims struct {
 	mu     sync.Mutex
 	owners map[string]string

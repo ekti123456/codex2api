@@ -4456,6 +4456,12 @@ func (h *Handler) Responses(c *gin.Context) {
 			durationMs := int(time.Since(start).Milliseconds())
 
 			if reqErr != nil {
+				if codexIdentityRequestError(reqErr) != nil {
+					stopTTFTGuard()
+					h.store.Release(account)
+					sendCodexIdentityRequestError(c, reqErr, continuousRetryProtocolResponses)
+					return
+				}
 				if apiKeyModelRequestError(reqErr) != nil {
 					stopTTFTGuard()
 					h.store.Release(account)
@@ -5235,6 +5241,12 @@ func (h *Handler) Responses(c *gin.Context) {
 		durationMs := int(time.Since(start).Milliseconds())
 
 		if reqErr != nil {
+			if codexIdentityRequestError(reqErr) != nil {
+				ttftGuard.Stop()
+				h.store.Release(account)
+				sendCodexIdentityRequestError(c, reqErr, continuousRetryProtocolResponses)
+				return
+			}
 			if apiKeyModelRequestError(reqErr) != nil {
 				ttftGuard.Stop()
 				h.store.Release(account)
@@ -7444,6 +7456,12 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		durationMs := int(time.Since(start).Milliseconds())
 
 		if reqErr != nil {
+			if codexIdentityRequestError(reqErr) != nil {
+				ttftGuard.Stop()
+				h.store.Release(account)
+				sendCodexIdentityRequestError(c, reqErr, continuousRetryProtocolChat)
+				return
+			}
 			if apiKeyModelRequestError(reqErr) != nil {
 				ttftGuard.Stop()
 				h.store.Release(account)
