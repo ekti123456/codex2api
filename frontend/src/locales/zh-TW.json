@@ -273,6 +273,8 @@
     "proxyPoolLinkedHint": "已關聯代理池節點（按位址綁定）：在「代理」頁修改該節點位址會同步到所有綁定帳號，刪除則自動解除綁定。"
   },
   "settings": {
+    "codexSessionFailoverEnabled": "帳號不可用或會話容量不足時允許換號",
+    "codexSessionFailoverEnabledHint": "預設關閉。帳號額度耗盡、自動/手動暫停、停用，或綁定帳號無法接納目前會話窗口時，允許後續攜帶完整明文上下文的請求移轉；目標帳號分組集合必須完全一致，不得增加或減少分組。每次移轉建立新的出站身分段及握手，窗口序號以入站值為基準歸零（47→0、48→1）；切回舊帳號也不復用舊段。本地黏性、入站序號、使用者額度及窗口授權到期時間不重設。不移轉舊 previous_response_id 或加密上下文；含加密推理、加密壓縮或未知的 previous_response_id 時可能需要建立新會話。不會僅因 500、busy、黑名單或綁定到期而換號，不繞過使用者併發、擴容確認或黑名單限制。",
     "codexTelemetry": "用戶端遙測（實驗性）",
     "codexTelemetryDesc": "使用所選用戶端身分傳送模擬的 Codex 分析事件與 OTLP 指標。事件為合成，並非來自真實工具呼叫。預設關閉，關閉時出站 turn metadata 寫入 analytics_enabled: false；可用 CODEX_TELEMETRY_ENABLED=false 在部署層強制關閉。",
     "codexCapacityRetryEnabled": "容量不足自動重試",
@@ -1414,6 +1416,8 @@
     "exportSuccess": "檔案已產生，瀏覽器已開始儲存",
     "exportFailed": "下載使用日誌失敗：{{error}}",
     "diagnostics": {
+      "accountMapped": "已使用帳號級穩定身分映射。account_mapping.changes 顯示原始值與出站值；入站身分、根綁定及黑名單不變。",
+      "accountMappingPreserved": "此會話已固定為保留原始身分，不會因啟用映射而中途改變出站會話 ID。",
       "column": "請求類型",
       "title": "請求診斷",
       "open": "查看請求類型、根會話與帳號選擇依據",

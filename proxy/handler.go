@@ -570,7 +570,7 @@ func (h *Handler) applyPassiveInternalModelRouting(c *gin.Context, effectiveMode
 	if identity.requiresRootAccount && (!identity.relatedToRoot || identity.unlinkedFallbackOnly) {
 		return func(*auth.Account) bool { selectionTraceForRequest(c).Reject("root_unresolved"); return false }
 	}
-	if (!allowModelBypass || identity.ownsRootBinding) && !identity.requiresRootAccount {
+	if (!allowModelBypass || identity.ownsRootBinding) && !identity.requiresRootAccount && (!identity.relatedToRoot || identity.ownsRootBinding) {
 		return selectionTraceForRequest(c).Filter("model_or_provider_mismatch", filter)
 	}
 	if !identity.relatedToRoot || identity.unlinkedFallbackOnly {
@@ -589,7 +589,14 @@ func (h *Handler) applyPassiveInternalModelRouting(c *gin.Context, effectiveMode
 	if !related || rootKey == "" {
 		return func(*auth.Account) bool { selectionTraceForRequest(c).Reject("root_unresolved"); return false }
 	}
-	rootAccountID, found := h.store.AccountSessionAccountID(rootKey, time.Now())
+	rootAccountID := selectionTraceForRequest(c).PinnedAccount()
+	if match := backgroundAccountMatchFromContext(c.Request.Context()); match != nil {
+		rootAccountID = match.accountID
+	}
+	found := rootAccountID > 0
+	if !found {
+		rootAccountID, found = h.store.AccountSessionAccountID(rootKey, time.Now())
+	}
 	if !found {
 		rootAccountID, found = h.store.SessionAffinityAccountID(rootKey)
 	}
@@ -6004,7 +6011,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					}
 					cacheCompletedResponseWithOutputItems(respCacheOwner, []byte(expandedInputRaw), completedResponseData, completedResponseOutputItems)
 					if responseID := responseIDFromPayload(completedResponseData); responseID != "" {
-						h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account))
+						h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account), c.Request.Context())
 					}
 				}
 			}
@@ -6087,7 +6094,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					if len(completedResponseData) > 0 {
 						cacheCompletedResponseWithOutputItems(respCacheOwner, []byte(expandedInputRaw), completedResponseData, completedResponseOutputItems)
 						if responseID := responseIDFromPayload(completedResponseData); responseID != "" {
-							h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account))
+							h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account), c.Request.Context())
 						}
 					}
 				}
@@ -6354,7 +6361,15 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		var account *auth.Account
 		var stickyProxyURL string
 		var affinityGuard auth.SessionAffinityGuard
-		if attempt == 0 && previousResponseAffinityFound && !compactContinuationPinned && !compactHasBinding && priorSessionAccountID == 0 {
+		if attempt == 0 {
+			var handled bool
+			account, stickyProxyURL, handled = h.takeSessionAccountFailover(c.Request.Context(), affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy)
+			if handled && account == nil {
+				h.sendDispatchUnavailable(c, false, false)
+				return
+			}
+		}
+		if account == nil && attempt == 0 && previousResponseAffinityFound && !compactContinuationPinned && !compactHasBinding && priorSessionAccountID == 0 {
 			account = h.store.TakePreferredAccountWithDispatch(previousResponseAffinity.AccountID, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
 			if account != nil {
 				stickyProxyURL = account.GetProxyURL()
@@ -7109,7 +7124,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		h.store.ReportRequestSuccess(account, time.Duration(totalDuration)*time.Millisecond)
 		h.store.ReleaseForSessionWithGuard(account, affinityKey, affinityGuard)
 		if responseID := responseIDFromPayload(respBody); responseID != "" {
-			h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account))
+			h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account), c.Request.Context())
 		}
 		c.Data(http.StatusOK, "application/json", respBody)
 		h.recordCompactionProvenanceFromPayload(context.Background(), account, respBody)

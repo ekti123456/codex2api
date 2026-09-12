@@ -634,6 +634,8 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
 		return nil, err
 	}
+	cacheKey = fingerprint.ScopeCacheKey(ctx, cacheKey)
+	ctx = fingerprint.withAccountIdentityDiagnostic(ctx)
 	requestBody = fingerprint.ApplyBody(requestBody)
 
 	account.Mu().RLock()
@@ -725,6 +727,10 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		}
 		logCodexFingerprintDebug("http", account, proxyURL, req.Header)
 
+		if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
+			UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
+			return nil, err
+		}
 		if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 			return nil, err
 		}
@@ -1025,6 +1031,8 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 		return nil, err
 	}
 	headers = fingerprint.DownstreamHeaders()
+	cacheKey = fingerprint.ScopeCacheKey(ctx, cacheKey)
+	ctx = fingerprint.withAccountIdentityDiagnostic(ctx)
 	requestBody = fingerprint.ApplyBody(requestBody)
 	requestBody = ApplyCodexEnvironment(ctx, requestBody, proxyURL)
 
@@ -1059,6 +1067,10 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	}
 	logCodexFingerprintDebug("compact", account, proxyURL, req.Header)
 
+	if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
+		UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
+		return nil, err
+	}
 	if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 		return nil, err
 	}

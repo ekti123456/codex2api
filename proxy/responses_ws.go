@@ -721,7 +721,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		if deviceCfg == nil {
 			deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
 		}
-		downstreamHeaders := c.Request.Header.Clone()
+		downstreamHeaders := codexWebsocketCurrentFrameHeaders(c.Request.Header, codexBody)
 
 		if lastUpstreamCancel != nil {
 			lastUpstreamCancel()
@@ -1539,7 +1539,7 @@ func (h *Handler) streamResponsesWSUpstream(
 				cacheResponsesWSCompletedResponse(respCacheOwner, replayInput.Input(), completedResponsePayload, outputCollector.Items())
 			}
 			if responseID := responseIDFromPayload(completedResponsePayload); responseID != "" {
-				h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account))
+				h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account), c.Request.Context())
 			}
 		}
 	}

@@ -106,6 +106,7 @@ type RuntimeSettings struct {
 	// 足够时，自动暂停该账号调度一段时间（默认关闭）。
 	CodexOverloadPauseEnabled     bool
 	CodexCapacityRetryEnabled     bool
+	CodexSessionFailoverEnabled   bool
 	CodexOverloadThresholdPercent int // 触发比例（%），默认 20
 	CodexOverloadPauseMinutes     int // 暂停时长（分钟），默认 30
 	CodexOverloadWindowMinutes    int // 统计窗口（分钟），默认 5
@@ -175,6 +176,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		CodexMinCLIVersion:               defaultCodexMinCLIVersion,
 		CodexUserAgentConfig:             DefaultCodexUserAgentConfigJSON(),
 		CodexTelemetryEnabled:            false,
+		CodexSessionFailoverEnabled:      false,
 		StreamFlushPolicy:                defaultStreamFlushPolicy,
 		StreamFlushIntervalMS:            defaultStreamFlushIntervalMS,
 		FirstTokenMode:                   defaultFirstTokenMode,
@@ -371,6 +373,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.GithubProxyURL = strings.TrimSpace(settings.GithubProxyURL)
 		next.CodexOverloadPauseEnabled = settings.CodexOverloadPauseEnabled
 		next.CodexCapacityRetryEnabled = settings.CodexCapacityRetryEnabled
+		next.CodexSessionFailoverEnabled = settings.CodexSessionFailoverEnabled
 		next.CodexOverloadThresholdPercent = settings.CodexOverloadThresholdPercent
 		next.CodexOverloadPauseMinutes = settings.CodexOverloadPauseMinutes
 		next.CodexOverloadWindowMinutes = settings.CodexOverloadWindowMinutes

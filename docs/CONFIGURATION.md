@@ -63,7 +63,7 @@ Codex2API 采用三层配置架构：
 | `CODEX_WS_SEND_USER_AGENT` | 否 | `true` | WS 握手是否发送 Codex `User-Agent`/`Version`；设为 `false` 可关闭 |
 | `CODEX_SESSION_HEADER_MODE` | 否 | `native` | 出站会话头形态。`native` 发送真实客户端的 `Session-Id` / `Thread-Id` / `X-Client-Request-Id`；`legacy` 回退到旧的 `Session_id`（WS 另带 `Conversation_id`） |
 | `CODEX_SESSION_HEADER_ALIGN_CONVERGED` | 否 | `false` | 旧版开关，开启后握手使用账号收敛会话；默认出站 `preserve` 模式优先于此开关和 `CODEX_SESSION_HEADER_MODE`，保留原始会话 / 线程 ID |
-| `CODEX_OUTBOUND_SESSION_MODE` | 否 | `preserve` | Codex HTTP/compact/WS 保留原始 session/thread/lineage，缓存及连接独立隔离；握手保留身份和建连快照，turn state 仅进帧。`observe`、`legacy`（或 `off`）回退旧出站策略；`aligned` 和未知值按 preserve。部署注意旧续链兼容边界，详见 [出站会话一致性](codex-outbound-session.md) |
+| `CODEX_OUTBOUND_SESSION_MODE` | 否 | `preserve` | Codex HTTP/compact/WS 默认保留原始 session/thread/lineage。`account` 为新会话启用持久化账号级 UUIDv7 后 9 位映射，已登记旧会话保留原值；映射策略一经登记不随切回 preserve 改变。缓存、连接独立隔离。`observe`、`legacy`（或 `off`）回退旧策略；`aligned` 和未知值按 preserve。详见 [出站会话一致性](codex-outbound-session.md) |
 | `CODEX_SESSION_AFFINITY_TTL` | 否 | `1h` | Codex 会话到账号/代理的黏性 TTL，支持 `1h`、`90m` 或秒数 |
 | `CODEX_COMPACTION_AFFINITY_TTL` | 否 | `168h` | 加密压缩状态的来源亲和 TTL。缓存仅保存密文的 SHA-256 摘要、来源账号和兼容域；已知状态不会跨 Codex 官方、不同 Responses 中转或 Grok 上游流转 |
 | `CODEX_FINGERPRINT_DEBUG` | 否 | `false` | 输出脱敏指纹策略诊断日志，不记录 token |

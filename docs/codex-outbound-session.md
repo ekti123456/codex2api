@@ -81,3 +81,71 @@ busy 同会话溢出功能保留，只使用同账号、同隔离分区及兼容
 旧日志的 `body.turn_metadata` 和 `body.links` 是历史解析分组，界面明确标为历史摘要，不伪装成真实上游层级。新日志改为 `body.client_metadata["x-codex-turn-metadata"]` 和 `body.prompt_cache_key`。
 
 `session_consistency` 只比较实际捕获的会话字段：matched / mismatched / missing_header / missing_body；不等于请求成功。WS 复用展示实际建连时握手，而不是把本次期望头冒充已经重发的握手。
+
+## 可选账号级稳定映射
+
+设置 `CODEX_OUTBOUND_SESSION_MODE=account` 并重启服务，为尚未登记的 Codex 会话启用 `account-suffix-v1`。默认仍为 preserve，不自动改变线上策略。不适用于 Responses 中转或其他提供商。
+
+- 只替换 UUIDv7 最后 9 个十六进制字符（36 bit）。保留前 27 个字符、时间戳、版本及 variant；不是每次请求重新抽签。该策略只接受合法 RFC variant 的 UUIDv7 会话和上下文 ID，其他格式拒绝发送。
+- 对完整原始 UUID 规范化后，使用 HMAC-SHA256 派生后缀。密钥为数据库首次启用时生成的 32 字节随机值；消息为 JSON 数组 `["account-suffix-v1", "identity", owner_hash, actual_chatgpt_account_id, original_uuid]`。归属使用已有已验证用户维度，不能只用原后缀或账号 ID 充当秘密。
+- 同用户、同实际 `Chatgpt-Account-Id`、同完整原始 ID 的结果稳定；HTTP、compact、WS、重试和重启一致。同上游账号重复导入不会因为本地账号编号不同而改变映射。实际账号不同则独立映射，默认仍禁止自动换号；只有显式开启下述开关才允许受保护的迁移。
+- Session-Id、Thread-Id、正文 session/thread、父线程、fork 来源、context_window_id 及窗口 ID 前缀共用映射。原本相等仍相等，子线程不会折叠成父线程，窗口序号不变。X-Client-Request-Id 及正文投影只在其值引用这些身份时同步替换，不改写独立的请求跟踪 ID。
+- prompt_cache_key 使用独立 `prompt-cache` 派生域并按账号、用户分区，不把缓存键拿来作为握手 Session-Id。日志仍只保存缓存键摘要。
+- 不改入站 NewAPI 签名、本地主会话解析、黑名单、永久绑定或日志搜索前缀。turn_id、root_turn_id、parent_turn_id、时间戳、设备级处理、connection_id、上游 response_id、previous_response_id、工具 call_id 和 encrypted_content 均不在此映射范围。
+
+### 旧会话与故障保护
+
+首次登记策略时检查已有 `codex_identity_claims`：已发送并登记的会话继续 preserve，避免活跃会话突然变号。新会话引用已保留的父线程时，该父线程仍用原值，记录于 `preserved_ids`。既有 account 映射在环境变量切回 preserve 后仍继续原映射，不破坏恢复链；不要通过删除记录强制重新生成。
+
+部署前完整备份数据库，包括 `codex_identity_claims`、`codex_identity_mapping_secret`、`codex_identity_mapping_policies`、`codex_identity_alias_claims`。映射密钥不得手动轮换、复制到日志或只恢复部分表。新版本多实例应共享数据库；不能与不识别该策略的旧版本混跑同一会话。无法追溯未曾登记的历史请求，因此不保证首次接入服务的外部旧会话保持历史出站身份。
+
+映射/冲突登记有事务约束且无 TTL。密钥丢失、数据库不可用、归属冲突、别名碰撞都停止请求，不退化为原始 ID、随机改写或自动换号。后 9 位只有 36 bit，不能声称数学上绝无碰撞；同保留前缀的派生别名碰撞由持久化唯一约束拒绝。没有数据库的嵌入式调用不能启用 account 模式；宿主可用 `WithCodexIdentityStore` 提供存储上下文。
+
+### 改写日志
+
+使用日志“最终出站身份”增加 `account_mapping`，可随原有 JSON 复制/批量导出：
+
+```json
+{
+  "account_mapping": {
+    "version": "account-suffix-v1",
+    "status": "mapped",
+    "scope_hash": "脱敏归属摘要",
+    "chatgpt_account_id": "实际账号 ID",
+    "cache_partitioned": true,
+    "changes": [{ "original": "原始 UUIDv7", "outbound": "映射后 UUIDv7" }]
+  }
+}
+```
+
+`mapped` 表示已执行映射；`preserved_existing` 表示保留既有会话身份；`preserved_ids` 列出需继续保留的关联身份。失败状态不代表已经发送。映射日志不含 HMAC 密钥或认证凭据。最终 HTTP 头、实际 WS 握手、当前帧正文仍分别展示，不用本次期望头覆盖旧连接的握手快照。
+
+此功能是账号隔离，不承诺匿名、不可关联或消除 500。UUID 前缀/时间、未改动的轮次、设备、内容、账号和出口等仍可能具有相关性；上游不透明响应及加密上下文不能通过改 UUID 迁移到其他账号。
+
+## 绑定账号不可用时允许换号
+
+系统设置 → Codex → 全局用量自动暂停阈值，新增 `codex_session_failover_enabled`，默认关闭，可热更新并持久保存。开启后同时为新出站身份启用 account 模式，无需额外配置环境变量。关闭后不再产生新迁移，已经迁移的会话继续使用其当前账号和已登记映射，不自动切回原账号。不要对已映射会话使用旧版 legacy/off 出站策略。
+
+允许额度耗尽、全局/账号用量自动暂停、手动暂停、禁用、授权失效或绑定账号无法接纳当前会话窗口时，迁移**后续独立请求**。只处理有持久主会话归属、有效窗口序号、身份一致且携带完整明文上下文的 Codex 请求；不在流输出中途或上游完成状态不明时重放。账号仅请求并发满、模型不支持或临时服务器错误不触发开关；已有窗口仍可复用时，不会仅看账号窗口总数就换号。Spark 按其独立可用性判断。后台/子线程不能自行发起迁移，只跟随已完成迁移的主会话归属。
+
+迁移前仍校验模型、渠道、用户分组、预算、账号容量、出口和黑名单。目标必须是不同的实际 ChatGPT 账号，并且能使用持久化账号级 ID 映射。目标与原账号的账号分组 ID 集合必须完全相等：忽略顺序和重复项，不接受仅交集相同、子集或超集；未分组只匹配未分组。选号时过滤，提交迁移前再次核对；准备过程中任一方分组变化则停止迁移，记录 `account_groups_changed`，保留原粘性。数据库以原账号及迁移代数 CAS 更新主会话和现有窗口授权；同时保留窗口创建/到期时间、序号、扩容倍率等信息，不续期、不新增免费扩容权益。未找到安全候选或校验失败即停止，不随意改号。普通请求省略窗口授权票据时，会从已验证用户的持久授权记录恢复并同步归属；过期或需重新确认的扩容授权不会被跳过。
+
+`previous_response_id`、连接 turn state、不透明输入引用、加密 reasoning/compaction 不能仅靠改 UUID 跨账号迁移，不会静默删除这些字段来制造成功。此类请求迁移前拒绝；迁移后旧引用仍拒绝，只有能核实归属当前账号的 previous_response_id 才继续按原有续链处理。无法核实的加密内容需要恢复完整明文上下文或新建会话。这不是无损跨账号上下文迁移功能。
+
+日志 `diagnostics.session_continuity.account_failover` 记录 `result`、`reason`、`previous_account_id`、`account_id`、`generation`。`switched` 表示归属迁移已提交，不代表上游请求成功；`restored` 表示恢复已有迁移归属；`blocked` / `no_safe_candidate` 表示未迁移。最终握手和正文的 ID 前后值仍在 `diagnostics.upstream.outbound_identity.account_mapping` 中查看。部分旧请求可能已在途，其账号及出站身份不会被追溯改写。
+
+### 后台请求的账号匹配
+
+NewAPI 先在已验证用户范围内按**原始 session_id 前缀**解析唯一主会话，再由 Codex2API 核对该主会话的**当前账号和迁移代数**。NewAPI 的渠道 ID 不是 Codex2API 账号 ID，不能以渠道代替账号，也不能先随机选号再反推主会话；前缀相同但有多个候选时仍拒绝关联，不借账号猜根。
+
+后台/无根关联成功后，选号只允许当前主账号；发送 HTTP、compact 或 WS 帧前再次读取持久归属。排队期间账号变化、A→B→A 迁移代数变化、存储不可用、根窗口失效或账号不匹配均停止发送，调用方须重新发起请求。保留后台专用并发额度，不创建或续期主窗口。入站身份及前缀不改写，出站改写仍按实际账号统一执行；没有可验证 session_id 的请求不会凭空生成可关联的根。
+
+日志 `diagnostics.background_account_match` 展示 `scope_hash`、`session_id_prefix`、`account_id`、`generation`、`owner_source` 和 `result`，用于核实用户范围、前缀和最终账号的匹配。`matched` 不是上游成功标记；`owner_changed` / `account_mismatch` / `ownership_unavailable` / `root_owner_unavailable` 表示发送前校验未通过。既有会话的 `preserved_existing` 策略仍保留，不能将所有后台请求一概视为已经改写。
+
+### 每次迁移的窗口序号
+
+新迁移段在账号级映射中额外加入持久主会话及迁移代数，包含会话/线程、关联字段、窗口前缀和提示缓存分区；A→B→A 不会复用 A 的旧出站段或旧 WS 连接。未迁移的既有会话仍遵循原来的 preserve/account 策略。
+
+主窗口基准随账号归属在同一事务中保存。例如首次迁移时入站 `window_id=S:47, window_number=47`，出站为新段的 `S′:0, 0`；同一入站窗口重复请求仍为 0，入站 48 则为 `S′:1, 1`。不是每次请求都归零。子线程按自己的首次窗口序号独立保存基准，不能减去主线程的 47；基准持久化，重启或关闭开关不会丢失。早于本段基准的请求拒绝，不产生负数。握手快照、当前帧及 HTTP 正文使用同一转换；WS 后续帧的窗口推进不改写既有握手快照。
+
+本地入站序号、前缀匹配、窗口票据、使用时长及粘性校验均保留原值。`account_mapping.generation`、`segment_hash`、`windows` 记录迁移段及原始/基准/出站序号，便于审计。响应续链也记录迁移段，切回旧账号不会因此接受旧段的 previous_response_id。

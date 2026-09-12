@@ -129,6 +129,9 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 		AccountID: account.ID(), Transport: transport, EgressKind: egress, ProxyID: label.ID, ProxyName: label.Name,
 		ProxyEndpoint: safeProxyEndpoint(proxyURL), PublicEgressIPStatus: "not_observed", SendPhase: "before_payload",
 	}}
+	if mapping, ok := ctx.Value(codexAccountIdentityDiagnosticKey{}).(*codexAccountIdentityDiagnostic); ok {
+		attempt.transport.OutboundIdentity = &outboundIdentityDiagnostic{FormatVersion: 2, AccountMapping: mapping}
+	}
 	a.mu.Lock()
 	a.current = attempt
 	a.mu.Unlock()

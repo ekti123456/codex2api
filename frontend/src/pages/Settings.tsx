@@ -2153,6 +2153,7 @@ export default function Settings() {
       ...cacheNormalized,
       codex_images_main_model: cacheNormalized.codex_images_main_model ?? '',
       codex_telemetry_enabled: cacheNormalized.codex_telemetry_enabled ?? false,
+      codex_session_failover_enabled: cacheNormalized.codex_session_failover_enabled ?? false,
       billing_tier_policy: normalizeBillingTierPolicyValue(cacheNormalized.billing_tier_policy),
       first_token_mode: normalizeFirstTokenModeValue(cacheNormalized.first_token_mode),
       models_list_read_max_bytes:
@@ -2220,6 +2221,7 @@ export default function Settings() {
     github_proxy_url: '',
     codex_overload_pause_enabled: false,
     codex_capacity_retry_enabled: false,
+    codex_session_failover_enabled: false,
     codex_overload_threshold_percent: 20,
     codex_overload_pause_minutes: 30,
     codex_overload_window_minutes: 5,
@@ -3454,6 +3456,17 @@ export default function Settings() {
 
               <SettingsCard title={t('settings.globalAutoPauseTitle')} description={t('settings.globalAutoPauseDesc')} icon={<Activity className="size-4" />} channels={CHANNELS_CODEX_CLAUDE}>
                 <div className="space-y-4">
+                  <SettingField
+                    label={t('settings.codexSessionFailoverEnabled')}
+                    description={t('settings.codexSessionFailoverEnabledHint')}
+                    layout="switch"
+                    channels={CHANNELS_CODEX_ONLY}
+                  >
+                    <Switch
+                      checked={settingsForm.codex_session_failover_enabled}
+                      onCheckedChange={(checked) => autoSaveBooleanField('codex_session_failover_enabled', checked)}
+                    />
+                  </SettingField>
                   <div className={SETTINGS_FIELD_GRID_3}>
                     <SettingField label={t('settings.globalAutoPause5h')} description={t('settings.globalAutoPauseHint')}>
                       <DraftNumberInput

@@ -11,11 +11,16 @@ import (
 )
 
 func codexOutboundSessionMode() string {
+	if CurrentRuntimeSettings().CodexSessionFailoverEnabled {
+		return "account"
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("CODEX_OUTBOUND_SESSION_MODE"))) {
 	case "legacy", "off":
 		return "legacy"
 	case "observe":
 		return "observe"
+	case "account":
+		return "account"
 	default:
 		return "preserve"
 	}
@@ -23,11 +28,15 @@ func codexOutboundSessionMode() string {
 
 func NewCodexTransportFingerprint(account *auth.Account, headers http.Header, body []byte, upstreamSessionID string) *CodexFingerprint {
 	fingerprint := NewCodexFingerprint(account, headers, body)
-	if account == nil || account.IsRelayStyle() || codexOutboundSessionMode() != "preserve" {
+	mode := codexOutboundSessionMode()
+	if account == nil || account.IsRelayStyle() || (mode != "preserve" && mode != "account") {
 		return fingerprint
 	}
 	fingerprint.preserveSessionIDs = true
 	fingerprint.identityValues = codexTransportIdentityValues(fingerprint.headers, NormalizeCodexRequestMetadata(body))
+	fingerprint.accountIdentityRequested = mode == "account"
+	fingerprint.accountIdentityInputs = codexAccountIdentityInputs(fingerprint.headers, NormalizeCodexRequestMetadata(body))
+	fingerprint.accountWindowInputs, fingerprint.accountWindowInputError = codexAccountWindowInputs(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	if fingerprint.ids != nil {
 		fingerprint.ids.mode = auth.CodexFingerprintModeDevice
 		fingerprint.ids.sessionID = ""
@@ -67,6 +76,9 @@ func (fingerprint *CodexFingerprint) ApplySessionHeaders(outbound http.Header) {
 		outbound.Set(codexClientRequestIDHeader, outbound.Get(codexThreadIDHeader))
 	}
 	applyCodexFingerprintHeaders(outbound, fingerprint.ids, fingerprint.headers)
+	if fingerprint.accountIdentity != nil {
+		outbound.Set("Chatgpt-Account-Id", fingerprint.accountIdentity.account)
+	}
 }
 
 func ScopeCodexPromptCacheKey(ctx context.Context, cacheKey string) string {

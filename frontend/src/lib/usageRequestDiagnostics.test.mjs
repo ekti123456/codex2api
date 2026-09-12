@@ -2,6 +2,15 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
 
+test('account mapping audit survives JSON display and copy without changing the input', () => {
+  const mapping = { version: 'account-suffix-v1', status: 'mapped', changes: [{ original: 'original-id', outbound: 'account-id' }], cache_partitioned: true }
+  const source = { format_version: 2, account_mapping: mapping, body: { client_metadata: { 'x-codex-turn-metadata': '{"session_id":"account-id"}' } } }
+  const displayed = diagnosticJSONDisplay(source, true)
+  assert.deepEqual(displayed.account_mapping, mapping)
+  assert.deepEqual(JSON.parse(JSON.stringify(displayed)).account_mapping, mapping)
+  assert.equal(source.body.client_metadata['x-codex-turn-metadata'], '{"session_id":"account-id"}')
+})
+
 test('JSON display preserves actual nesting and carrier types unless explicitly decoded', () => {
   const value = { format_version: 2, body: { prompt_cache_key: 'hash:cache', client_metadata: { 'x-codex-turn-metadata': '{"session_id":"session","window_number":2}' } } }
   assert.equal(diagnosticJSONDisplay(value), value)

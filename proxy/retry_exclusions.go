@@ -531,6 +531,9 @@ func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey str
 	if h == nil || h.store == nil {
 		return nil, "", auth.SessionAffinityGuard{}
 	}
+	if account, proxyURL, handled := h.takeSessionAccountFailover(ctx, affinityKey, apiKeyID, exclusions.ForSelection(), filter, policy); handled {
+		return account, proxyURL, auth.SessionAffinityGuard{}
+	}
 	for {
 		auth.SelectionTraceFromContext(ctx).Reset()
 		exclude := exclusions.ForSelection()

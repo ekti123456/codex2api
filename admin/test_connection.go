@@ -170,7 +170,7 @@ func (h *Handler) TestConnection(c *gin.Context) {
 	} else if isOpenAIResponsesAccount {
 		resp, reqErr = proxy.ExecuteRelayStyleRequest(c.Request.Context(), account, payload, h.store.ResolveProxyForAccount(account), nil)
 	} else {
-		resp, reqErr = proxy.ExecuteRequest(c.Request.Context(), account, payload, proxy.ResolveExplicitSessionID(nil, payload), h.store.ResolveProxyForAccount(account), "", nil, nil)
+		resp, reqErr = proxy.ExecuteRequest(h.codexAccountTestContext(c.Request.Context()), account, payload, proxy.ResolveExplicitSessionID(nil, payload), h.store.ResolveProxyForAccount(account), "", nil, nil)
 	}
 	if reqErr != nil {
 		event := testEvent{Type: "error", Error: fmt.Sprintf("请求失败: %s", reqErr.Error())}
@@ -418,6 +418,13 @@ func buildClaudeConnectionTestPayload(store *auth.Store, model string, securityC
 
 // buildAccountConnectionTestPayload 按账号渠道构造测连请求体：Claude 走原生 Messages
 // 形状，其余走 Responses 形状；用户输入取渠道自定义测活内容，留空沿用全局。
+func (h *Handler) codexAccountTestContext(ctx context.Context) context.Context {
+	if h.db == nil {
+		return ctx
+	}
+	return proxy.WithCodexIdentityStore(ctx, h.db)
+}
+
 func (h *Handler) buildAccountConnectionTestPayload(ctx context.Context, account *auth.Account, model string, securityCfg auth.ClaudeSecurityConfig) []byte {
 	content := h.connectionTestContentForAccount(ctx, account)
 	if account != nil && account.IsClaudeOAuth() {
@@ -1595,7 +1602,7 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 	} else if acc.IsRelayStyle() {
 		resp, err = proxy.ExecuteRelayStyleRequest(testCtx, acc, payload, h.store.ResolveProxyForAccount(acc), nil)
 	} else {
-		resp, err = proxy.ExecuteRequest(testCtx, acc, payload, proxy.ResolveExplicitSessionID(nil, payload), h.store.ResolveProxyForAccount(acc), "", nil, nil)
+		resp, err = proxy.ExecuteRequest(h.codexAccountTestContext(testCtx), acc, payload, proxy.ResolveExplicitSessionID(nil, payload), h.store.ResolveProxyForAccount(acc), "", nil, nil)
 	}
 	if err != nil {
 		if msg, ok := batchTestContextFailure(testCtx, err); ok {
@@ -1741,7 +1748,7 @@ func (h *Handler) runRecycleBinSingleTest(ctx context.Context, acc *auth.Account
 	} else if acc.IsRelayStyle() {
 		resp, err = proxy.ExecuteRelayStyleRequest(testCtx, acc, payload, h.store.ResolveProxyForAccount(acc), nil)
 	} else {
-		resp, err = proxy.ExecuteRequest(testCtx, acc, payload, proxy.ResolveExplicitSessionID(nil, payload), h.store.ResolveProxyForAccount(acc), "", nil, nil)
+		resp, err = proxy.ExecuteRequest(h.codexAccountTestContext(testCtx), acc, payload, proxy.ResolveExplicitSessionID(nil, payload), h.store.ResolveProxyForAccount(acc), "", nil, nil)
 	}
 	if err != nil {
 		if msg, ok := batchTestContextFailure(testCtx, err); ok {

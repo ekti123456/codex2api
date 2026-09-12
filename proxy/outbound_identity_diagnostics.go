@@ -24,12 +24,13 @@ type outboundBodyDiagnostic struct {
 }
 
 type outboundIdentityDiagnostic struct {
-	FormatVersion      int                       `json:"format_version,omitempty"`
-	SessionConsistency string                    `json:"session_consistency,omitempty"`
-	Truncated          bool                      `json:"truncated,omitempty"`
-	HTTP               *OutboundHeaderDiagnostic `json:"http,omitempty"`
-	WSHandshake        *OutboundHeaderDiagnostic `json:"ws_handshake,omitempty"`
-	Body               *outboundBodyDiagnostic   `json:"body,omitempty"`
+	FormatVersion      int                             `json:"format_version,omitempty"`
+	SessionConsistency string                          `json:"session_consistency,omitempty"`
+	Truncated          bool                            `json:"truncated,omitempty"`
+	HTTP               *OutboundHeaderDiagnostic       `json:"http,omitempty"`
+	WSHandshake        *OutboundHeaderDiagnostic       `json:"ws_handshake,omitempty"`
+	Body               *outboundBodyDiagnostic         `json:"body,omitempty"`
+	AccountMapping     *codexAccountIdentityDiagnostic `json:"account_mapping,omitempty"`
 }
 
 func (diagnostic outboundBodyDiagnostic) MarshalJSON() ([]byte, error) {

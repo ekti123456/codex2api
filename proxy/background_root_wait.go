@@ -40,6 +40,21 @@ func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context
 	}
 	waitContext, cancelWait := context.WithDeadline(requestContext.Request.Context(), deadline)
 	defer cancelWait()
+	if handler.db != nil {
+		key := sessionAffinityKey(identity.affinityID, requestAPIKeyID(requestContext))
+		entry, found, err := handler.readSessionContinuity(requestContext.Request.Context(), hashRiskIdentity(key))
+		if err != nil {
+			return sessionContinuityError("ownership_unavailable")
+		}
+		if found && entry.Record.FailoverCount > 0 {
+			if err := handler.validateMigratedSessionContext(requestContext, ingressRequestBody(requestContext, nil), entry.Record, key); err != nil {
+				return err
+			}
+			state.RootAccountWait = "persistent_failover_owner"
+			recordUsageRootAccount(requestContext, entry.Record.AccountID, true)
+			return handler.waitForBackgroundWindowGrant(waitContext, requestContext)
+		}
+	}
 	started := time.Now()
 	accountID, waitErr := handler.store.WaitForRootAccount(waitContext, sessionAffinityKey(identity.affinityID, requestAPIKeyID(requestContext)))
 	state.RootAccountWaitMillis = time.Since(started).Milliseconds()

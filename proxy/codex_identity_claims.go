@@ -30,7 +30,7 @@ func codexIdentityRequestError(err error) *api.APIError {
 		return nil
 	}
 	switch requestError.Code {
-	case "codex_session_identity_invalid", "codex_session_identity_conflict", "codex_session_identity_unavailable":
+	case "codex_session_identity_invalid", "codex_session_identity_conflict", "codex_session_identity_unavailable", "codex_background_account_mismatch":
 		return api.NewAPIError(api.ErrorCode(requestError.Code), requestError.Message, api.ErrorTypeInvalidRequest)
 	default:
 		return nil
@@ -88,18 +88,33 @@ func (fingerprint *CodexFingerprint) ClaimSessionIdentity(ctx context.Context, a
 			UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
 		}
 	}()
+	if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
+		return err
+	}
+	if outboundEpochFromContext(ctx).identityKey() != "" && !fingerprint.PreservesSessionIdentity() {
+		return codexAccountIdentityError("当前迁移会话需要账号级身份模式，不支持 legacy 出站配置。")
+	}
 	if !fingerprint.PreservesSessionIdentity() || ctx == nil || account == nil {
 		return nil
 	}
 	claimer, _ := ctx.Value(codexIdentityClaimerContextKey{}).(codexIdentityClaimer)
 	if claimer == nil {
+		if fingerprint.accountIdentityRequested {
+			for _, value := range fingerprint.identityValues {
+				if strings.TrimSpace(value) != "" {
+					return codexAccountIdentityError("账号级出站身份需要持久化存储，当前无法使用。")
+				}
+			}
+		}
 		return nil
 	}
 	owner := verifiedTransportUser(ctx)
 	if owner == "" {
 		owner = "credential:" + strings.TrimSpace(apiKey)
 		if strings.TrimSpace(apiKey) == "" {
-			if connectionID := DownstreamWebsocketConnectionID(ctx); connectionID != "" {
+			if contextOwner, ok := ctx.Value(codexAnonymousIdentityContextKey{}).(string); ok && contextOwner != "" {
+				owner = contextOwner
+			} else if connectionID := DownstreamWebsocketConnectionID(ctx); connectionID != "" {
 				owner = "anonymous-connection:" + connectionID
 			} else {
 				owner = "anonymous:" + NewUpstreamSessionUUID()
@@ -107,12 +122,18 @@ func (fingerprint *CodexFingerprint) ClaimSessionIdentity(ctx context.Context, a
 		}
 	}
 	owner = codexIdentityDigest("codex-owner-v1", owner)
+	if mapping := fingerprint.accountIdentity; mapping != nil && (mapping.owner != owner || mapping.account != strings.TrimSpace(account.EffectiveAccountID()) || mapping.epoch != outboundEpochFromContext(ctx).identityKey()) {
+		return codexAccountIdentityError("出站身份快照与当前账号或用户不一致，已停止请求。")
+	}
 	account.Mu().RLock()
 	upstreamAccount := strings.TrimSpace(account.AccountID)
 	account.Mu().RUnlock()
 	accountScopes := []string{fmt.Sprintf("account:%d", account.ID())}
 	if upstreamAccount != "" {
 		accountScopes = append(accountScopes, "chatgpt:"+upstreamAccount)
+	}
+	if effectiveAccount := strings.TrimSpace(account.EffectiveAccountID()); effectiveAccount != "" && effectiveAccount != upstreamAccount {
+		accountScopes = append(accountScopes, "chatgpt:"+effectiveAccount)
 	}
 	keys := make([]string, 0, 16)
 	seen := make(map[string]bool)
@@ -134,6 +155,11 @@ func (fingerprint *CodexFingerprint) ClaimSessionIdentity(ctx context.Context, a
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	if fingerprint.accountIdentity == nil {
+		if err := fingerprint.prepareAccountIdentity(claimCtx, account, owner, accountScopes); err != nil {
+			return err
+		}
+	}
 	if err := claimer.ClaimCodexIdentities(claimCtx, keys, owner); err != nil {
 		if errors.Is(err, database.ErrCodexIdentityConflict) {
 			return &Error{Code: "codex_session_identity_conflict", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: "当前会话标识已归属其他用户，请新建会话。"}

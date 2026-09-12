@@ -29,11 +29,14 @@ func (handler *Handler) configureSessionModelAffinity(requestContext *gin.Contex
 		return blocked
 	}
 	defer func() {
-		if apiError != nil && handler.db != nil && len(bodies) > 0 && usageRequestDiagnosticState(requestContext).Continuity != nil {
+		if apiError != nil && handler.db != nil && len(bodies) > 0 && (usageRequestDiagnosticState(requestContext).Continuity != nil || usageRequestDiagnosticState(requestContext).BackgroundAccountMatch != nil) {
 			handler.logUsageForRequest(requestContext, &database.UsageLogInput{Endpoint: requestContext.Request.URL.Path, Model: originalModel, EffectiveModel: effectiveModel, StatusCode: 400, ErrorMessage: apiError.Message, Stream: gjson.GetBytes(bodies[0], "stream").Bool(), Compact: compact})
 		}
 	}()
 	if len(bodies) > 0 {
+		if failoverError := handler.restoreMigratedSessionOwner(requestContext, key, bodies[0]); failoverError != nil {
+			return failoverError
+		}
 		if continuityError := handler.prepareSessionContinuity(requestContext, identity, key, bodies[0]); continuityError != nil {
 			return continuityError
 		}
@@ -47,6 +50,12 @@ func (handler *Handler) configureSessionModelAffinity(requestContext *gin.Contex
 	trace := selectionTraceForRequest(requestContext)
 	trace.SetSessionModelFilter(sessionModelSupportFilter(originalModel, effectiveModel, compact))
 	if owner := trace.PinnedAccount(); owner > 0 {
+		if len(bodies) > 0 {
+			pending, failoverError := handler.prepareSessionAccountFailover(requestContext, key, bodies[0], dispatchPolicyForModel(effectiveModel))
+			if failoverError != nil || pending {
+				return failoverError
+			}
+		}
 		if !trace.CheckSessionModel(handler.store.FindByID(owner)) {
 			return sessionModelUnavailableError()
 		}

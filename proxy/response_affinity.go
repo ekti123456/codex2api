@@ -21,13 +21,14 @@ const responseAccountAffinityTTL = time.Hour
 const responseAccountAffinityNamespace = "codex-response-account-v1"
 
 type responseAccountAffinity struct {
-	AccountID    int64     `json:"account_id"`
-	Owner        string    `json:"owner"`
-	AffinityKey  string    `json:"affinity_key,omitempty"`
-	Model        string    `json:"model,omitempty"`
-	UpstreamType string    `json:"upstream_type,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	ExpiresAt    time.Time `json:"expires_at"`
+	AccountID       int64     `json:"account_id"`
+	Owner           string    `json:"owner"`
+	AffinityKey     string    `json:"affinity_key,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	UpstreamType    string    `json:"upstream_type,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	OutboundSegment string    `json:"outbound_segment,omitempty"`
 }
 
 // responseIDFromPayload accepts both SSE event envelopes (response.id) and
@@ -75,7 +76,7 @@ func responseAffinityKey(owner, responseID string) string {
 // recordResponseAccountAffinity records a successful response's account
 // ownership. The owner (API key namespace) is part of the key and payload to
 // prevent cross-user previous_response_id injection.
-func (h *Handler) recordResponseAccountAffinity(owner, responseID string, accountID int64, affinityKey, model, upstreamType string) {
+func (h *Handler) recordResponseAccountAffinity(owner, responseID string, accountID int64, affinityKey, model, upstreamType string, contexts ...context.Context) {
 	responseID = strings.TrimSpace(responseID)
 	if responseID == "" || len(responseID) > 256 || accountID == 0 {
 		return
@@ -86,6 +87,9 @@ func (h *Handler) recordResponseAccountAffinity(owner, responseID string, accoun
 	}
 	now := time.Now()
 	record := responseAccountAffinity{AccountID: accountID, Owner: owner, AffinityKey: strings.TrimSpace(affinityKey), Model: strings.TrimSpace(model), UpstreamType: strings.TrimSpace(upstreamType), CreatedAt: now, ExpiresAt: now.Add(responseAccountAffinityTTL)}
+	if len(contexts) > 0 {
+		record.OutboundSegment = outboundEpochFromContext(contexts[0]).identityKey()
+	}
 	key := responseAffinityKey(owner, responseID)
 	responseAffinityLocal.Lock()
 	if len(responseAffinityLocal.entries) >= 4096 {

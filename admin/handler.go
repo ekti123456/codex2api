@@ -9234,6 +9234,7 @@ type settingsResponse struct {
 	GithubProxyURL                      string `json:"github_proxy_url"`
 	CodexOverloadPauseEnabled           bool   `json:"codex_overload_pause_enabled"`
 	CodexCapacityRetryEnabled           bool   `json:"codex_capacity_retry_enabled"`
+	CodexSessionFailoverEnabled         bool   `json:"codex_session_failover_enabled"`
 	CodexOverloadThresholdPercent       int    `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           int    `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          int    `json:"codex_overload_window_minutes"`
@@ -9420,6 +9421,7 @@ type updateSettingsReq struct {
 	GithubProxyURL                      *string                          `json:"github_proxy_url"`
 	CodexOverloadPauseEnabled           *bool                            `json:"codex_overload_pause_enabled"`
 	CodexCapacityRetryEnabled           *bool                            `json:"codex_capacity_retry_enabled"`
+	CodexSessionFailoverEnabled         *bool                            `json:"codex_session_failover_enabled"`
 	CodexOverloadThresholdPercent       *int                             `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           *int                             `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          *int                             `json:"codex_overload_window_minutes"`
@@ -10253,6 +10255,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		GithubProxyURL:                      h.store.GithubProxyURL(),
 		CodexOverloadPauseEnabled:           runtimeCfg.CodexOverloadPauseEnabled,
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
+		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -10743,6 +10746,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	hasAdminSecret := strings.TrimSpace(currentAdminSecret) != "" || strings.TrimSpace(h.adminSecretEnv) != ""
 	runtimeCfg := proxy.CurrentRuntimeSettings()
 	previousAutoResetCreditsEnabled := runtimeCfg.AutoResetCreditsEnabled
+	if existingSettings != nil {
+		runtimeCfg.CodexSessionFailoverEnabled = existingSettings.CodexSessionFailoverEnabled
+	}
 	previousAutoResetCreditsBeforeExpiryMin := runtimeCfg.AutoResetCreditsBeforeExpiryMin
 	previousAutoActivate5hWindowEnabled := runtimeCfg.AutoActivate5hWindowEnabled
 	// 数据库是多实例下的权威来源；用持久值作为本次 partial update 的基线，
@@ -11064,6 +11070,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if req.CodexCapacityRetryEnabled != nil {
 		runtimeCfg.CodexCapacityRetryEnabled = *req.CodexCapacityRetryEnabled
+	}
+	if req.CodexSessionFailoverEnabled != nil {
+		runtimeCfg.CodexSessionFailoverEnabled = *req.CodexSessionFailoverEnabled
+		log.Printf("设置已更新: codex_session_failover_enabled = %t", runtimeCfg.CodexSessionFailoverEnabled)
 	}
 	if req.CodexOverloadThresholdPercent != nil {
 		v := database.NormalizeCodexOverloadThresholdPercent(*req.CodexOverloadThresholdPercent)
@@ -11785,6 +11795,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		GithubProxyURL:                      h.store.GithubProxyURL(),
 		CodexOverloadPauseEnabled:           runtimeCfg.CodexOverloadPauseEnabled,
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
+		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -12113,6 +12124,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		GithubProxyURL:                      h.store.GithubProxyURL(),
 		CodexOverloadPauseEnabled:           runtimeCfg.CodexOverloadPauseEnabled,
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
+		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,

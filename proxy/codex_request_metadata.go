@@ -10,10 +10,16 @@ import (
 )
 
 type CodexFingerprint struct {
-	ids                *codexFingerprintIDs
-	headers            http.Header
-	preserveSessionIDs bool
-	identityValues     []string
+	ids                       *codexFingerprintIDs
+	headers                   http.Header
+	preserveSessionIDs        bool
+	identityValues            []string
+	accountIdentityRequested  bool
+	accountIdentityInputs     []string
+	accountWindowInputs       map[string]uint64
+	accountWindowInputError   error
+	accountIdentity           *codexAccountIdentity
+	accountIdentityDiagnostic *codexAccountIdentityDiagnostic
 }
 
 func NewCodexFingerprint(account *auth.Account, headers http.Header, body []byte) *CodexFingerprint {
@@ -45,6 +51,9 @@ func (fingerprint *CodexFingerprint) ApplyHeaders(outbound http.Header) {
 
 func (fingerprint *CodexFingerprint) ApplyBody(body []byte) []byte {
 	body = applyCodexFingerprintToBody(NormalizeCodexRequestMetadata(body), fingerprint.ids)
+	if fingerprint.accountIdentity != nil {
+		body = fingerprint.accountIdentity.rewriteBody(body)
+	}
 	return StripCodexProjectMetadata(NormalizeCodexRequestMetadata(body))
 }
 

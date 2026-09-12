@@ -38,7 +38,7 @@ func (handler *Handler) currentWindowTariff(ctx context.Context, subject, root s
 	handler.windowTariffMu.Lock()
 	grant, found := handler.windowTariffs[subject+":"+root]
 	handler.windowTariffMu.Unlock()
-	if found && grant.ExpiresAt.After(time.Now()) {
+	if handler.db == nil && found && grant.ExpiresAt.After(time.Now()) {
 		return grant, true, nil
 	}
 	if handler.db == nil {

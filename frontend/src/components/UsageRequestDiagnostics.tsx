@@ -58,6 +58,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
 
   const data = detail?.diagnostics
   const { outbound_identity: outboundIdentity, ...upstream } = diagnosticRecord(data?.upstream)
+  const accountMapping = diagnosticRecord(diagnosticRecord(outboundIdentity).account_mapping)
   const sections: [string, unknown][] = data ? [
     ['request', { request_type: detail.request_type, ...diagnosticRecord(data.request), started_at: data.started_at, completed_at: data.completed_at, correlation_id: data.correlation_id, newapi_request_id: data.newapi_request_id, attempt: data.attempt, capture_status: data.capture_status, responses_input: data.responses_input }],
     ['client', diagnosticClientInfo(data.incoming)],
@@ -68,7 +69,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
     ['audit', data.audit],
     ['dispatch', data.dispatch],
     ['windows', { user_window: data.user_window, account_window: data.account_window, user_window_key_hash: data.user_window_key_hash }],
-    ['routing', { root_account_lookup: data.root_account_lookup, root_account_id: data.root_account_id, selected_account_id: data.selected_account_id, selection: data.selection, candidate_rejections: data.candidate_rejections }],
+    ['routing', { root_account_lookup: data.root_account_lookup, root_account_id: data.root_account_id, selected_account_id: data.selected_account_id, selection: data.selection, candidate_rejections: data.candidate_rejections, background_account_match: data.background_account_match }],
     ['recent', data.recent_account],
   ] : []
 
@@ -98,6 +99,8 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
         {title === 'client' && <p className="mb-3 text-xs leading-5 text-muted-foreground">{t('usage.diagnostics.clientHint')}</p>}
         {title === 'outbound' ? <>
           <p className="mb-3 text-xs leading-5 text-muted-foreground">{t(diagnosticRecord(value).format_version === 2 ? 'usage.diagnostics.outboundJSONHint' : 'usage.diagnostics.outboundLegacyHint')}</p>
+          {accountMapping.status === 'mapped' && <p className="mb-3 rounded-md bg-primary/10 p-2 text-xs">{t('usage.diagnostics.accountMapped')}</p>}
+          {accountMapping.status === 'preserved_existing' && <p className="mb-3 rounded-md bg-muted p-2 text-xs">{t('usage.diagnostics.accountMappingPreserved')}</p>}
           <pre className="max-h-[560px] overflow-auto rounded-md bg-muted/40 p-3 text-xs font-mono select-text" tabIndex={0}>{JSON.stringify(diagnosticJSONDisplay(value ?? null, decodeMetadata), null, 2)}</pre>
         </> : <DiagnosticFields value={value} />}
       </section>)}

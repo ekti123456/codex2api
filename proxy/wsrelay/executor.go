@@ -142,6 +142,9 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	}
 	ginHeaders = fingerprint.DownstreamHeaders()
 	wsBody = fingerprint.ApplyBody(wsBody)
+	if cacheKey := gjson.GetBytes(wsBody, "prompt_cache_key"); cacheKey.Type == gjson.String {
+		wsBody, _ = sjson.SetBytes(wsBody, "prompt_cache_key", fingerprint.ScopeCacheKey(ctx, cacheKey.String()))
+	}
 
 	baseKey := strings.TrimSpace(poolRouteKey)
 	if baseKey == "" && headerSessionID != sessionID {
@@ -254,6 +257,14 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// 发送请求，失败时最多重试 2 次（重建连接）。
 	// 用 DiscardConnection 按连接指针精确清理：续链亲和取回的连接其 PoolKey
 	// 可能与当前请求的 proxy 组合不同，按参数重算 key 会漏删。
+	if err := proxy.ValidateBackgroundAccountMatch(ctx, account); err != nil {
+		observer.Failure("gateway", "identity_validation", 0)
+		if !wc.cancelUnsentReadLease(pr.RequestID) {
+			e.manager.DiscardConnection(wc)
+		}
+		wc.session.RemovePendingRequest(pr.RequestID)
+		return nil, err
+	}
 	if err := proxy.ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(wsBody, "model").String()); err != nil {
 		observer.Failure("gateway", "quota_admission", 0)
 		if !wc.cancelUnsentReadLease(pr.RequestID) {
@@ -290,6 +301,14 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		recordConnection(observer, wc, headers)
 		if wc.upstreamUserAgentKnown {
 			proxy.RecordUpstreamUserAgent(ctx, wc.upstreamUserAgent)
+		}
+		if err := proxy.ValidateBackgroundAccountMatch(ctx, account); err != nil {
+			observer.Failure("gateway", "identity_validation", 0)
+			if !wc.cancelUnsentReadLease(pr.RequestID) {
+				e.manager.DiscardConnection(wc)
+			}
+			wc.session.RemovePendingRequest(pr.RequestID)
+			return nil, err
 		}
 		sendErr = e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
 	}

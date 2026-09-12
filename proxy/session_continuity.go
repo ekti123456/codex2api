@@ -18,15 +18,16 @@ import (
 const sessionContinuityContextKey = "codex_session_continuity"
 
 type sessionContinuityDiagnostic struct {
-	Mode         string  `json:"mode"`
-	Result       string  `json:"result"`
-	WouldBlock   bool    `json:"would_block"`
-	Action       string  `json:"action"`
-	ThreadID     string  `json:"thread_id,omitempty"`
-	Previous     *uint64 `json:"previous_number,omitempty"`
-	Current      *uint64 `json:"current_number,omitempty"`
-	OwnerSource  string  `json:"owner_source"`
-	OwnerAccount int64   `json:"owner_account_id,omitempty"`
+	Mode            string                            `json:"mode"`
+	Result          string                            `json:"result"`
+	WouldBlock      bool                              `json:"would_block"`
+	Action          string                            `json:"action"`
+	ThreadID        string                            `json:"thread_id,omitempty"`
+	Previous        *uint64                           `json:"previous_number,omitempty"`
+	Current         *uint64                           `json:"current_number,omitempty"`
+	OwnerSource     string                            `json:"owner_source"`
+	OwnerAccount    int64                             `json:"owner_account_id,omitempty"`
+	AccountFailover *sessionAccountFailoverDiagnostic `json:"account_failover,omitempty"`
 }
 
 type sessionContinuityCacheEntry struct {
@@ -136,9 +137,6 @@ func (handler *Handler) readSessionContinuity(ctx context.Context, key string) (
 	handler.continuityMu.Lock()
 	entry, found := handler.continuityRecords[key]
 	handler.continuityMu.Unlock()
-	if found && time.Since(entry.CheckedAt) < time.Minute {
-		return entry, entry.Record.AccountID > 0, nil
-	}
 	if handler.db == nil {
 		return entry, entry.Record.AccountID > 0, nil
 	}
@@ -205,6 +203,10 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 	defer lock.Unlock()
 	entry, found, err := handler.readSessionContinuity(request.Request.Context(), key)
 	owner, _ := handler.store.LiveSessionAccountID(affinityKey, time.Now())
+	if found && entry.Record.FailoverCount > 0 && owner > 0 && owner != entry.Record.AccountID {
+		handler.store.UnbindSessionAffinity(affinityKey, owner)
+		owner = entry.Record.AccountID
+	}
 	if owner > 0 {
 		diagnostic.OwnerSource = "live_binding"
 	}
@@ -220,6 +222,12 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 			invalid = "owner_conflict"
 		}
 		owner = entry.Record.AccountID
+		if entry.Record.FailoverCount > 0 {
+			diagnostic.AccountFailover = &sessionAccountFailoverDiagnostic{Result: "restored", PreviousAccountID: entry.Record.PreviousAccountID, AccountID: owner, Generation: entry.Record.FailoverCount, Reason: entry.Record.LastFailoverReason}
+			if err := handler.validateMigratedSessionContext(request, body, entry.Record, affinityKey); err != nil {
+				return err
+			}
+		}
 		if entry.Record.NumberKnown {
 			previous := entry.Record.Number
 			diagnostic.Previous = &previous
