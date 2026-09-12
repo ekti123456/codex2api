@@ -118,7 +118,7 @@ busy 同会话溢出功能保留，只使用同账号、同隔离分区及兼容
 }
 ```
 
-`mapped` 表示已执行映射；`preserved_existing` 表示保留既有会话身份；`preserved_ids` 列出需继续保留的关联身份。失败状态不代表已经发送。映射日志不含 HMAC 密钥或认证凭据。最终 HTTP 头、实际 WS 握手、当前帧正文仍分别展示，不用本次期望头覆盖旧连接的握手快照。
+`mapped` 表示已执行映射；`preserved_existing` 表示保留既有会话身份；`preserved_with_mapped_references` 表示自身身份与缓存键保留，仅父引用使用对应账号的映射；`preserved_ids` 列出需继续保留的关联身份。`references` 记录原始父 ID、解析出的 `policy`、迁移代数和段摘要，包括映射拒绝时的结果。失败状态不代表已经发送。映射日志不含 HMAC 密钥或认证凭据。最终 HTTP 头、实际 WS 握手、当前帧正文仍分别展示，不用本次期望头覆盖旧连接的握手快照。
 
 此功能是账号隔离，不承诺匿名、不可关联或消除 500。UUID 前缀/时间、未改动的轮次、设备、内容、账号和出口等仍可能具有相关性；上游不透明响应及加密上下文不能通过改 UUID 迁移到其他账号。
 
@@ -133,6 +133,8 @@ busy 同会话溢出功能保留，只使用同账号、同隔离分区及兼容
 `previous_response_id`、连接 turn state、不透明输入引用、加密 reasoning/compaction 不能仅靠改 UUID 跨账号迁移，不会静默删除这些字段来制造成功。此类请求迁移前拒绝；迁移后旧引用仍拒绝，能核实归属当前账号和迁移段的续链及新产生的加密内容可以继续使用。无法核实的加密内容需要恢复完整明文上下文或新建会话。这不是无损跨账号上下文迁移功能。
 
 日志 `diagnostics.session_continuity.account_failover` 记录 `result`、`reason`、`previous_account_id`、`account_id`、`generation`。`switched` 表示归属迁移已提交，不代表上游请求成功；`restored` 表示恢复已有迁移归属；`blocked` / `no_safe_candidate` 表示未迁移。最终握手和正文的 ID 前后值仍在 `diagnostics.upstream.outbound_identity.account_mapping` 中查看。部分旧请求可能已在途，其账号及出站身份不会被追溯改写。
+
+换号上下文拒绝返回 HTTP 400 / WS 对应错误帧 `codex_session_failover_context_required`，不计为上游 500。响应 `details` 提供具体 `reason`、`trigger_reason`、`phase` 和 `retry: stop`；使用日志 `diagnostics.account_failover` 及服务错误 JSON 的 `account_failover` 同时记录 `trigger_reason`（额度、禁用、容量等换号触发原因）、`block_reason`（续链、加密内容、工具上下文或归属校验）、原账号和代数。`phase=before_switch` 表示本次换号尚未提交，`after_switch` 表示在恢复已迁移会话时拒绝旧上下文，不能仅凭 `blocked` 判断历史上从未换号。不会记录加密内容、turn-state 或文件凭据的原值。
 
 ### 后台请求的账号匹配
 
@@ -163,3 +165,5 @@ NewAPI 先在已验证用户范围内按**原始 session_id 前缀**解析唯一
 父会话 S 的出站 ID 若已是结合实际账号和迁移段派生的 S′，新 fork T 的握手和正文父引用均指向 S′，而不是入站 S，也不是套用 T 自己的迁移段重新派生一个错误父 ID。T 自己的会话/线程 ID 仍按自己的账号隔离规则生成，不复用父线程 ID。
 
 父引用按用户、实际账号和 fork 自己的出站段持久固定。父会话之后再次换号或回切，不会使既有 fork 的父引用漂移；新 fork 则使用对应账号已登记的父段。没有历史父段且没有旧 preserve 声明时，使用该账号的稳定派生映射；无法核实已有父段或存在策略冲突时拒绝，不发送原始父 ID。关闭自动换号后，引用已映射父会话的新 fork 仍沿用账号映射。日志 `account_mapping.changes` 和最终握手/正文快照可核对原始与出站父 ID。
+
+旧 fork 自身的 `preserve` 策略不再一律阻止父引用映射：本地仍按用户隔离后的原始 ID 查询，自己的 session/thread/window 与提示缓存键保持历史值，父引用单独解析对应账号的历史段并在握手和正文同步改写。父会话本身只有旧 `preserve` 策略时仍拒绝，不自动把新生成的 ID 当成已存在的历史父会话，也不退回发送原始父 ID。

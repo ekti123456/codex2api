@@ -22,38 +22,52 @@ const (
 	serviceErrorMaxRows       = 100000
 )
 
+type SessionAccountFailoverDiagnostic struct {
+	Result            string `json:"result"`
+	Reason            string `json:"reason,omitempty"`
+	TriggerReason     string `json:"trigger_reason,omitempty"`
+	BlockReason       string `json:"block_reason,omitempty"`
+	Phase             string `json:"phase,omitempty"`
+	PreviousAccountID int64  `json:"previous_account_id,omitempty"`
+	AccountID         int64  `json:"account_id,omitempty"`
+	Generation        uint64 `json:"generation"`
+}
+
 type ServiceErrorEvent struct {
-	ID                     string            `json:"id"`
-	CreatedAt              time.Time         `json:"created_at"`
-	RequestID              string            `json:"request_id"`
-	NewAPIRequestID        string            `json:"newapi_request_id,omitempty"`
-	NewAPIIdentityVerified bool              `json:"newapi_identity_verified"`
-	StatusCode             int               `json:"status_code"`
-	Code                   string            `json:"code"`
-	ErrorType              string            `json:"error_type"`
-	Message                string            `json:"message"`
-	Stage                  string            `json:"stage"`
-	Method                 string            `json:"method"`
-	Endpoint               string            `json:"endpoint"`
-	Transport              string            `json:"transport"`
-	Model                  string            `json:"model,omitempty"`
-	DurationMs             int64             `json:"duration_ms"`
-	APIKeyID               int64             `json:"api_key_id,omitempty"`
-	APIKeyName             string            `json:"api_key_name,omitempty"`
-	RequestType            string            `json:"request_type"`
-	ThreadSource           string            `json:"thread_source,omitempty"`
-	RequestKind            string            `json:"request_kind,omitempty"`
-	SubagentKind           string            `json:"subagent_kind,omitempty"`
-	ThreadID               string            `json:"thread_id,omitempty"`
-	WindowID               string            `json:"window_id,omitempty"`
-	RootFingerprint        string            `json:"root_fingerprint,omitempty"`
-	ScopeHash              string            `json:"scope_hash,omitempty"`
-	RootAccountLookup      string            `json:"root_account_lookup,omitempty"`
-	RootAccountWait        string            `json:"root_account_wait,omitempty"`
-	RootAccountWaitMs      int64             `json:"root_account_wait_ms,omitempty"`
-	CandidateRejections    []string          `json:"candidate_rejections,omitempty"`
-	ClientInfo             map[string]string `json:"client_info,omitempty"`
-	UpstreamInfo           json.RawMessage   `json:"upstream,omitempty"`
+	ID                     string                            `json:"id"`
+	CreatedAt              time.Time                         `json:"created_at"`
+	RequestID              string                            `json:"request_id"`
+	NewAPIRequestID        string                            `json:"newapi_request_id,omitempty"`
+	NewAPIIdentityVerified bool                              `json:"newapi_identity_verified"`
+	NewAPIUserID           string                            `json:"newapi_user_id,omitempty"`
+	NewAPIUserName         string                            `json:"newapi_user_name,omitempty"`
+	StatusCode             int                               `json:"status_code"`
+	Code                   string                            `json:"code"`
+	ErrorType              string                            `json:"error_type"`
+	Message                string                            `json:"message"`
+	Stage                  string                            `json:"stage"`
+	Method                 string                            `json:"method"`
+	Endpoint               string                            `json:"endpoint"`
+	Transport              string                            `json:"transport"`
+	Model                  string                            `json:"model,omitempty"`
+	DurationMs             int64                             `json:"duration_ms"`
+	APIKeyID               int64                             `json:"api_key_id,omitempty"`
+	APIKeyName             string                            `json:"api_key_name,omitempty"`
+	RequestType            string                            `json:"request_type"`
+	ThreadSource           string                            `json:"thread_source,omitempty"`
+	RequestKind            string                            `json:"request_kind,omitempty"`
+	SubagentKind           string                            `json:"subagent_kind,omitempty"`
+	ThreadID               string                            `json:"thread_id,omitempty"`
+	WindowID               string                            `json:"window_id,omitempty"`
+	RootFingerprint        string                            `json:"root_fingerprint,omitempty"`
+	ScopeHash              string                            `json:"scope_hash,omitempty"`
+	RootAccountLookup      string                            `json:"root_account_lookup,omitempty"`
+	RootAccountWait        string                            `json:"root_account_wait,omitempty"`
+	RootAccountWaitMs      int64                             `json:"root_account_wait_ms,omitempty"`
+	CandidateRejections    []string                          `json:"candidate_rejections,omitempty"`
+	ClientInfo             map[string]string                 `json:"client_info,omitempty"`
+	UpstreamInfo           json.RawMessage                   `json:"upstream,omitempty"`
+	AccountFailover        *SessionAccountFailoverDiagnostic `json:"account_failover,omitempty"`
 }
 
 type ServiceErrorFilter struct {
@@ -153,9 +167,12 @@ func normalizeServiceError(event ServiceErrorEvent) ServiceErrorEvent {
 		&event.Stage, &event.Method, &event.Transport, &event.Model, &event.APIKeyName,
 		&event.RequestType, &event.ThreadSource, &event.RequestKind, &event.SubagentKind,
 		&event.ThreadID, &event.WindowID, &event.RootFingerprint, &event.ScopeHash,
-		&event.RootAccountLookup, &event.RootAccountWait,
+		&event.RootAccountLookup, &event.RootAccountWait, &event.NewAPIUserID, &event.NewAPIUserName,
 	} {
 		*field = serviceErrorString(*field, 160)
+	}
+	if !event.NewAPIIdentityVerified {
+		event.NewAPIUserID, event.NewAPIUserName = "", ""
 	}
 	event.Message = serviceErrorString(event.Message, 2048)
 	event.Endpoint = serviceErrorString(event.Endpoint, 256)
@@ -190,6 +207,13 @@ func normalizeServiceError(event ServiceErrorEvent) ServiceErrorEvent {
 		remaining -= len(name) + len(value)
 	}
 	event.ClientInfo = clientInfo
+	if event.AccountFailover != nil {
+		failover := *event.AccountFailover
+		for _, field := range []*string{&failover.Result, &failover.Reason, &failover.TriggerReason, &failover.BlockReason, &failover.Phase} {
+			*field = serviceErrorString(*field, 160)
+		}
+		event.AccountFailover = &failover
+	}
 	if len(event.UpstreamInfo) > 8192 || !json.Valid(event.UpstreamInfo) {
 		event.UpstreamInfo = nil
 	} else {

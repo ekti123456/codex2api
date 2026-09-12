@@ -6,6 +6,8 @@ export interface ServiceErrorEvent {
   request_id: string
   newapi_request_id?: string
   newapi_identity_verified?: boolean
+  newapi_user_id?: string
+  newapi_user_name?: string
   status_code: number
   code: string
   error_type: string
@@ -51,4 +53,11 @@ export interface ServiceErrorQuery {
 
 export function serviceErrorCollectorHasLoss(collector: ServiceErrorPage['collector']): boolean {
   return collector.dropped > 0 || collector.write_failures > 0
+}
+
+export function serviceErrorNewAPIUserLabel(event: ServiceErrorEvent): string {
+  if (!event.newapi_identity_verified) return ''
+  const name = event.newapi_user_name?.trim() || ''
+  const userID = event.newapi_user_id?.trim() || ''
+  return [name, userID ? `#${userID}` : ''].filter(Boolean).join(' ')
 }

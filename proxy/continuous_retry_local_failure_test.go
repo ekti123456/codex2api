@@ -227,8 +227,8 @@ func continuousRetryLocalRequest(t *testing.T, tc continuousRetryLocalEndpointCa
 	ctx.Request = httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Request.Header.Set("X-Codex2API-Affinity-Key", "local-replay-test")
-	identity := resolveRequestSessionIdentity(ctx.Request.Header, body)
-	affinityKey := sessionAffinityKey(identity.affinityID, 0)
+	identity := handler.resolveRequestSessionIdentityForContext(ctx, body)
+	affinityKey := capacityAwareSessionAffinityKey(identity, 0)
 	tc.invoke(handler, ctx)
 	return recorder, affinityKey
 }

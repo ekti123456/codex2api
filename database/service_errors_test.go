@@ -31,6 +31,7 @@ func TestServiceErrorsPersistencePaginationAndIsolation(test *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for index := 0; index < 4; index++ {
 		event := ServiceErrorEvent{ID: fmt.Sprintf("event-%d", index), CreatedAt: now, StatusCode: 429, Stage: "rate_limit", RequestID: "request-one", NewAPIRequestID: "newapi-one", Message: "concurrency exhausted", UpstreamInfo: json.RawMessage(`{"send_phase":"before_payload","error_source":"gateway"}`)}
+		event.NewAPIIdentityVerified, event.NewAPIUserID, event.NewAPIUserName = true, "1881", "示例用户"
 		if index == 3 {
 			event.StatusCode, event.Stage = 400, "root_binding"
 		}
@@ -52,6 +53,9 @@ func TestServiceErrorsPersistencePaginationAndIsolation(test *testing.T) {
 		test.Fatalf("first page=%+v err=%v", first, err)
 	}
 	filter.Cursor = first.NextCursor
+	if !first.Items[0].NewAPIIdentityVerified || first.Items[0].NewAPIUserID != "1881" || first.Items[0].NewAPIUserName != "示例用户" {
+		test.Fatalf("NewAPI user not persisted: %+v", first.Items[0])
+	}
 	if string(first.Items[0].UpstreamInfo) != `{"send_phase":"before_payload","error_source":"gateway"}` {
 		test.Fatalf("upstream diagnostics not persisted: %s", first.Items[0].UpstreamInfo)
 	}
@@ -79,6 +83,19 @@ func TestServiceErrorsPersistencePaginationAndIsolation(test *testing.T) {
 		if err := db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			test.Fatalf("service errors changed %s: count=%d err=%v", table, count, err)
 		}
+	}
+}
+
+func TestServiceErrorNewAPIUserNormalization(test *testing.T) {
+	event := normalizeServiceError(ServiceErrorEvent{NewAPIIdentityVerified: true, NewAPIUserID: " 1881 ", NewAPIUserName: strings.Repeat("中文", 100)})
+	if event.NewAPIUserID != "1881" || len(event.NewAPIUserName) > 160 || !utf8.ValidString(event.NewAPIUserName) || event.NewAPIUserName == "" {
+		test.Fatalf("invalid normalized identity: %+v", event)
+	}
+	event.NewAPIIdentityVerified = false
+	event = normalizeServiceError(event)
+	payload, err := json.Marshal(event)
+	if err != nil || strings.Contains(string(payload), "newapi_user_") {
+		test.Fatalf("unverified user retained: %s err=%v", payload, err)
 	}
 }
 

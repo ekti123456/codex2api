@@ -467,6 +467,9 @@ func (handler *Handler) validateRequestWindowGrant(request *gin.Context) error {
 }
 
 func (handler *Handler) requestWindowGrantError(request *gin.Context) *api.APIError {
+	if apiRelaySessionExempt(request) {
+		return nil
+	}
 	if err := handler.validateRequestWindowGrant(request); err != nil {
 		return requestWindowGrantAPIError(err)
 	}
@@ -478,6 +481,9 @@ func (handler *Handler) requestWindowGrantError(request *gin.Context) *api.APIEr
 }
 
 func (handler *Handler) confirmRequestWindowGrant(request *gin.Context) error {
+	if apiRelaySessionExempt(request) {
+		return nil
+	}
 	grant := windowGrantForRequest(request)
 	if grant == nil {
 		return nil

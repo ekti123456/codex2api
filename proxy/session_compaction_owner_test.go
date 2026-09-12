@@ -182,7 +182,9 @@ func TestSessionContinuityUnboundCompactionStopsBeforeHTTPOrWebSocketDispatch(te
 				}))
 				defer upstream.Close()
 				handler := newRootlessPassiveModelTestHandler(test)
-				handler.store.AddAccount(&auth.Account{DBID: 1707, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: upstream.URL, APIKey: "test", Status: auth.StatusReady, Models: []string{"gpt-5.6-sol"}})
+				account := &auth.Account{DBID: 1707, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: upstream.URL, APIKey: "test", Status: auth.StatusReady, Models: []string{"gpt-5.6-sol"}}
+				useCodexHTTPTestAccounts(test, account)
+				handler.store.AddAccount(account)
 				config := handler.store.GetPromptFilterConfig()
 				config.Advanced.Risk.SessionContinuityMode = mode
 				handler.store.SetPromptFilterConfig(config)

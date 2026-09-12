@@ -74,6 +74,9 @@ func sessionOperationsIdentity(ctx *gin.Context) (database.SessionErrorIdentity,
 }
 
 func (handler *Handler) sessionBlacklistError(ctx *gin.Context) *api.APIError {
+	if apiRelaySessionExempt(ctx) {
+		return nil
+	}
 	identity, known := sessionOperationsIdentity(ctx)
 	if !known || handler.db == nil {
 		return nil

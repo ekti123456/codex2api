@@ -25,11 +25,17 @@ func sessionModelErrorForRequest(requestContext *gin.Context) *api.APIError {
 }
 
 func (handler *Handler) configureSessionModelAffinity(requestContext *gin.Context, identity requestSessionIdentity, key, originalModel, effectiveModel string, compact bool, bodies ...[]byte) (apiError *api.APIError) {
+	if apiRelaySessionExempt(requestContext) {
+		handler.seedAPIRelayAffinity(requestContext, identity, key)
+		requestContext.Set(sessionContinuityContextKey, nil)
+		handler.attachSessionOutboundEpoch(requestContext, "", database.SessionContinuityRecord{})
+		return nil
+	}
 	if blocked := handler.sessionBlacklistError(requestContext); blocked != nil {
 		return blocked
 	}
 	defer func() {
-		if apiError != nil && handler.db != nil && len(bodies) > 0 && (usageRequestDiagnosticState(requestContext).Continuity != nil || usageRequestDiagnosticState(requestContext).BackgroundAccountMatch != nil) {
+		if apiError != nil && handler.db != nil && len(bodies) > 0 && (usageRequestDiagnosticState(requestContext).Continuity != nil || usageRequestDiagnosticState(requestContext).BackgroundAccountMatch != nil || usageRequestDiagnosticState(requestContext).AccountFailover != nil) {
 			handler.logUsageForRequest(requestContext, &database.UsageLogInput{Endpoint: requestContext.Request.URL.Path, Model: originalModel, EffectiveModel: effectiveModel, StatusCode: 400, ErrorMessage: apiError.Message, Stream: gjson.GetBytes(bodies[0], "stream").Bool(), Compact: compact})
 		}
 	}()

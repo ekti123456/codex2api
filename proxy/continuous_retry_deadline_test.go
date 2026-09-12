@@ -570,8 +570,8 @@ func TestResponsesCompactContinuousRetryDeadlineReturnsLatestFailureAndReleasesS
 		t.Fatalf("FailureStreak = %d, want only the completed 503 attempt to be penalized", account.FailureStreak)
 	}
 	entry, found, err := handler.readSessionContinuity(context.Background(), hashRiskIdentity(affinityKey))
-	if err != nil || !found || entry.Record.AccountID != account.ID() {
-		t.Fatalf("deadline lost the recoverable compaction owner: entry=%+v found=%v error=%v", entry, found, err)
+	if err != nil || found {
+		t.Fatalf("API relay must not create a Codex compaction owner: entry=%+v found=%v error=%v", entry, found, err)
 	}
 }
 

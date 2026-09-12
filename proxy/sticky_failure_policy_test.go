@@ -29,16 +29,17 @@ func newStickyFailureHarness(t *testing.T, maxRetries, max429Retries int, upstre
 		MaxRetries:          maxRetries,
 		MaxRateLimitRetries: max429Retries,
 		TestConcurrency:     1,
-		TestModel:           "gpt-5.4",
+		TestModel:           "gpt-5.6-sol",
 	})
 	store.SetMaxRetries(maxRetries)
 	store.SetMaxRateLimitRetries(max429Retries)
 	store.SetTransportRetryPolicy("sticky")
-	accountA := &auth.Account{DBID: 99101, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: serverA.URL, APIKey: "a", Models: []string{"gpt-5.4"}}
-	accountB := &auth.Account{DBID: 99102, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: serverB.URL, APIKey: "b", Models: []string{"gpt-5.4"}}
+	accountA := &auth.Account{DBID: 99101, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: serverA.URL, APIKey: "a", Models: []string{"gpt-5.6-sol"}}
+	accountB := &auth.Account{DBID: 99102, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: serverB.URL, APIKey: "b", Models: []string{"gpt-5.6-sol"}}
+	useCodexHTTPTestAccounts(t, accountA, accountB)
 	store.AddAccount(accountA)
 	store.AddAccount(accountB)
-	body := []byte(`{"model":"gpt-5.4","input":"sticky probe","stream":true}`)
+	body := []byte(`{"model":"gpt-5.6-sol","input":"sticky probe","stream":true}`)
 	headers := http.Header{"Content-Type": []string{"application/json"}, "Session-Id": []string{"sticky-failure-session"}}
 	key := capacityAwareSessionAffinityKey(resolveRequestSessionIdentity(headers, body), 0)
 	store.BindSessionAffinity(key, accountA, "")
@@ -51,10 +52,11 @@ func newStickyFailureHarness(t *testing.T, maxRetries, max429Retries int, upstre
 
 func runStickyFailureRequest(t *testing.T, handler *Handler) *httptest.ResponseRecorder {
 	t.Helper()
-	body := []byte(`{"model":"gpt-5.4","input":"sticky probe","stream":true}`)
+	body := []byte(`{"model":"gpt-5.6-sol","input":"sticky probe","stream":true}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Session-Id", "sticky-failure-session")
+	req.Header.Set("Authorization", "Bearer sticky-test-client")
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = req

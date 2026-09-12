@@ -291,12 +291,8 @@ func capacityAwareSessionAffinityKey(identity requestSessionIdentity, apiKeyID i
 // the account currently bound to its source session. The target affinity key
 // remains independent, so the fork keeps its own accounting window and can
 // fall back to normal scheduling when the source account is unavailable.
-func (h *Handler) takeForkSourceAccount(identity requestSessionIdentity, targetKey string, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, policy auth.DispatchPolicy, traces ...*auth.SelectionTrace) (*auth.Account, string) {
+func (h *Handler) takeForkSourceAccount(ctx context.Context, identity requestSessionIdentity, targetKey string, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, policy auth.DispatchPolicy, traces ...*auth.SelectionTrace) (*auth.Account, string) {
 	if h == nil || h.store == nil || strings.TrimSpace(targetKey) == "" || strings.TrimSpace(identity.forkSourceAffinityID) == "" {
-		return nil, ""
-	}
-	sourceKey := sessionAffinityKey(identity.forkSourceAffinityID, apiKeyID)
-	if sourceKey == "" || sourceKey == targetKey {
 		return nil, ""
 	}
 	if _, bound := h.store.SessionAffinityAccountID(targetKey); bound {
@@ -304,11 +300,8 @@ func (h *Handler) takeForkSourceAccount(identity requestSessionIdentity, targetK
 	}
 
 	now := time.Now()
-	accountID, bound := h.store.AccountSessionAccountID(sourceKey, now)
-	if !bound {
-		accountID, bound = h.store.SessionAffinityAccountID(sourceKey)
-	}
-	if !bound || accountID == 0 {
+	accountID, _, err := h.resolveForkSourceOwner(ctx, identity, targetKey, apiKeyID)
+	if err != nil || accountID == 0 {
 		return nil, ""
 	}
 
@@ -455,6 +448,9 @@ func codexContinuationPinned(turnContinuation, hasPreviousResponse, hasBinding b
 // 否则分流组既服务无指纹请求、又照常接真 Codex 流量，隔离等于没做——而不限分组恰恰是
 // 绝大多数 Key 的默认配置。
 func applyAffinityGroupRouting(c *gin.Context, identity requestSessionIdentity, filter auth.AccountFilter) auth.AccountFilter {
+	if apiRelaySessionExempt(c) {
+		filter = apiRelaySessionAccountFilter(filter)
+	}
 	row := apiKeyRowFromContext(c)
 	if row == nil {
 		return filter
@@ -4271,7 +4267,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 			}
 			if account == nil && attempt == 0 && !turnContinuationPinned {
-				account, stickyProxyURL = h.takeForkSourceAccount(sessionIdentity, affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
+				account, stickyProxyURL = h.takeForkSourceAccount(c.Request.Context(), sessionIdentity, affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
 			}
 			if account != nil {
 				stickyProxyURL = account.GetProxyURL()

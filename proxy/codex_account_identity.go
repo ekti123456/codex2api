@@ -44,27 +44,36 @@ type codexAccountIdentityChange struct {
 
 type codexAccountIdentityDiagnosticKey struct{}
 
+type codexAccountReferenceDiagnostic struct {
+	Original    string `json:"original"`
+	Policy      string `json:"policy"`
+	Generation  uint64 `json:"generation"`
+	SegmentHash string `json:"segment_hash,omitempty"`
+}
+
 type codexAccountIdentityDiagnostic struct {
-	Version          string                       `json:"version,omitempty"`
-	Status           string                       `json:"status"`
-	ScopeHash        string                       `json:"scope_hash,omitempty"`
-	UpstreamAccount  string                       `json:"chatgpt_account_id,omitempty"`
-	CachePartitioned bool                         `json:"cache_partitioned,omitempty"`
-	Changes          []codexAccountIdentityChange `json:"changes,omitempty"`
-	PreservedIDs     []string                     `json:"preserved_ids,omitempty"`
-	Generation       uint64                       `json:"generation,omitempty"`
-	SegmentHash      string                       `json:"segment_hash,omitempty"`
-	Windows          []codexAccountWindowChange   `json:"windows,omitempty"`
+	Version          string                            `json:"version,omitempty"`
+	Status           string                            `json:"status"`
+	ScopeHash        string                            `json:"scope_hash,omitempty"`
+	UpstreamAccount  string                            `json:"chatgpt_account_id,omitempty"`
+	CachePartitioned bool                              `json:"cache_partitioned,omitempty"`
+	Changes          []codexAccountIdentityChange      `json:"changes,omitempty"`
+	PreservedIDs     []string                          `json:"preserved_ids,omitempty"`
+	Generation       uint64                            `json:"generation,omitempty"`
+	SegmentHash      string                            `json:"segment_hash,omitempty"`
+	Windows          []codexAccountWindowChange        `json:"windows,omitempty"`
+	References       []codexAccountReferenceDiagnostic `json:"references,omitempty"`
 }
 
 type codexAccountIdentity struct {
-	secret      []byte
-	owner       string
-	account     string
-	epoch       string
-	windowBases map[string]uint64
-	aliases     map[string]string
-	diagnostic  codexAccountIdentityDiagnostic
+	secret       []byte
+	owner        string
+	account      string
+	epoch        string
+	preserveRoot bool
+	windowBases  map[string]uint64
+	aliases      map[string]string
+	diagnostic   codexAccountIdentityDiagnostic
 }
 
 var codexAccountIdentityFields = []string{
@@ -162,21 +171,20 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 	}
 	diagnostic.UpstreamAccount = diagnosticIdentifier(upstreamAccount)
 	diagnostic.ScopeHash = rootKey[:24]
-	if policy.Mode == "preserve" {
-		if mappedReference || fingerprint.accountIdentityRequested && len(fingerprint.accountIdentityReferences) > 0 {
-			return codexAccountIdentityError("既有会话的原始身份策略与账号级父引用不兼容，已停止发送原始父会话 ID；请新建 fork 或对话。")
-		}
+	diagnostic.Version = policy.Mode
+	preserveRoot := policy.Mode == "preserve"
+	if preserveRoot && (len(fingerprint.accountIdentityReferences) == 0 || !fingerprint.accountIdentityRequested && !mappedReference) {
 		diagnostic.Status = "preserved_existing"
 		return nil
 	}
-	if policy.Mode != "account-suffix-v1" {
+	if !preserveRoot && policy.Mode != "account-suffix-v1" {
 		return codexAccountIdentityError("出站身份映射版本不受支持，请检查服务版本。")
 	}
 	secret, err := hex.DecodeString(policy.Secret)
-	if err != nil || len(secret) != 32 {
+	if !preserveRoot && (err != nil || len(secret) != 32) {
 		return codexAccountIdentityError("出站身份映射密钥不可用，请恢复完整数据库。")
 	}
-	mapping := &codexAccountIdentity{secret: secret, owner: owner, account: upstreamAccount, epoch: epochKey, aliases: make(map[string]string)}
+	mapping := &codexAccountIdentity{secret: secret, owner: owner, account: upstreamAccount, epoch: epochKey, preserveRoot: preserveRoot, aliases: make(map[string]string)}
 	if err := fingerprint.prepareAccountWindows(ctx, mapping, epoch); err != nil {
 		return err
 	}
@@ -210,6 +218,10 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		currentEpoch.RootKey, currentEpoch.Generation = epoch.key, epoch.record.FailoverCount
 	}
 	for _, original := range ordered {
+		if preserveRoot && !fingerprint.accountIdentityReferences[original] {
+			diagnostic.PreservedIDs = append(diagnostic.PreservedIDs, original)
+			continue
+		}
 		baseIdentityKey := codexIdentityDigest("codex-account-root-v1", owner, upstreamAccount, original)
 		identityKey := baseIdentityKey
 		identityEpoch := currentEpoch
@@ -250,6 +262,13 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		if err != nil {
 			return codexAccountIdentityError("暂时无法核实关联会话身份映射，请稍后重试。")
 		}
+		if fingerprint.accountIdentityReferences[original] {
+			reference := codexAccountReferenceDiagnostic{Original: original, Policy: identityPolicy.Mode, Generation: identityEpoch.Generation}
+			if identityEpoch.Segment != "" {
+				reference.SegmentHash = diagnosticIdentifier(identityEpoch.Segment)
+			}
+			diagnostic.References = append(diagnostic.References, reference)
+		}
 		if identityPolicy.Mode == "preserve" {
 			if fingerprint.accountIdentityReferences[original] {
 				return codexAccountIdentityError("父会话尚无可确认的账号级出站映射，已停止发送原始父会话 ID；请先恢复父会话或新开对话。")
@@ -257,8 +276,14 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 			diagnostic.PreservedIDs = append(diagnostic.PreservedIDs, original)
 			continue
 		}
-		if identityPolicy.Mode != policy.Mode || identityPolicy.Secret != policy.Secret {
+		if identityPolicy.Mode != "account-suffix-v1" || len(mapping.secret) > 0 && identityPolicy.Secret != hex.EncodeToString(mapping.secret) {
 			return codexAccountIdentityError("关联会话身份映射不一致，请检查数据库完整性。")
+		}
+		if len(mapping.secret) == 0 {
+			mapping.secret, err = hex.DecodeString(identityPolicy.Secret)
+			if err != nil || len(mapping.secret) != 32 {
+				return codexAccountIdentityError("出站身份映射密钥不可用，请恢复完整数据库。")
+			}
 		}
 		identityMapping := *mapping
 		identityMapping.epoch = identityEpoch.Segment
@@ -303,6 +328,9 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 	}
 	diagnostic.Version = policy.Mode
 	diagnostic.Status = "mapped"
+	if preserveRoot {
+		diagnostic.Status = "preserved_with_mapped_references"
+	}
 	mapping.diagnostic = diagnostic
 	fingerprint.accountIdentity = mapping
 	fingerprint.headers = mapping.rewriteHeaders(fingerprint.headers)
@@ -426,7 +454,7 @@ func (mapping *codexAccountIdentity) rewriteBody(body []byte) []byte {
 }
 
 func (fingerprint *CodexFingerprint) ScopeCacheKey(ctx context.Context, cacheKey string) string {
-	if fingerprint.accountIdentity == nil || strings.TrimSpace(cacheKey) == "" {
+	if fingerprint.accountIdentity == nil || fingerprint.accountIdentity.preserveRoot || strings.TrimSpace(cacheKey) == "" {
 		return cacheKey
 	}
 	diagnostic := fingerprint.accountIdentity.diagnostic

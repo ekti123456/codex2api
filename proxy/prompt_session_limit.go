@@ -211,6 +211,11 @@ func (h *Handler) checkPromptSessionCreationLimitForSelectedAccount(c *gin.Conte
 // affinity admission separate from user-window creation. priorSessionAccountID
 // describes the account-session state before scheduling selected account.
 func (h *Handler) checkPromptSessionCreationLimitForSelectedAccountAdmission(c *gin.Context, body []byte, account *auth.Account, affinityKey string, priorSessionAccountID int64) (promptSessionCreationLimitStatus, bool) {
+	if account != nil && account.IsOpenAIResponsesAPI() {
+		clearAccountSessionObservationContext(c)
+		setUsageUserWindow(c, "api_relay_exempt")
+		return promptSessionCreationLimitStatus{}, false
+	}
 	status, blocked := h.admitSelectedAccountWindow(c, body, account, affinityKey, priorSessionAccountID)
 	if blocked || account == nil {
 		return status, blocked

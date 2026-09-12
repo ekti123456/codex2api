@@ -60,6 +60,7 @@ func TestBoundRootDispatchIgnoresTemporalHistory(test *testing.T) {
 					if transport == "http" {
 						root.UpstreamType, root.BaseURL, root.APIKey = auth.UpstreamOpenAIResponses, upstream.URL, "root-key"
 						other.UpstreamType, other.BaseURL, other.APIKey = auth.UpstreamOpenAIResponses, upstream.URL, "other-key"
+						useCodexHTTPTestAccounts(test, root, other)
 					} else {
 						previousExecute := WebsocketExecuteFunc
 						test.Cleanup(func() { WebsocketExecuteFunc = previousExecute })

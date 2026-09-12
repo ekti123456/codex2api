@@ -25,7 +25,9 @@ func TestIndependentBackgroundIngressCannotReachUpstream(test *testing.T) {
 	for _, path := range []string{"/v1/responses", "/v1/responses/compact", "/v1/chat/completions", "/v1/messages", "websocket"} {
 		test.Run(path, func(test *testing.T) {
 			handler := newRootlessPassiveModelTestHandler(test)
-			handler.store.AddAccount(&auth.Account{DBID: 1706, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-5.6-sol"}})
+			account := &auth.Account{DBID: 1706, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-5.6-sol"}}
+			useCodexHTTPTestAccounts(test, account)
+			handler.store.AddAccount(account)
 			meta := newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved,
 				RootSessionRelation: newAPIPolicyRootSessionRelationRoot, RootSessionFingerprint: promptSessionTestFingerprint(test.Name()),
 				ThreadSource: "agent_created_thread", RequestKind: "turn", SessionAccounting: newAPISessionAccountingBypass, PassiveFeature: newAPIPassiveFeatureIndependent}

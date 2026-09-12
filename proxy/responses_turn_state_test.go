@@ -37,7 +37,7 @@ func readResponsesWSTerminalEvent(t *testing.T, conn *websocket.Conn) []byte {
 	return nil
 }
 
-func newUsageLimitedRelayStore(upstreamURL string) (*auth.Store, *auth.Account) {
+func newUsageLimitedCodexStore(test *testing.T, upstreamURL string) (*auth.Store, *auth.Account) {
 	store := auth.NewStore(nil, nil, &database.SystemSettings{
 		MaxConcurrency:         2,
 		MaxRetries:             0,
@@ -55,6 +55,7 @@ func newUsageLimitedRelayStore(upstreamURL string) (*auth.Store, *auth.Account) 
 		UsagePercent5hValid: true,
 		Reset5hAt:           time.Now().Add(time.Hour),
 	}
+	useCodexHTTPTestAccounts(test, account)
 	store.AddAccount(account)
 	return store, account
 }
@@ -63,7 +64,7 @@ func TestResponsesTurnStateAllowsOnlyBoundTurnPastWHAMLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var seenBody []byte
 	upstream := newContinuationRelayUpstream(t, false, &seenBody)
-	store, account := newUsageLimitedRelayStore(upstream.URL)
+	store, account := newUsageLimitedCodexStore(t, upstream.URL)
 	handler := NewHandler(store, nil, nil, nil)
 	body := []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":"continue"}],"stream":true}`)
 
@@ -126,6 +127,7 @@ func TestResponsesTurnStateExpiredBindingKeepsOwnerWhenContinuousRetryDisabled(t
 		APIKey: "fallback-token", Models: []string{"gpt-5.5"}, PlanType: "api",
 	}
 	fallback.SetSchedulerPriority(20)
+	useCodexHTTPTestAccounts(t, bound, fallback)
 	store.AddAccount(bound)
 	store.AddAccount(fallback)
 	store.BindSessionAffinity("expired-http-turn", bound, "")
@@ -158,7 +160,7 @@ func TestResponsesTurnStateDoesNotRerouteAfterAuthoritativeLimit(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	store, limited := newUsageLimitedRelayStore(upstream.URL)
+	store, limited := newUsageLimitedCodexStore(t, upstream.URL)
 	store.AddAccount(&auth.Account{
 		DBID:         2,
 		UpstreamType: auth.UpstreamOpenAIResponses,

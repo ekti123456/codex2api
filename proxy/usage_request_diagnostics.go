@@ -91,6 +91,8 @@ type usageRequestDiagnostics struct {
 	Naming                 string                            `json:"naming,omitempty"`
 	WindowGrant            string                            `json:"window_grant,omitempty"`
 	Continuity             *sessionContinuityDiagnostic      `json:"session_continuity,omitempty"`
+	AccountFailover        *sessionAccountFailoverDiagnostic `json:"account_failover,omitempty"`
+	APIRelaySessionExempt  bool                              `json:"api_relay_session_exempt,omitempty"`
 	UserWindowKeyHash      string                            `json:"user_window_key_hash,omitempty"`
 	UserWindow             string                            `json:"user_window"`
 	AccountWindow          string                            `json:"account_window"`
@@ -295,6 +297,7 @@ func (h *Handler) captureUsageRequestResolution(c *gin.Context, body []byte, ide
 	if state == nil {
 		return
 	}
+	state.APIRelaySessionExempt = apiRelaySessionExempt(c)
 	resolution := &usageRequestResolution{
 		ThreadSource: diagnosticLabel(root.threadSource), RequestKind: diagnosticLabel(root.requestKind), SubagentKind: diagnosticLabel(root.subagentKind),
 		PolicyStatus: status, RootState: "unavailable", RootID: diagnosticIdentifier(root.sessionID), RootFingerprint: root.fingerprint,

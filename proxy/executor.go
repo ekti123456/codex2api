@@ -1572,6 +1572,7 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	if identity.unlinkedFallbackOnly {
 		identity.affinityID = ""
 	}
+	identity = h.configureAPIRelaySessionPolicy(c, body, identity)
 	h.captureUsageRequestResolution(c, body, identity, rootIdentity, policyContext, status)
 	h.captureSessionOperationsIdentity(c, body, rootIdentity, policyContext, verifiedPolicy)
 	return identity

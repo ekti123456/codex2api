@@ -63,6 +63,7 @@ func TestRootNamingWaitsForBoundAccountAndRepeatedRequestsReachUpstream(test *te
 	}))
 	defer upstream.Close()
 	account := &auth.Account{DBID: 1535, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-5.6-sol"}}
+	useCodexHTTPTestAccounts(test, account)
 	handler.store.AddAccount(account)
 	body := []byte(`{"model":"gpt-5.6-sol","input":"title","stream":false}`)
 	remaining := int64(0)

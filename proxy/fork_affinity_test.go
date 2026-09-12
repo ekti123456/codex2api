@@ -21,6 +21,7 @@ func TestTakeForkSourceAccountInheritsAccountWithoutMergingAffinityKeys(t *testi
 	store.BindSessionAffinity(sourceKey, source, "")
 
 	selected, _ := handler.takeForkSourceAccount(
+		t.Context(),
 		requestSessionIdentity{forkSourceAffinityID: testRootSessionA},
 		targetKey,
 		apiKeyID,
@@ -55,6 +56,7 @@ func TestTakeForkSourceAccountFallsBackWhenSourceAccountUnavailable(t *testing.T
 	atomic.StoreInt32(&source.Disabled, 1)
 
 	selected, _ := handler.takeForkSourceAccount(
+		t.Context(),
 		requestSessionIdentity{forkSourceAffinityID: testRootSessionA},
 		targetKey,
 		apiKeyID,

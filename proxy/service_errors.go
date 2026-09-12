@@ -257,6 +257,10 @@ func (handler *Handler) recordServiceError(ctx *gin.Context, status int, apiErro
 	if value, exists := ctx.Get(usageRequestDiagnosticsContextKey); exists {
 		if diagnostics, ok := value.(*usageRequestDiagnostics); ok && diagnostics != nil {
 			incoming = diagnostics.Incoming
+			event.AccountFailover = diagnostics.AccountFailover
+			if event.AccountFailover == nil && diagnostics.Continuity != nil {
+				event.AccountFailover = diagnostics.Continuity.AccountFailover
+			}
 			event.NewAPIRequestID, event.ScopeHash = diagnostics.NewAPIRequestID, diagnostics.Recent.Scope
 			event.RootAccountLookup, event.RootAccountWait, event.RootAccountWaitMs = diagnostics.RootAccountLookup, diagnostics.RootAccountWait, diagnostics.RootAccountWaitMillis
 			if resolved := diagnostics.Resolved; resolved != nil {
@@ -304,6 +308,8 @@ func (handler *Handler) recordServiceError(ctx *gin.Context, status int, apiErro
 	if policy, valid := value.(verifiedNewAPIPolicyContext); valid && policy.MetaVerified && (!state.websocket || frameDiagnostics != nil) {
 		event.NewAPIRequestID = diagnosticRequestID(policy.Identity.RequestID)
 		event.NewAPIIdentityVerified = true
+		event.NewAPIUserID = serviceErrorSafeText(ctx, policy.Identity.UserID, 160)
+		event.NewAPIUserName = serviceErrorSafeText(ctx, policy.Meta.UserName, 160)
 		if policy.Meta.InstallationID != "" {
 			event.ClientInfo["signed_newapi.installation_id"] = diagnosticIdentifier(policy.Meta.InstallationID)
 		}

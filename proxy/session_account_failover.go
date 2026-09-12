@@ -18,12 +18,41 @@ import (
 
 type sessionAccountFailoverContextKey struct{}
 
-type sessionAccountFailoverDiagnostic struct {
-	Result            string `json:"result"`
-	Reason            string `json:"reason,omitempty"`
-	PreviousAccountID int64  `json:"previous_account_id,omitempty"`
-	AccountID         int64  `json:"account_id,omitempty"`
-	Generation        uint64 `json:"generation,omitempty"`
+type sessionAccountFailoverDiagnostic = database.SessionAccountFailoverDiagnostic
+
+func sessionFailoverContextError(request *gin.Context, diagnostic *sessionAccountFailoverDiagnostic, block string) *api.APIError {
+	diagnostic.Result, diagnostic.Reason, diagnostic.BlockReason = "blocked", block, block
+	state := usageRequestDiagnosticState(request)
+	state.AccountFailover = diagnostic
+	if state.Continuity != nil {
+		state.Continuity.AccountFailover = diagnostic
+	}
+	reason := "会话归属无法核实"
+	switch block {
+	case "upstream_continuation":
+		reason = "携带旧 previous_response_id 或 conversation 续链"
+	case "connection_turn_state":
+		reason = "携带无法确认属于目标账号的 turn-state"
+	case "opaque_upstream_context":
+		reason = "携带无法迁移的加密内容、文件或输入项引用"
+	case "missing_request_context":
+		reason = "缺少完整请求上下文"
+	case "incomplete_tool_context":
+		reason = "工具结果缺少对应的工具调用"
+	case "persistent_owner_required":
+		reason = "缺少一致的持久化账号归属"
+	case "invalid_session_continuity":
+		reason = "会话窗口连续性校验未通过"
+	case "window_identity_required":
+		reason = "缺少有效的会话窗口标识"
+	}
+	message := "绑定账号不可用，当前请求不能安全换号：" + reason + "。请恢复完整未加密上下文，或新开对话。"
+	if diagnostic.Phase == "after_switch" {
+		message = "会话已更换绑定账号，当前请求不能安全续接：" + reason + "。请恢复完整未加密上下文，或新开对话。"
+	}
+	request.Header("X-Should-Retry", "false")
+	return api.NewAPIErrorWithDetails("codex_session_failover_context_required", message, api.ErrorTypeInvalidRequest,
+		gin.H{"reason": block, "trigger_reason": diagnostic.TriggerReason, "phase": diagnostic.Phase, "retry": "stop"})
 }
 
 type sessionAccountFailoverPlan struct {
@@ -59,7 +88,10 @@ func (handler *Handler) validateMigratedSessionContext(request *gin.Context, bod
 		}
 	}
 	if blocked != "" {
-		return api.NewAPIError("codex_session_failover_context_required", "会话已更换绑定账号；当前旧续链或加密上下文无法确认属于新账号，请恢复完整未加密上下文或新开对话。", api.ErrorTypeInvalidRequest)
+		return sessionFailoverContextError(request, &sessionAccountFailoverDiagnostic{
+			Phase: "after_switch", TriggerReason: record.LastFailoverReason,
+			PreviousAccountID: record.PreviousAccountID, AccountID: record.AccountID, Generation: record.FailoverCount,
+		}, blocked)
 	}
 	return nil
 }
@@ -170,8 +202,9 @@ func (handler *Handler) prepareSessionAccountFailover(request *gin.Context, key 
 	if reason == "" {
 		return false, nil
 	}
-	diagnostic := &sessionAccountFailoverDiagnostic{Result: "blocked", Reason: reason, PreviousAccountID: owner.ID()}
+	diagnostic := &sessionAccountFailoverDiagnostic{Result: "blocked", Reason: reason, TriggerReason: reason, Phase: "before_switch", PreviousAccountID: owner.ID(), Generation: state.Record.FailoverCount}
 	state.Diagnostic.AccountFailover = diagnostic
+	usageRequestDiagnosticState(request).AccountFailover = diagnostic
 	block := sessionFailoverContextBlock(sessionFailoverRequestHeaders(request), body)
 	if handler.db == nil || state.Record.AccountID != owner.ID() {
 		block = "persistent_owner_required"
@@ -181,8 +214,7 @@ func (handler *Handler) prepareSessionAccountFailover(request *gin.Context, key 
 		block = "window_identity_required"
 	}
 	if block != "" {
-		diagnostic.Reason = block
-		return false, api.NewAPIError("codex_session_failover_context_required", "绑定账号不可用，但当前请求的旧续链、加密上下文或会话归属不能安全迁移。请恢复完整未加密上下文，或新开对话。", api.ErrorTypeInvalidRequest)
+		return false, sessionFailoverContextError(request, diagnostic, block)
 	}
 	if err := handler.recoverSessionFailoverGrant(request, key); err != nil {
 		diagnostic.Reason = "window_grant_unavailable"
@@ -292,6 +324,7 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 		state.Diagnostic.OwnerAccount, state.Diagnostic.OwnerSource = candidate.ID(), "account_failover"
 		selectionTraceForRequest(request).PinAccount(candidate.ID())
 		plan.Diagnostic.Result, plan.Diagnostic.AccountID, plan.Diagnostic.Generation = "switched", candidate.ID(), committed.FailoverCount
+		plan.Diagnostic.Phase = "after_switch"
 		recordUsageRootAccount(request, candidate.ID(), true)
 		if updatedGrant != nil && grant != nil {
 			grant.Grant = *updatedGrant

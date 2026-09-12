@@ -18,6 +18,10 @@ func requiresBackgroundRootAccount(source string) bool {
 }
 
 func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context, identity requestSessionIdentity) *api.APIError {
+	if apiRelaySessionExempt(requestContext) {
+		usageRequestDiagnosticState(requestContext).RootAccountWait = "api_relay_exempt"
+		return nil
+	}
 	if blocked := handler.sessionBlacklistError(requestContext); blocked != nil {
 		return blocked
 	}

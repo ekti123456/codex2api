@@ -654,7 +654,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 				}
 			}
 			if account == nil && attempt == 0 && !continuationPinned {
-				account, stickyProxyURL = h.takeForkSourceAccount(sessionIdentity, affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
+				account, stickyProxyURL = h.takeForkSourceAccount(c.Request.Context(), sessionIdentity, affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy, selectionTraceForRequest(c))
 			}
 			if account != nil {
 				stickyProxyURL = account.GetProxyURL()

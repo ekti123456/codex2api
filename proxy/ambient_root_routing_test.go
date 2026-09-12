@@ -92,6 +92,7 @@ func TestAmbientSuggestionMissingRootNeverReachesUpstream(test *testing.T) {
 			other := &auth.Account{DBID: 18, AccessToken: "other", AccountID: "other", Models: []string{"gpt-5.6-sol"}}
 			if transport == "http" {
 				other.UpstreamType, other.BaseURL, other.APIKey = auth.UpstreamOpenAIResponses, upstream.URL, "other-key"
+				useCodexHTTPTestAccounts(test, other)
 			}
 			handler.store.AddAccount(other)
 			meta := newAPIPolicyMeta{

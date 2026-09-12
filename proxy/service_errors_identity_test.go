@@ -27,11 +27,14 @@ func legacyParentIdentityError(test *testing.T, handler *Handler, request *gin.C
 	rootKey := codexIdentityDigest("codex-account-root-v1", owner, accountIdentitySampleAccount, accountIdentitySampleRoot)
 	_, err = handler.db.ResolveCodexIdentityMapping(context.Background(), rootKey, nil, false)
 	require.NoError(test, err)
+	parentKey := codexIdentityDigest("codex-account-root-v1", owner, accountIdentitySampleAccount, parent)
+	_, err = handler.db.ResolveCodexIdentityMapping(context.Background(), parentKey, nil, false)
+	require.NoError(test, err)
 	request.Request = request.Request.WithContext(WithCodexIdentityStore(request.Request.Context(), handler.db))
 	beginUpstreamTrace(request.Request.Context(), account, "", false)
 	fingerprint := NewCodexTransportFingerprint(account, headers, body, "cache")
 	err = fingerprint.ClaimSessionIdentity(request.Request.Context(), account, "test-key")
-	require.ErrorContains(test, err, "既有会话的原始身份策略与账号级父引用不兼容")
+	require.ErrorContains(test, err, "父会话尚无可确认的账号级出站映射")
 	return err
 }
 
@@ -56,6 +59,8 @@ func TestServiceErrorsRecordIdentityRejectionAfterAccountSelection(test *testing
 	require.Equal(test, "identity_validation", gjson.GetBytes(event.UpstreamInfo, "error_stage").String())
 	require.Equal(test, int64(1695), gjson.GetBytes(event.UpstreamInfo, "account_id").Int())
 	require.Equal(test, "before_payload", gjson.GetBytes(event.UpstreamInfo, "send_phase").String())
+	require.Equal(test, "preserve", gjson.GetBytes(event.UpstreamInfo, "outbound_identity.account_mapping.references.0.policy").String())
+	require.Equal(test, "01a08303-49f4-7b53-b545-920f29610317", gjson.GetBytes(event.UpstreamInfo, "outbound_identity.account_mapping.references.0.original").String())
 }
 
 func TestCodexIdentityErrorAPIStatusRemainsClientError(test *testing.T) {

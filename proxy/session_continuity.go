@@ -173,6 +173,25 @@ func (handler *Handler) cacheSessionContinuity(key string, entry sessionContinui
 	handler.continuityRecords[key] = entry
 }
 
+func (handler *Handler) resolveForkSourceOwner(ctx context.Context, identity requestSessionIdentity, targetKey string, apiKeyID int64) (int64, string, error) {
+	if strings.TrimSpace(identity.forkSourceAffinityID) == "" {
+		return 0, "", nil
+	}
+	sourceKey := sessionAffinityKey(identity.forkSourceAffinityID, apiKeyID)
+	if sourceKey == "" || sourceKey == targetKey {
+		return 0, "", nil
+	}
+	entry, found, err := handler.readSessionContinuity(ctx, hashRiskIdentity(sourceKey))
+	if err != nil {
+		return 0, "", err
+	}
+	if found {
+		return entry.Record.AccountID, "fork_source_persistent", nil
+	}
+	accountID, _ := handler.store.LiveSessionAccountID(sourceKey, time.Now())
+	return accountID, "fork_source_live", nil
+}
+
 func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity requestSessionIdentity, affinityKey string, body []byte) *api.APIError {
 	request.Set(sessionContinuityContextKey, nil)
 	if !identity.stableIdentity || identity.relatedToRoot && !identity.ownsRootBinding || identity.bypassWindowAccounting || identity.unlinkedFallbackOnly || affinityKey == "" {
@@ -237,6 +256,13 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 			diagnostic.Previous = &previous
 		}
 	}
+	if err == nil && !found && owner == 0 && invalid == "" && known && identity.forkSourceAffinityID != "" && !requestRequiresCompactionOwner(request, body) {
+		owner, diagnostic.OwnerSource, err = handler.resolveForkSourceOwner(request.Request.Context(), identity, affinityKey, requestAPIKeyID(request))
+		if err != nil || owner == 0 || handler.store.FindByID(owner) == nil {
+			diagnostic.Result, diagnostic.WouldBlock, diagnostic.Action = "fork_owner_unavailable", true, "blocked"
+			return sessionContinuityError("fork_owner_unavailable")
+		}
+	}
 	diagnostic.OwnerAccount = owner
 	if owner > 0 {
 		selectionTraceForRequest(request).PinAccount(owner)
@@ -282,6 +308,8 @@ func sessionContinuityError(reason string) *api.APIError {
 		message = "当前请求来自已有上下文窗口，但无法恢复原会话账号，请新开对话后重试。"
 	} else if reason == "unbound_compaction" {
 		message = "无法恢复当前压缩请求的原会话账号，请先恢复主会话连接；无法恢复时请新开对话。"
+	} else if reason == "fork_owner_unavailable" {
+		message = "无法核实 fork 父会话的原始账号归属，请先恢复父会话后重试。"
 	} else if reason == "window_missing" || reason == "window_invalid" || reason == "number_conflict" || reason == "thread_conflict" {
 		message = "会话窗口标识缺失或不一致，请重新连接正确的对话。"
 	} else if reason == "ownership_unavailable" || reason == "storage_unavailable" {

@@ -10,7 +10,7 @@ import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
 import { writeClipboardText } from '../lib/clipboard'
 import { getTimeRangeISO, type TimeRangeKey } from '../lib/timeRange'
-import { SERVICE_ERROR_STAGES, serviceErrorCollectorHasLoss, type ServiceErrorEvent, type ServiceErrorPage } from '../lib/serviceErrors'
+import { SERVICE_ERROR_STAGES, serviceErrorCollectorHasLoss, serviceErrorNewAPIUserLabel, type ServiceErrorEvent, type ServiceErrorPage } from '../lib/serviceErrors'
 import { formatBeijingTime } from '../utils/time'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -142,17 +142,24 @@ export function ServiceErrorResults({ items }: { items: ServiceErrorEvent[] }) {
               {['time', 'status', 'stage', 'request', 'identity', 'error'].map(key => <TableHead key={key}>{t(`serviceErrors.columns.${key}`)}</TableHead>)}
               <TableHead className="w-20"><span className="sr-only">{t('opsErrors.details')}</span></TableHead>
             </TableRow></TableHeader>
-            <TableBody>{items.map(item => (
-              <TableRow key={item.id}>
-                <TableCell className="whitespace-nowrap font-geist-mono text-xs">{formatBeijingTime(item.created_at)}<div className="mt-1 text-muted-foreground">{item.duration_ms.toLocaleString()} ms</div></TableCell>
-                <TableCell><Badge variant={item.status_code >= 500 ? 'destructive' : 'outline'}>{item.status_code}</Badge><div className="mt-1 text-xs text-muted-foreground">{item.transport.toUpperCase()}</div></TableCell>
-                <TableCell className="whitespace-nowrap text-sm">{t(`serviceErrors.stages.${item.stage}`, { defaultValue: item.stage })}</TableCell>
-                <TableCell className="max-w-52 text-xs"><div className="truncate font-medium" title={item.model}>{item.model || '—'}</div><div className="mt-1 truncate text-muted-foreground" title={item.endpoint}>{item.method} {item.endpoint}</div><div className="mt-1 truncate text-muted-foreground" title={item.thread_source || item.request_type}>{item.thread_source || item.request_type}</div></TableCell>
-                <TableCell className="max-w-44 text-xs"><div className="truncate" title={item.api_key_name}>{item.api_key_name || (item.api_key_id ? `Key #${item.api_key_id}` : t('serviceErrors.unidentified'))}</div><div className="mt-1 truncate font-geist-mono text-muted-foreground" title={item.request_id}>{item.request_id}</div></TableCell>
-                <TableCell className="max-w-80"><div className="truncate font-geist-mono text-xs" title={item.code}>{item.code}</div><p className="mt-1 line-clamp-2 whitespace-normal break-words text-sm text-muted-foreground">{item.message}</p></TableCell>
-                <TableCell><Button type="button" size="sm" variant="ghost" onClick={() => setSelected(item)}>{t('opsErrors.details')}</Button></TableCell>
-              </TableRow>
-            ))}</TableBody>
+            <TableBody>{items.map(item => {
+              const newAPIUser = serviceErrorNewAPIUserLabel(item)
+              return (
+                <TableRow key={item.id}>
+                  <TableCell className="whitespace-nowrap font-geist-mono text-xs">{formatBeijingTime(item.created_at)}<div className="mt-1 text-muted-foreground">{item.duration_ms.toLocaleString()} ms</div></TableCell>
+                  <TableCell><Badge variant={item.status_code >= 500 ? 'destructive' : 'outline'}>{item.status_code}</Badge><div className="mt-1 text-xs text-muted-foreground">{item.transport.toUpperCase()}</div></TableCell>
+                  <TableCell className="whitespace-nowrap text-sm">{t(`serviceErrors.stages.${item.stage}`, { defaultValue: item.stage })}</TableCell>
+                  <TableCell className="max-w-52 text-xs"><div className="truncate font-medium" title={item.model}>{item.model || '—'}</div><div className="mt-1 truncate text-muted-foreground" title={item.endpoint}>{item.method} {item.endpoint}</div><div className="mt-1 truncate text-muted-foreground" title={item.thread_source || item.request_type}>{item.thread_source || item.request_type}</div></TableCell>
+                  <TableCell className="max-w-44 text-xs">
+                    <div className="truncate" title={item.api_key_name}>{item.api_key_name || (item.api_key_id ? `Key #${item.api_key_id}` : t('serviceErrors.unidentified'))}</div>
+                    {newAPIUser && <div className="mt-1 truncate font-medium" title={`NewAPI · ${newAPIUser}`}>NewAPI · {newAPIUser}</div>}
+                    <div className="mt-1 truncate font-geist-mono text-muted-foreground" title={item.request_id}>{item.request_id}</div>
+                  </TableCell>
+                  <TableCell className="max-w-80"><div className="truncate font-geist-mono text-xs" title={item.code}>{item.code}</div><p className="mt-1 line-clamp-2 whitespace-normal break-words text-sm text-muted-foreground">{item.message}</p></TableCell>
+                  <TableCell><Button type="button" size="sm" variant="ghost" onClick={() => setSelected(item)}>{t('opsErrors.details')}</Button></TableCell>
+                </TableRow>
+              )
+            })}</TableBody>
           </Table>
         )}
       </Card>

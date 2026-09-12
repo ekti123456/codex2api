@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { serviceErrorCollectorHasLoss } from './serviceErrors.ts'
+import { serviceErrorCollectorHasLoss, serviceErrorNewAPIUserLabel } from './serviceErrors.ts'
 import { serviceErrorSearchParams } from '../api.ts'
 
 test('service error filters preserve exact request IDs and opaque cursors', () => {
@@ -19,4 +19,15 @@ test('service error empty filters are omitted and collector loss is visible', ()
   assert.equal(serviceErrorCollectorHasLoss({ dropped: 0, write_failures: 0 }), false)
   assert.equal(serviceErrorCollectorHasLoss({ dropped: 1, write_failures: 0 }), true)
   assert.equal(serviceErrorCollectorHasLoss({ dropped: 0, write_failures: 1 }), true)
+})
+
+test('service error NewAPI caller labels display only verified names and IDs', () => {
+  const verified = { newapi_identity_verified: true, newapi_user_name: ' 示例用户 ', newapi_user_id: ' 1881 ' }
+  assert.equal(serviceErrorNewAPIUserLabel(verified), '示例用户 #1881')
+  assert.equal(serviceErrorNewAPIUserLabel({ ...verified, newapi_user_name: '' }), '#1881')
+  assert.equal(serviceErrorNewAPIUserLabel({ ...verified, newapi_user_id: '' }), '示例用户')
+  assert.equal(serviceErrorNewAPIUserLabel({ ...verified, newapi_identity_verified: false }), '')
+  assert.equal(serviceErrorNewAPIUserLabel({ newapi_user_name: 'unverified' }), '')
+  assert.equal(serviceErrorNewAPIUserLabel({ newapi_identity_verified: true }), '')
+  assert.equal(serviceErrorNewAPIUserLabel({}), '')
 })
