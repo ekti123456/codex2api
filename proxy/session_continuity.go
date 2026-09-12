@@ -146,7 +146,7 @@ func (handler *Handler) readSessionContinuity(ctx context.Context, key string) (
 	if err != nil {
 		return entry, false, err
 	}
-	if found && exists && entry.Record.AccountID == record.AccountID && entry.Record.NumberKnown && (!record.NumberKnown || entry.Record.Number > record.Number) {
+	if found && exists && entry.Record.AccountID == record.AccountID && entry.Record.FailoverCount == record.FailoverCount && entry.Record.NumberKnown && (!record.NumberKnown || entry.Record.Number > record.Number) {
 		record.Number, record.NumberKnown = entry.Record.Number, true
 	}
 	entry = sessionContinuityCacheEntry{Record: record, CheckedAt: time.Now(), WrittenAt: record.LastSeen}
@@ -217,6 +217,10 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 		owner, diagnostic.OwnerSource = grant.Grant.OwnerAccountID, "window_grant"
 	}
 	if found {
+		if epoch := outboundEpochFromContext(request.Request.Context()); epoch != nil && (epoch.record.AccountID != entry.Record.AccountID || epoch.record.FailoverCount != entry.Record.FailoverCount) {
+			return sessionContinuityError("owner_conflict")
+		}
+		handler.attachSessionOutboundEpoch(request, key, entry.Record)
 		diagnostic.OwnerSource = "persistent_binding"
 		if owner > 0 && owner != entry.Record.AccountID {
 			invalid = "owner_conflict"
@@ -307,7 +311,7 @@ func (handler *Handler) commitSessionContinuity(request *gin.Context, account *a
 	if err != nil {
 		return sessionContinuityError("ownership_unavailable")
 	}
-	if found && entry.Record.AccountID != account.ID() {
+	if found && (entry.Record.AccountID != account.ID() || state.Record.AccountID > 0 && entry.Record.FailoverCount != state.Record.FailoverCount) {
 		return sessionContinuityError("owner_conflict")
 	}
 	if state.Diagnostic.Mode == "enforce" && state.Known {
@@ -339,6 +343,7 @@ func (handler *Handler) commitSessionContinuity(request *gin.Context, account *a
 	entry.Record, entry.CheckedAt = next, time.Now()
 	handler.cacheSessionContinuity(state.Key, entry)
 	state.Record, state.Admitted = next, true
+	handler.attachSessionOutboundEpoch(request, state.Key, next)
 	selectionTraceForRequest(request).PinAccount(account.ID())
 	return nil
 }
@@ -351,7 +356,7 @@ func (handler *Handler) completeSessionContinuity(request *gin.Context, input *d
 	handler.continuityMu.Lock()
 	defer handler.continuityMu.Unlock()
 	entry, found := handler.continuityRecords[state.Key]
-	if found && entry.Record.AccountID == input.AccountID {
+	if found && entry.Record.AccountID == input.AccountID && entry.Record.FailoverCount == state.Record.FailoverCount {
 		number := state.Number
 		entry.Record.LastCompleted, entry.Record.CompletedNumber, entry.Record.LastStatus = time.Now().UTC(), &number, input.StatusCode
 		handler.continuityRecords[state.Key] = entry

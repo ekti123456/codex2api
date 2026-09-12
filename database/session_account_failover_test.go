@@ -316,7 +316,10 @@ func TestSwitchSessionContinuityAccountGenerationPreventsABA(test *testing.T) {
 	_, _, err = fixture.db.SwitchSessionContinuityAccount(test.Context(), fixture.input)
 	require.ErrorIs(test, err, ErrSessionOwnerConflict)
 	require.Equal(test, before, fixture.snapshot(test))
-	committed, err := fixture.db.CommitSessionContinuity(test.Context(), fixture.input.RootKey, fixture.record)
+	_, err = fixture.db.CommitSessionContinuity(test.Context(), fixture.input.RootKey, fixture.record)
+	require.ErrorIs(test, err, ErrSessionOwnerConflict)
+	require.Equal(test, before, fixture.snapshot(test))
+	committed, err := fixture.db.CommitSessionContinuity(test.Context(), fixture.input.RootKey, record)
 	require.NoError(test, err)
 	require.Equal(test, record, committed)
 	fixture.input.ExpectedGeneration = record.FailoverCount

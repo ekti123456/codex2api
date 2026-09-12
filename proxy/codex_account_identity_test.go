@@ -253,9 +253,7 @@ func TestCodexAccountIdentityVerifiedOwnerAndPreservedParent(test *testing.T) {
 	childBody, err := sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata.parent_thread_id", parent)
 	require.NoError(test, err)
 	child := NewCodexTransportFingerprint(account, headers, childBody, "cache")
-	require.NoError(test, child.ClaimSessionIdentity(first.Request.Context(), account, "token-first"))
-	require.Equal(test, parent, gjson.GetBytes(child.ApplyBody(childBody), "client_metadata.x-codex-turn-metadata.parent_thread_id").String())
-	require.Contains(test, child.accountIdentityDiagnostic.PreservedIDs, parent)
+	require.Error(test, child.ClaimSessionIdentity(first.Request.Context(), account, "token-first"))
 }
 
 func TestCodexAccountIdentityAnonymousContextStaysStable(test *testing.T) {

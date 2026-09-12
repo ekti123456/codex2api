@@ -26,6 +26,10 @@ func (db *DB) ensureCodexIdentityMappingTables(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS codex_identity_mapping_secret (id INTEGER PRIMARY KEY, secret TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS codex_identity_mapping_policies (root_key TEXT PRIMARY KEY, mode TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS codex_identity_alias_claims (alias_key TEXT PRIMARY KEY, source_key TEXT NOT NULL UNIQUE)`,
+		`CREATE TABLE IF NOT EXISTS codex_identity_epochs (identity_key TEXT PRIMARY KEY, state TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS codex_identity_references (reference_key TEXT PRIMARY KEY, state TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS codex_session_context_tokens (token_key TEXT PRIMARY KEY, expires_at BIGINT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_session_context_tokens_expiry ON codex_session_context_tokens(expires_at)`,
 	} {
 		if _, err := db.conn.ExecContext(ctx, statement); err != nil {
 			return err

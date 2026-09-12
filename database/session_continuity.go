@@ -58,7 +58,7 @@ func (db *DB) CommitSessionContinuity(ctx context.Context, key string, next Sess
 		if err = json.Unmarshal([]byte(raw), &committed); err != nil {
 			return err
 		}
-		if committed.AccountID != next.AccountID || committed.ThreadID != "" && committed.ThreadID != next.ThreadID {
+		if committed.AccountID != next.AccountID || committed.FailoverCount != next.FailoverCount || committed.ThreadID != "" && committed.ThreadID != next.ThreadID {
 			return ErrSessionOwnerConflict
 		}
 		if committed.ThreadID == "" {

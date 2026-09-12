@@ -50,6 +50,7 @@ func relayCodexTurnStateResponseHeader(c *gin.Context, affinityKey string, accou
 	}
 	c.Header(codexTurnStateHeader, token)
 	noteCodexTurnStateProvenance(affinityKey, account)
+	recordSessionTurnState(c.Request.Context(), account, token)
 }
 
 // commitResponsesStreamAttempt publishes the winning account's turn-state only
@@ -89,6 +90,7 @@ func (h *Handler) commitResponsesStreamAttempt(c *gin.Context, attempt *continuo
 	}
 	if stagedHeader && token != "" {
 		noteCodexTurnStateProvenance(affinityKey, account)
+		recordSessionTurnState(c.Request.Context(), account, token)
 	}
 	return nil
 }

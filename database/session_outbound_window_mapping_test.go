@@ -41,7 +41,7 @@ func TestSessionOutboundWindowsPersistAndSeparateGenerations(test *testing.T) {
 	require.True(test, created.Equal(record.LastSeen))
 	_, err = db.ResolveSessionOutboundWindows(ctx, "root", 2, 1, map[string]uint64{"child": 4})
 	require.Error(test, err)
-	record, err = db.CommitSessionContinuity(ctx, "root", SessionContinuityRecord{AccountID: 1, ThreadID: "main", Number: 50, NumberKnown: true})
+	record, err = db.CommitSessionContinuity(ctx, "root", SessionContinuityRecord{AccountID: 1, ThreadID: "main", Number: 50, NumberKnown: true, FailoverCount: record.FailoverCount})
 	require.NoError(test, err)
 	require.True(test, record.OutboundWindowReset)
 	require.EqualValues(test, 49, record.OutboundWindowBases["main"])

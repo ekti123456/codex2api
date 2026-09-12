@@ -4844,7 +4844,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					if continuousRetryBuffersAttempts(continuousRetryPolicy) {
 						compactionProvenancePayloads = append(compactionProvenancePayloads, bytes.Clone(data))
 					} else {
-						h.recordCompactionProvenanceFromPayload(context.Background(), account, data)
+						h.recordResponseContextProvenance(c, account, data)
 					}
 					parsed := gjson.ParseBytes(data)
 					eventType := normalizedUpstreamSSEEventType(sseEvent, data)
@@ -5074,7 +5074,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					}
 				} else {
 					for _, payload := range compactionProvenancePayloads {
-						h.recordCompactionProvenanceFromPayload(context.Background(), account, payload)
+						h.recordResponseContextProvenance(c, account, payload)
 					}
 				}
 			}
@@ -5126,7 +5126,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			} else if !isStream && outcome.logStatusCode == http.StatusOK && len(nonStreamResponseBody) > 0 {
 				copyGrokNativeResponseHeaders(c, resp.Header)
 				c.Data(http.StatusOK, nonStreamContentType, nonStreamResponseBody)
-				h.recordCompactionProvenanceFromPayload(context.Background(), account, nonStreamResponseBody)
+				h.recordResponseContextProvenance(c, account, nonStreamResponseBody)
 			}
 			if outcome.logStatusCode != http.StatusOK {
 				log.Printf("OpenAI Responses 流异常结束 (account %d, status %d): %s，已转发约 %d 字符", account.ID(), outcome.logStatusCode, outcome.failureMessage, deltaCharCount)
@@ -5530,7 +5530,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				if continuousRetryBuffersAttempts(continuousRetryPolicy) {
 					compactionProvenancePayloads = append(compactionProvenancePayloads, bytes.Clone(data))
 				} else {
-					h.recordCompactionProvenanceFromPayload(context.Background(), account, data)
+					h.recordResponseContextProvenance(c, account, data)
 				}
 				downstreamMu.Lock()
 				defer downstreamMu.Unlock()
@@ -5825,7 +5825,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				if continuousRetryBuffersAttempts(continuousRetryPolicy) {
 					compactionProvenancePayloads = append(compactionProvenancePayloads, bytes.Clone(data))
 				} else {
-					h.recordCompactionProvenanceFromPayload(context.Background(), account, data)
+					h.recordResponseContextProvenance(c, account, data)
 				}
 				parsed := gjson.ParseBytes(data)
 				eventType := normalizedUpstreamSSEEventType(sseEvent, data)
@@ -6002,7 +6002,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 			} else {
 				for _, payload := range compactionProvenancePayloads {
-					h.recordCompactionProvenanceFromPayload(context.Background(), account, payload)
+					h.recordResponseContextProvenance(c, account, payload)
 				}
 				if isStream && len(completedResponseData) > 0 {
 					if streamAttempt != nil {
@@ -6089,7 +6089,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				c.Status(http.StatusOK)
 				if err := writeAll(c.Writer, responseJSON); err == nil {
 					for _, payload := range compactionProvenancePayloads {
-						h.recordCompactionProvenanceFromPayload(context.Background(), account, payload)
+						h.recordResponseContextProvenance(c, account, payload)
 					}
 					if len(completedResponseData) > 0 {
 						cacheCompletedResponseWithOutputItems(respCacheOwner, []byte(expandedInputRaw), completedResponseData, completedResponseOutputItems)
@@ -6731,7 +6731,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				contentType = "application/json"
 			}
 			c.Data(http.StatusOK, contentType, respBody)
-			h.recordCompactionProvenanceFromPayload(context.Background(), account, respBody)
+			h.recordResponseContextProvenance(c, account, respBody)
 			return
 		}
 
@@ -7127,7 +7127,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account), c.Request.Context())
 		}
 		c.Data(http.StatusOK, "application/json", respBody)
-		h.recordCompactionProvenanceFromPayload(context.Background(), account, respBody)
+		h.recordResponseContextProvenance(c, account, respBody)
 		return
 	}
 }

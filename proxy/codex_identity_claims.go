@@ -74,6 +74,7 @@ func (handler *Handler) bindCodexIdentityClaims(ctx *gin.Context) {
 		claimer = handler.db
 	}
 	ctx.Request = ctx.Request.WithContext(context.WithValue(ctx.Request.Context(), codexIdentityClaimerContextKey{}, claimer))
+	handler.bindCodexReferenceRootLookup(ctx)
 }
 
 func codexIdentityDigest(parts ...string) string {

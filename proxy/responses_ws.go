@@ -1238,7 +1238,7 @@ func (h *Handler) streamResponsesWSUpstream(
 
 	readErr = readSSEStreamWithContinuousRetryKeepalive(c.Request.Context(), resp.Body, func(sseEvent string, data []byte) bool {
 		if wsReplay == nil {
-			h.recordCompactionProvenanceFromPayload(context.Background(), account, data)
+			h.recordResponseContextProvenance(c, account, data)
 		}
 		outputCollector.Add(data)
 		parsed := gjson.ParseBytes(data)
@@ -1525,7 +1525,7 @@ func (h *Handler) streamResponsesWSUpstream(
 	if outcome.logStatusCode == http.StatusOK && writeErr == nil && downstreamWrote {
 		if wsReplay != nil {
 			_ = wsReplay.ForEachMessage(func(payload []byte) error {
-				h.recordCompactionProvenanceFromPayload(context.Background(), account, payload)
+				h.recordResponseContextProvenance(c, account, payload)
 				return nil
 			})
 		}

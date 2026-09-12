@@ -89,12 +89,9 @@ func (handler *Handler) prepareBackgroundAccountMatch(request *gin.Context, root
 }
 
 func ValidateBackgroundAccountMatch(ctx context.Context, account *auth.Account) error {
-	if err := validateSessionOutboundEpoch(ctx, account); err != nil {
-		return err
-	}
 	match := backgroundAccountMatchFromContext(ctx)
 	if match == nil {
-		return nil
+		return validateSessionOutboundEpoch(ctx, account)
 	}
 	result := "matched"
 	entry, found, err := match.handler.readSessionContinuity(ctx, hashRiskIdentity(match.rootKey))
@@ -118,5 +115,5 @@ func ValidateBackgroundAccountMatch(ctx context.Context, account *auth.Account) 
 		return &Error{Code: "codex_background_account_mismatch", Type: ErrorTypeInvalidRequest,
 			HTTPStatus: http.StatusBadRequest, Message: "后台请求的主会话账号归属已变化或不可用，请重新发起请求；已停止发送请求正文。", Cause: err}
 	}
-	return nil
+	return validateSessionOutboundEpoch(ctx, account)
 }

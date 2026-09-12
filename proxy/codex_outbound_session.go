@@ -36,6 +36,7 @@ func NewCodexTransportFingerprint(account *auth.Account, headers http.Header, bo
 	fingerprint.identityValues = codexTransportIdentityValues(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	fingerprint.accountIdentityRequested = mode == "account"
 	fingerprint.accountIdentityInputs = codexAccountIdentityInputs(fingerprint.headers, NormalizeCodexRequestMetadata(body))
+	fingerprint.accountIdentityReferences = codexAccountIdentityReferences(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	fingerprint.accountWindowInputs, fingerprint.accountWindowInputError = codexAccountWindowInputs(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	if fingerprint.ids != nil {
 		fingerprint.ids.mode = auth.CodexFingerprintModeDevice

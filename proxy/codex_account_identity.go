@@ -23,6 +23,9 @@ type CodexIdentityStore interface {
 	ClaimCodexIdentities(context.Context, []string, string) error
 	ResolveCodexIdentityMapping(context.Context, string, []string, bool) (database.CodexIdentityMappingPolicy, error)
 	ClaimCodexIdentityAliases(context.Context, []database.CodexIdentityAliasClaim) error
+	PublishCodexIdentityEpoch(context.Context, string, database.CodexIdentityEpoch) error
+	ReadCodexIdentityReference(context.Context, string, string) (database.CodexIdentityEpoch, bool, bool, error)
+	ClaimCodexIdentityReference(context.Context, string, database.CodexIdentityEpoch) error
 }
 
 type codexAnonymousIdentityContextKey struct{}
@@ -138,13 +141,31 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		legacyKeys = nil
 		diagnostic.Generation, diagnostic.SegmentHash = epoch.record.FailoverCount, epochKey[:24]
 	}
-	policy, err := store.ResolveCodexIdentityMapping(ctx, rootKey, legacyKeys, fingerprint.accountIdentityRequested || epochKey != "")
+	mappedReference := false
+	for original := range fingerprint.accountIdentityReferences {
+		_, found, _, err := store.ReadCodexIdentityReference(ctx, codexIdentityDigest("codex-account-reference-v1", rootKey, original), codexIdentityDigest("codex-account-root-v1", owner, upstreamAccount, original))
+		if err != nil {
+			return codexAccountIdentityError("暂时无法核实父会话出站身份，请稍后重试。")
+		}
+		mappedReference = mappedReference || found
+		if !found {
+			_, record, exists, err := lookupCodexReferenceRoot(ctx, original)
+			if err != nil {
+				return codexAccountIdentityError("暂时无法核实父会话绑定账号，请稍后重试。")
+			}
+			mappedReference = mappedReference || exists && record.AccountID == account.ID() && record.OutboundWindowReset
+		}
+	}
+	policy, err := store.ResolveCodexIdentityMapping(ctx, rootKey, legacyKeys, fingerprint.accountIdentityRequested || epochKey != "" || mappedReference)
 	if err != nil {
 		return codexAccountIdentityError("暂时无法核实出站身份映射，请稍后重试。")
 	}
 	diagnostic.UpstreamAccount = diagnosticIdentifier(upstreamAccount)
 	diagnostic.ScopeHash = rootKey[:24]
 	if policy.Mode == "preserve" {
+		if mappedReference || fingerprint.accountIdentityRequested && len(fingerprint.accountIdentityReferences) > 0 {
+			return codexAccountIdentityError("既有会话的原始身份策略与账号级父引用不兼容，已停止发送原始父会话 ID；请新建 fork 或对话。")
+		}
 		diagnostic.Status = "preserved_existing"
 		return nil
 	}
@@ -183,14 +204,46 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 	}
 	sort.Strings(ordered)
 	claims := make([]database.CodexIdentityAliasClaim, 0, len(ordered))
+	references := make(map[string]database.CodexIdentityEpoch)
+	currentEpoch := database.CodexIdentityEpoch{Segment: epochKey}
+	if epoch != nil {
+		currentEpoch.RootKey, currentEpoch.Generation = epoch.key, epoch.record.FailoverCount
+	}
 	for _, original := range ordered {
-		identityKey := codexIdentityDigest("codex-account-root-v1", owner, upstreamAccount, original)
+		baseIdentityKey := codexIdentityDigest("codex-account-root-v1", owner, upstreamAccount, original)
+		identityKey := baseIdentityKey
+		identityEpoch := currentEpoch
+		if fingerprint.accountIdentityReferences[original] {
+			identityEpoch = database.CodexIdentityEpoch{}
+			referenceKey := codexIdentityDigest("codex-account-reference-v1", rootKey, original)
+			resolved, found, bound, err := store.ReadCodexIdentityReference(ctx, referenceKey, baseIdentityKey)
+			if err != nil {
+				return codexAccountIdentityError("暂时无法核实父会话出站身份，请稍后重试。")
+			}
+			if found {
+				identityEpoch = resolved
+				if !bound && resolved.RootKey != "" && resolved.RootKey == currentEpoch.RootKey && resolved.Generation < currentEpoch.Generation {
+					identityEpoch = currentEpoch
+				}
+			}
+			if !bound {
+				sourceKey, sourceRecord, exists, err := lookupCodexReferenceRoot(ctx, original)
+				if err != nil || exists && !found && sourceRecord.AccountID != account.ID() {
+					return codexAccountIdentityError("无法核实该账号对应的父会话出站段，已停止发送父引用。")
+				}
+				if exists && sourceRecord.AccountID == account.ID() && (!found || sourceRecord.FailoverCount > identityEpoch.Generation) {
+					sourceEpoch := &sessionOutboundEpoch{key: sourceKey, record: sourceRecord}
+					identityEpoch = database.CodexIdentityEpoch{RootKey: sourceKey, Generation: sourceRecord.FailoverCount, Segment: sourceEpoch.identityKey()}
+				}
+			}
+			references[referenceKey] = identityEpoch
+		}
 		identityLegacyKeys := make([]string, 0, len(accountScopes))
 		for _, scope := range accountScopes {
 			identityLegacyKeys = append(identityLegacyKeys, codexIdentityDigest("codex-session-v1", scope, original))
 		}
-		if epochKey != "" {
-			identityKey = codexIdentityDigest("codex-account-segment-root-v1", owner, upstreamAccount, epochKey, original)
+		if identityEpoch.Segment != "" {
+			identityKey = codexIdentityDigest("codex-account-segment-root-v1", owner, upstreamAccount, identityEpoch.Segment, original)
 			identityLegacyKeys = nil
 		}
 		identityPolicy, err := store.ResolveCodexIdentityMapping(ctx, identityKey, identityLegacyKeys, true)
@@ -198,21 +251,26 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 			return codexAccountIdentityError("暂时无法核实关联会话身份映射，请稍后重试。")
 		}
 		if identityPolicy.Mode == "preserve" {
+			if fingerprint.accountIdentityReferences[original] {
+				return codexAccountIdentityError("父会话尚无可确认的账号级出站映射，已停止发送原始父会话 ID；请先恢复父会话或新开对话。")
+			}
 			diagnostic.PreservedIDs = append(diagnostic.PreservedIDs, original)
 			continue
 		}
 		if identityPolicy.Mode != policy.Mode || identityPolicy.Secret != policy.Secret {
 			return codexAccountIdentityError("关联会话身份映射不一致，请检查数据库完整性。")
 		}
-		outbound := original[:len(original)-9] + mapping.digest("identity", original)[:9]
+		identityMapping := *mapping
+		identityMapping.epoch = identityEpoch.Segment
+		outbound := original[:len(original)-9] + identityMapping.digest("identity", original)[:9]
 		if outbound == original {
 			return codexAccountIdentityError("出站会话标识发生冲突，已停止请求，请联系管理员。")
 		}
 		mapping.aliases[original] = outbound
 		diagnostic.Changes = append(diagnostic.Changes, codexAccountIdentityChange{Original: original, Outbound: outbound})
 		sourceKey := codexIdentityDigest("codex-account-alias-source-v1", owner, upstreamAccount, original)
-		if epochKey != "" {
-			sourceKey = codexIdentityDigest("codex-account-segment-source-v1", owner, upstreamAccount, epochKey, original)
+		if identityEpoch.Segment != "" {
+			sourceKey = codexIdentityDigest("codex-account-segment-source-v1", owner, upstreamAccount, identityEpoch.Segment, original)
 		}
 		claims = append(claims, database.CodexIdentityAliasClaim{
 			AliasKey:  codexIdentityDigest("codex-account-alias-v1", outbound),
@@ -224,6 +282,24 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 			return codexAccountIdentityError("出站会话标识发生冲突，已停止请求，请联系管理员。")
 		}
 		return codexAccountIdentityError("暂时无法登记出站身份映射，请稍后重试。")
+	}
+	if epoch == nil || !epoch.preview {
+		if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
+			return err
+		}
+		for referenceKey, referenceEpoch := range references {
+			if err := store.ClaimCodexIdentityReference(ctx, referenceKey, referenceEpoch); err != nil {
+				return codexAccountIdentityError("父会话出站引用已变化或暂时不可用，请重新发起请求。")
+			}
+		}
+		for _, original := range []string{strings.ToLower(root), strings.ToLower(fingerprint.headers.Get(codexThreadIDHeader))} {
+			if mapping.aliases[original] == "" || fingerprint.accountIdentityReferences[original] {
+				continue
+			}
+			if err := store.PublishCodexIdentityEpoch(ctx, codexIdentityDigest("codex-account-root-v1", owner, upstreamAccount, original), currentEpoch); err != nil {
+				return codexAccountIdentityError("会话出站映射代数已变化或暂时不可用，请重新发起请求。")
+			}
+		}
 	}
 	diagnostic.Version = policy.Mode
 	diagnostic.Status = "mapped"

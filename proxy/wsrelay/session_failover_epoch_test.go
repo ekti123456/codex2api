@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
@@ -65,7 +66,7 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 				return
 			}
 			seen <- capture{request.Header.Clone(), body, index}
-			if err := connection.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"epoch-response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`)); err != nil {
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"epoch-response","status":"completed","output":[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"epoch-state-%d"}],"usage":{"input_tokens":1,"output_tokens":1}}}`, index))); err != nil {
 				return
 			}
 		}
@@ -94,6 +95,10 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 			atomic.StoreInt32(&second.Disabled, 1)
 		}
 		body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":true,"input":"full plaintext context","client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","thread_source":"user","request_kind":"turn","window_id":"%s:%d","window_number":%d}}}`, root, root, root, root, root, number, number))
+		if number == 1 || number == 3 {
+			body, err = sjson.SetRawBytes(body, "input", []byte(fmt.Sprintf(`[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"epoch-state-%d"},{"role":"user","content":"continue"}]`, number/2+1)))
+			require.NoError(test, err)
+		}
 		recorder := httptest.NewRecorder()
 		request, _ := gin.CreateTestContext(recorder)
 		request.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))

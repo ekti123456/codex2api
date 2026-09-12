@@ -35,7 +35,9 @@ type sessionAccountFailoverPlan struct {
 }
 
 func (handler *Handler) validateMigratedSessionContext(request *gin.Context, body []byte, record database.SessionContinuityRecord, rootKeys ...string) *api.APIError {
-	blocked := sessionFailoverContextBlock(sessionFailoverRequestHeaders(request), body)
+	known, cancelKnown := handler.sessionContextVerifier(request, record, rootKeys...)
+	defer cancelKnown()
+	blocked := sessionFailoverContextBlockWithVerifier(sessionFailoverRequestHeaders(request), body, known)
 	if blocked == "missing_request_context" {
 		return nil
 	}
@@ -50,7 +52,7 @@ func (handler *Handler) validateMigratedSessionContext(request *gin.Context, bod
 		}
 		if found && affinity.AccountID == record.AccountID && segmentMatches {
 			withoutPrevious, _ := sjson.DeleteBytes(body, "previous_response_id")
-			blocked = sessionFailoverContextBlock(sessionFailoverRequestHeaders(request), withoutPrevious)
+			blocked = sessionFailoverContextBlockWithVerifier(sessionFailoverRequestHeaders(request), withoutPrevious, known)
 			if blocked == "missing_request_context" || blocked == "incomplete_tool_context" {
 				blocked = ""
 			}
@@ -83,10 +85,13 @@ func (handler *Handler) restoreMigratedSessionOwner(request *gin.Context, key st
 	if err != nil {
 		return sessionContinuityError("ownership_unavailable")
 	}
-	if !found || entry.Record.FailoverCount == 0 {
+	if !found {
 		return nil
 	}
 	handler.attachSessionOutboundEpoch(request, hashRiskIdentity(key), entry.Record)
+	if entry.Record.FailoverCount == 0 {
+		return nil
+	}
 	if err := handler.validateMigratedSessionContext(request, body, entry.Record, key); err != nil {
 		return err
 	}
@@ -149,50 +154,7 @@ func (handler *Handler) sessionFailoverReasonForRequest(request *gin.Context, ac
 }
 
 func sessionFailoverContextBlock(headers http.Header, body []byte) string {
-	for _, path := range []string{"previous_response_id", "conversation", "conversation_id"} {
-		if value := gjson.GetBytes(body, path); value.Exists() && value.Type != gjson.Null && value.String() != "" {
-			return "upstream_continuation"
-		}
-	}
-	metadata := gjson.GetBytes(body, "client_metadata")
-	if headers.Get("X-Codex-Turn-State") != "" || metadata.Get("x-codex-turn-state").Exists() {
-		return "connection_turn_state"
-	}
-	input := gjson.GetBytes(body, "input")
-	if !input.Exists() || input.Type == gjson.Null || input.IsArray() && len(input.Array()) == 0 {
-		return "missing_request_context"
-	}
-	blocked := false
-	var inspect func(gjson.Result)
-	inspect = func(value gjson.Result) {
-		if blocked || !value.IsArray() && !value.IsObject() {
-			return
-		}
-		value.ForEach(func(key, item gjson.Result) bool {
-			if (key.String() == "encrypted_content" || key.String() == "file_id") && item.Type != gjson.Null && item.String() != "" || key.String() == "type" && item.String() == "item_reference" {
-				blocked = true
-				return false
-			}
-			inspect(item)
-			return !blocked
-		})
-	}
-	inspect(input)
-	if blocked {
-		return "opaque_upstream_context"
-	}
-	calls := make(map[string]bool)
-	for _, item := range input.Array() {
-		if strings.HasSuffix(item.Get("type").String(), "_call") {
-			calls[item.Get("call_id").String()] = true
-		}
-	}
-	for _, item := range input.Array() {
-		if strings.HasSuffix(item.Get("type").String(), "_call_output") && !calls[item.Get("call_id").String()] {
-			return "incomplete_tool_context"
-		}
-	}
-	return ""
+	return sessionFailoverContextBlockWithVerifier(headers, body, nil)
 }
 
 func (handler *Handler) prepareSessionAccountFailover(request *gin.Context, key string, body []byte, policy auth.DispatchPolicy) (bool, *api.APIError) {

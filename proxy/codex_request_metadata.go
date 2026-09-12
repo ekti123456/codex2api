@@ -16,6 +16,7 @@ type CodexFingerprint struct {
 	identityValues            []string
 	accountIdentityRequested  bool
 	accountIdentityInputs     []string
+	accountIdentityReferences map[string]bool
 	accountWindowInputs       map[string]uint64
 	accountWindowInputError   error
 	accountIdentity           *codexAccountIdentity
