@@ -180,7 +180,7 @@ func (handler *Handler) upgradePersonalWindow(request *gin.Context, identity ver
 				return errors.New("你的扩容窗口额度已用尽，请等待恢复或使用已有窗口")
 			}
 			current.ID = uuid.NewString()
-			current.Expanded, current.Multiplier, current.ExtraLimit, current.UpgradedAt = true, input.Multiplier, input.ExtraLimit, &now
+			current.Expanded, current.Multiplier, current.ExtraLimit, current.UpgradedAt = true, input.expansionMultiplier(len(counted)+1), input.ExtraLimit, &now
 			upgraded = *current
 			return nil
 		})

@@ -3,10 +3,19 @@ package database
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
 const MaxUsageRequestDiagnosticsBytes = 12 * 1024
+
+func normalizeUsageWindowNumber(value string) string {
+	number, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return ""
+	}
+	return strconv.FormatUint(number, 10)
+}
 
 func normalizeUsageSessionIDPrefix(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))

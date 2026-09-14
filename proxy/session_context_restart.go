@@ -190,11 +190,13 @@ func PrepareSessionRestartOutbound(ctx context.Context, account *auth.Account, b
 func sessionRestartRoutingContext(request *gin.Context, body []byte) ([]byte, http.Header) {
 	plan, _ := request.Request.Context().Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan)
 	epoch := outboundEpochFromContext(request.Request.Context())
-	if plan == nil && (epoch == nil || !epoch.record.LossyContextRestart) {
+	state := continuityRequest(request)
+	continuityRestart := state != nil && state.RestartReason != "" && !state.Admitted
+	if plan == nil && !continuityRestart && (epoch == nil || !epoch.record.LossyContextRestart) {
 		return body, sessionFailoverRequestHeaders(request)
 	}
 	var known sessionContextTokenVerifier
-	if plan == nil {
+	if plan == nil && !continuityRestart {
 		var cancel context.CancelFunc
 		known, cancel = epoch.restartContextVerifier(request.Request.Context())
 		defer cancel()

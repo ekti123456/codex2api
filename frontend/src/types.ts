@@ -3466,6 +3466,8 @@ export interface APIKeyAccountStatsResponse {
 }
 
 export interface UsageLog {
+	window_number_original?: string
+	window_number_outbound?: string
   session_id_prefix?: string
 	request_type?: string
   request_id?: string

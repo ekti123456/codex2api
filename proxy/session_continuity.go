@@ -37,14 +37,15 @@ type sessionContinuityCacheEntry struct {
 }
 
 type sessionContinuityRequest struct {
-	Key        string
-	ThreadID   string
-	Number     uint64
-	Known      bool
-	Record     database.SessionContinuityRecord
-	Admitted   bool
-	StartedAt  time.Time
-	Diagnostic *sessionContinuityDiagnostic
+	Key           string
+	ThreadID      string
+	Number        uint64
+	Known         bool
+	Record        database.SessionContinuityRecord
+	Admitted      bool
+	StartedAt     time.Time
+	Diagnostic    *sessionContinuityDiagnostic
+	RestartReason string
 }
 
 func continuityRequest(request *gin.Context) *sessionContinuityRequest {
@@ -286,7 +287,15 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 		diagnostic.Result, diagnostic.WouldBlock, diagnostic.Action = "unbound_compaction", true, "blocked"
 		return sessionContinuityError("unbound_compaction")
 	}
-	if mode == "off" {
+	restartReason := ""
+	if mode == "off" && known && invalid == "" && err == nil && (diagnostic.Result == "window_gap" || diagnostic.Result == "unbound_nonzero") {
+		if restartError := handler.prepareContinuityRestart(request, body); restartError != nil {
+			diagnostic.Action = "blocked"
+			return restartError
+		}
+		restartReason = diagnostic.Result
+		diagnostic.WouldBlock, diagnostic.Action = false, "restart_pending"
+	} else if mode == "off" {
 		diagnostic.Result, diagnostic.WouldBlock, diagnostic.Action = "disabled", false, "disabled"
 	} else if diagnostic.WouldBlock {
 		diagnostic.Action = "observe"
@@ -295,7 +304,7 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 			return sessionContinuityError(diagnostic.Result)
 		}
 	}
-	state := &sessionContinuityRequest{Key: key, ThreadID: thread, Number: number, Known: known && invalid == "", Record: entry.Record, StartedAt: time.Now().UTC(), Diagnostic: diagnostic}
+	state := &sessionContinuityRequest{Key: key, ThreadID: thread, Number: number, Known: known && invalid == "", Record: entry.Record, StartedAt: time.Now().UTC(), Diagnostic: diagnostic, RestartReason: restartReason}
 	request.Set(sessionContinuityContextKey, state)
 	if owner > 0 {
 		if err := handler.bindWindowGrantOwner(request, owner, affinityKey); err != nil {
@@ -341,6 +350,9 @@ func (handler *Handler) commitSessionContinuity(request *gin.Context, account *a
 	entry, found, err := handler.readSessionContinuity(request.Request.Context(), state.Key)
 	if err != nil {
 		return sessionContinuityError("ownership_unavailable")
+	}
+	if state.RestartReason != "" {
+		return handler.commitContinuityRestart(request, account, state)
 	}
 	if found && (entry.Record.AccountID != account.ID() || state.Record.AccountID > 0 && entry.Record.FailoverCount != state.Record.FailoverCount) {
 		return sessionContinuityError("owner_conflict")

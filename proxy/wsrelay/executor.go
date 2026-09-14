@@ -140,7 +140,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	wsBody = applyCodexFrameMetadata(wsBody, ginHeaders)
 	wsBody, ginHeaders = proxy.ApplyCodexAnalyticsMetadata(wsBody, ginHeaders)
 	headerSessionID := resolveHandshakeSessionID(sessionID, poolRouteKey, wsBody)
-	fingerprint := proxy.NewCodexTransportFingerprint(account, ginHeaders, wsBody, headerSessionID)
+	fingerprint := proxy.NewCodexTransportFingerprint(account, ginHeaders, wsBody, headerSessionID, ctx)
 	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
 		return nil, err
 	}

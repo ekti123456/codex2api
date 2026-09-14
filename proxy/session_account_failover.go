@@ -21,6 +21,7 @@ type sessionAccountFailoverContextKey struct{}
 type sessionAccountFailoverDiagnostic = database.SessionAccountFailoverDiagnostic
 
 func sessionFailoverContextError(request *gin.Context, diagnostic *sessionAccountFailoverDiagnostic, block string) *api.APIError {
+	continuityRestart := strings.HasPrefix(diagnostic.TriggerReason, "continuity_") || strings.HasPrefix(diagnostic.Reason, "continuity_")
 	diagnostic.Result, diagnostic.Reason, diagnostic.BlockReason = "blocked", block, block
 	state := usageRequestDiagnosticState(request)
 	state.AccountFailover = diagnostic
@@ -65,6 +66,9 @@ func sessionFailoverContextError(request *gin.Context, diagnostic *sessionAccoun
 	message := "绑定账号不可用，当前请求不能安全换号：" + reason + "。" + guidance
 	if diagnostic.Phase == "after_switch" {
 		message = "会话已更换绑定账号，当前请求不能安全续接：" + reason + "。" + guidance
+	}
+	if continuityRestart {
+		message = "会话已重建出站上下文，当前请求不能续接：" + reason + "。" + guidance
 	}
 	request.Header("X-Should-Retry", "false")
 	return api.NewAPIErrorWithDetails("codex_session_failover_context_required", message, api.ErrorTypeInvalidRequest,
@@ -377,6 +381,7 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 		handler.store.BindSessionAffinity(key, candidate, candidate.GetProxyURL())
 		handler.cacheSessionContinuity(state.Key, sessionContinuityCacheEntry{Record: committed, CheckedAt: time.Now(), WrittenAt: time.Now()})
 		state.Record = committed
+		state.RestartReason = ""
 		handler.attachSessionOutboundEpoch(request, state.Key, committed)
 		state.Diagnostic.OwnerAccount, state.Diagnostic.OwnerSource = candidate.ID(), "account_failover"
 		selectionTraceForRequest(request).PinAccount(candidate.ID())

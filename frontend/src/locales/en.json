@@ -61,7 +61,7 @@
     "enforce": "Enforce",
     "confirm": "Enforcement rejects unbound nonzero windows, sequence gaps and inconsistent identities. Rollback is allowed with verified ownership of the same account and thread. Review observation diagnostics before enabling. Continue?",
     "description": "Bound main requests may keep the same sequence or advance by one. Existing bindings establish a baseline on first observation. Unbound windows should start at zero. Compaction records its current sequence without advancing it early.",
-    "protection": "Observation adds would_block to request diagnostics without blocking by sequence. This control does not disable signature checks, account ownership protection or expansion billing."
+    "protection": "When off, a sequence gap or an unbound nonzero window starts a new outbound session at 0, clearing old session references and unusable encrypted context. Observation adds would_block to request diagnostics without blocking by sequence. This control does not disable signature checks, account ownership protection or expansion billing."
   },
   "nav": {
     "dashboard": "Dashboard",

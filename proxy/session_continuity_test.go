@@ -38,6 +38,7 @@ func TestSessionContinuityObservationAndEnforcement(test *testing.T) {
 			config.Advanced.Risk.SessionContinuityMode = mode
 			handler.store.SetPromptFilterConfig(config)
 			request, body := continuityTestRequest(71, "turn")
+			body = bytes.Replace(body, []byte(`"model":`), []byte(`"input":"Current question","model":`), 1)
 			apiErr := handler.prepareSessionContinuity(request, requestSessionIdentity{stableIdentity: true}, "unbound::api-key:101", body)
 			if mode == "enforce" {
 				require.NotNil(test, apiErr)

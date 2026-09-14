@@ -68,6 +68,8 @@ type usageRecentAccountDiagnostic struct {
 }
 
 type usageRequestDiagnostics struct {
+	WindowNumberOriginal   string                                   `json:"window_number_original,omitempty"`
+	WindowNumberOutbound   string                                   `json:"window_number_outbound,omitempty"`
 	SessionIDPrefix        string                                   `json:"session_id_prefix,omitempty"`
 	Version                int                                      `json:"version"`
 	StartedAt              time.Time                                `json:"started_at"`
@@ -270,6 +272,13 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 	}
 	state.ResponsesInput = diagnoseResponsesInput(body, headers, endpoint)
 	state.SessionIDPrefix = requestSessionIDPrefix(headers, body)
+	state.WindowNumberOriginal, state.WindowNumberOutbound = "", ""
+	if c.Request != nil {
+		_, number, known, invalid := parseContinuityWindow(headers, body, isResponsesWebSocketUpgradeRequest(c.Request))
+		if known && invalid == "" {
+			state.WindowNumberOriginal = strconv.FormatUint(number, 10)
+		}
+	}
 	c.Set(sessionOperationsContextKey, nil)
 	c.Set(sessionContinuityContextKey, nil)
 	if c.Request != nil {
@@ -479,6 +488,7 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 	if trace := selectionTraceForRequest(c); trace != nil {
 		snapshot.CandidateRejections = trace.Snapshot().Reasons
 	}
+	populateUsageWindowNumbers(&snapshot, input)
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return

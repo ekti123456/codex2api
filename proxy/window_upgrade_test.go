@@ -26,7 +26,7 @@ func TestWindowUpgradeKeepsAccountAndExpiryAndRejectsOldTariff(test *testing.T) 
 	old := windowAuthorizationRequest(test, handler, grant, "user")
 	require.Nil(test, handler.requestWindowGrantError(old))
 	require.True(test, handler.store.AdmitAccountSession(account, "other-window", time.Now()))
-	input := windowControlRequest{Operation: "upgrade", AllowExpansion: true, ExtraLimit: 2, Multiplier: 1.5, Root: grant.Grant.Root, GrantID: grant.Grant.ID}
+	input := windowControlRequest{Operation: "upgrade_tiered", AllowExpansion: true, ExtraLimit: 2, Multiplier: 1.5, MultiplierStep: 0.1, Root: grant.Grant.Root, GrantID: grant.Grant.ID}
 	body, err := json.Marshal(input)
 	require.NoError(test, err)
 	foreign, foreignResponse := windowExpansionTestContext(test, "/v1/session-windows", body, newAPIPolicyMeta{})
@@ -41,7 +41,7 @@ func TestWindowUpgradeKeepsAccountAndExpiryAndRejectsOldTariff(test *testing.T) 
 	require.NoError(test, err)
 	upgraded := state.Windows[grant.Grant.Root]
 	require.True(test, upgraded.Expanded)
-	require.Equal(test, 1.5, upgraded.Multiplier)
+	require.Equal(test, 1.1, upgraded.Multiplier)
 	require.Equal(test, grant.Grant.ExpiresAt, upgraded.ExpiresAt)
 	require.Equal(test, grant.Grant.CreatedAt, upgraded.CreatedAt)
 	require.Equal(test, account.ID(), upgraded.OwnerAccountID)

@@ -10,6 +10,7 @@ import ChannelFilter, { useUsageChannel } from '../components/ChannelFilter'
 import ChannelLogo from '../components/ChannelLogo'
 import CompactionBadges from '../components/CompactionBadges'
 import UsageRequestDiagnostics, { UsageRequestTypeButton } from '../components/UsageRequestDiagnostics'
+import { UsageWindowNumberBadge } from '../components/UsageWindowNumberBadge'
 import { usageRequestTypes, usageRequestTypeLabelKey } from '../lib/usageRequestDiagnostics'
 import { confirmedUsageLogDownload, downloadUsageLogPages, saveUsageLogExport } from '../lib/usageLogExport'
 import ModelLogo from '../components/ModelLogo'
@@ -2756,6 +2757,7 @@ export default function Usage() {
                               {formatServiceTierLabel(t, log.billing_service_tier || log.service_tier)}
                             </Badge>
                           ) : null}
+                          {visibleColumns.model && <UsageWindowNumberBadge log={log} />}
                           {visibleColumns.type && <StreamBadge stream={log.stream} />}
                           <CompactionBadges
                             compact={log.compact}
@@ -2988,6 +2990,7 @@ export default function Usage() {
                               </Badge>
                             )}
                           </div>
+                          <UsageWindowNumberBadge log={log} />
                         </TableCell>}
                         {visibleColumns.requestType && <TableCell><UsageRequestTypeButton log={log} onClick={() => setDiagnosticsLog(log)} /></TableCell>}
                         {visibleColumns.sessionIDPrefix && <TableCell className="font-mono text-xs" title={t('usage.sessionIDPrefixHint')}>{log.session_id_prefix ? <button type="button" className="text-primary hover:underline" onClick={() => searchSessionPrefix(log.session_id_prefix!)}>{log.session_id_prefix}</button> : '-'}</TableCell>}

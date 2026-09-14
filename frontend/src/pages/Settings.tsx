@@ -3637,14 +3637,6 @@ export default function Settings() {
                         onCheckedChange={(checked) => autoSaveBooleanField('codex_ws_context_takeover', checked)}
                       />
                     </SettingField>
-                    <SettingField label={t('settings.codexWSCompressionLevel')} description={t('settings.codexWSCompressionLevelHint')} channels={CHANNELS_CODEX_ONLY}>
-                      <Select
-                        value={String(settingsForm.codex_ws_compression_level)}
-                        disabled={!settingsForm.codex_ws_context_takeover}
-                        onValueChange={(value) => void autoSaveSettingsPatch({ codex_ws_compression_level: Number(value) })}
-                        options={Array.from({ length: 9 }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }))}
-                      />
-                    </SettingField>
                     <SettingField label={t('settings.codexWSFragmentation')} description={t('settings.codexWSFragmentationHint')} layout="switch" channels={CHANNELS_CODEX_ONLY}>
                       <Switch
                         checked={!settingsForm.codex_ws_disable_fragmentation}
@@ -3786,6 +3778,14 @@ export default function Settings() {
                             codex_ws_stateless_slots: value,
                           })
                         }}
+                      />
+                    </SettingField>
+                    <SettingField label={t('settings.codexWSCompressionLevel')} description={t('settings.codexWSCompressionLevelHint')} channels={CHANNELS_CODEX_ONLY}>
+                      <Select
+                        value={String(settingsForm.codex_ws_compression_level)}
+                        disabled={!settingsForm.codex_ws_context_takeover}
+                        onValueChange={(value) => void autoSaveSettingsPatch({ codex_ws_compression_level: Number(value) })}
+                        options={Array.from({ length: 9 }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }))}
                       />
                     </SettingField>
                   </div>

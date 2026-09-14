@@ -634,7 +634,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	}
 	cacheKey = ScopeCodexPromptCacheKey(ctx, cacheKey)
 	requestBody, headers = ApplyCodexAnalyticsMetadata(requestBody, headers)
-	fingerprint := NewCodexTransportFingerprint(account, headers, requestBody, cacheKey)
+	fingerprint := NewCodexTransportFingerprint(account, headers, requestBody, cacheKey, ctx)
 	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
 		return nil, err
 	}
@@ -1034,7 +1034,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	}
 	cacheKey = ScopeCodexPromptCacheKey(ctx, cacheKey)
 	requestBody, headers = ApplyCodexAnalyticsMetadata(requestBody, headers)
-	fingerprint := NewCodexTransportFingerprint(account, headers, requestBody, cacheKey)
+	fingerprint := NewCodexTransportFingerprint(account, headers, requestBody, cacheKey, ctx)
 	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
 		return nil, err
 	}

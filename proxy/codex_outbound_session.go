@@ -26,9 +26,12 @@ func codexOutboundSessionMode() string {
 	}
 }
 
-func NewCodexTransportFingerprint(account *auth.Account, headers http.Header, body []byte, upstreamSessionID string) *CodexFingerprint {
+func NewCodexTransportFingerprint(account *auth.Account, headers http.Header, body []byte, upstreamSessionID string, contexts ...context.Context) *CodexFingerprint {
 	fingerprint := NewCodexFingerprint(account, headers, body)
 	mode := codexOutboundSessionMode()
+	if len(contexts) > 0 && outboundEpochFromContext(contexts[0]).identityKey() != "" {
+		mode = "account"
+	}
 	if account == nil || account.IsRelayStyle() || (mode != "preserve" && mode != "account") {
 		return fingerprint
 	}

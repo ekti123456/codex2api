@@ -15,6 +15,7 @@ type WindowControlDiagnostic struct {
 	AllowExpansion      bool                               `json:"allow_expansion"`
 	ExtraLimit          int                                `json:"extra_limit"`
 	Multiplier          float64                            `json:"multiplier"`
+	MultiplierStep      float64                            `json:"multiplier_step,omitempty"`
 	UserLimit           int                                `json:"user_limit"`
 	WindowSeconds       int                                `json:"window_seconds"`
 	ActiveWindows       int                                `json:"active_windows"`

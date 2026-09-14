@@ -18,7 +18,8 @@ func windowControlDiagnostic(request *gin.Context) *database.WindowControlDiagno
 func (handler *Handler) beginWindowControlDiagnostic(request *gin.Context, input windowControlRequest, identity verifiedNewAPIPolicyContext, subject string, now time.Time, limit, seconds, active int) *database.WindowControlDiagnostic {
 	diagnostic := &database.WindowControlDiagnostic{
 		ObservedAt: now, AllowExpansion: input.AllowExpansion, ExtraLimit: input.ExtraLimit, Multiplier: input.Multiplier,
-		UserLimit: limit, WindowSeconds: seconds, ActiveWindows: active, RootWindowState: "unresolved",
+		MultiplierStep: input.MultiplierStep,
+		UserLimit:      limit, WindowSeconds: seconds, ActiveWindows: active, RootWindowState: "unresolved",
 	}
 	if identity.Meta.RootSessionState == newAPIPolicyRootSessionResolved && identity.Meta.RootSessionFingerprint != "" {
 		diagnostic.RootHash = hashRiskIdentity(identity.Meta.RootSessionFingerprint)

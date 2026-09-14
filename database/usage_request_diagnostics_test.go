@@ -20,7 +20,7 @@ func TestUsageRequestDiagnosticsPersistenceAndLightweightLists(test *testing.T) 
 	}
 	test.Cleanup(func() { _ = db.Close() })
 	const payload = `{"version":1,"selected_account_id":17,"incoming":{"client_metadata":{"thread_source":"guardian_review"}}}`
-	if err := db.InsertUsageLog(test.Context(), &UsageLogInput{Endpoint: "/v1/responses", Model: "gpt-5.6-sol", StatusCode: 200, RequestType: "related_internal", RequestDiagnostics: payload, SessionIDPrefix: "01a09012"}); err != nil {
+	if err := db.InsertUsageLog(test.Context(), &UsageLogInput{Endpoint: "/v1/responses", Model: "gpt-5.6-sol", StatusCode: 200, RequestType: "related_internal", RequestDiagnostics: payload, SessionIDPrefix: "01a09012", WindowNumberOriginal: "47", WindowNumberOutbound: "0"}); err != nil {
 		test.Fatal(err)
 	}
 	db.FlushUsageLogs()
@@ -52,6 +52,9 @@ func TestUsageRequestDiagnosticsPersistenceAndLightweightLists(test *testing.T) 
 				test.Fatalf("missing type: %+v", logs[0])
 			}
 			encoded, err := json.Marshal(logs)
+			if logs[0].WindowNumberOriginal != "47" || logs[0].WindowNumberOutbound != "0" {
+				test.Fatalf("window numbers missing from list: %+v", logs[0])
+			}
 			if err != nil {
 				test.Fatal(err)
 			}
@@ -85,6 +88,12 @@ func TestUsageRequestDiagnosticsSQLiteMigrationAndHistoricalRows(test *testing.T
 	if err == nil {
 		_, err = db.conn.ExecContext(test.Context(), `ALTER TABLE usage_logs DROP COLUMN session_id_prefix`)
 	}
+	if err == nil {
+		_, err = db.conn.ExecContext(test.Context(), `ALTER TABLE usage_logs DROP COLUMN window_number_original`)
+	}
+	if err == nil {
+		_, err = db.conn.ExecContext(test.Context(), `ALTER TABLE usage_logs DROP COLUMN window_number_outbound`)
+	}
 	_ = db.Close()
 	if err != nil {
 		test.Fatal(err)
@@ -95,7 +104,7 @@ func TestUsageRequestDiagnosticsSQLiteMigrationAndHistoricalRows(test *testing.T
 	}
 	test.Cleanup(func() { _ = db.Close() })
 	logs, err := db.ListRecentUsageLogs(test.Context(), 10)
-	if err != nil || len(logs) != 1 || logs[0].RequestType != "" || logs[0].SessionIDPrefix != "" {
+	if err != nil || len(logs) != 1 || logs[0].RequestType != "" || logs[0].SessionIDPrefix != "" || logs[0].WindowNumberOriginal != "" || logs[0].WindowNumberOutbound != "" {
 		test.Fatalf("historical logs=%+v, err=%v", logs, err)
 	}
 	detail, err := db.GetUsageRequestDiagnostics(test.Context(), logs[0].ID)
@@ -131,7 +140,7 @@ func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	db := &DB{}
 	batch := []usageLogEntry{
 		{RequestType: "user", RequestDiagnostics: `{"version":1}`, NewAPIUserName: "window-user", RequestID: "request-1", UpstreamRequestID: "upstream-1", UpstreamProxyID: 12, UpstreamProxyName: "proxy-1", ImageInputTokens: 7, ImageOutputTokens: 11, CachedImageInputTokens: 3, SessionIDPrefix: "01a09012"},
-		{RequestType: "compaction", RequestDiagnostics: `{"version":1,"attempt":2}`, RequestID: "request-2", UpstreamRequestID: "upstream-2"},
+		{RequestType: "compaction", RequestDiagnostics: `{"version":1,"attempt":2}`, RequestID: "request-2", UpstreamRequestID: "upstream-2", WindowNumberOriginal: "18446744073709551615", WindowNumberOutbound: "0"},
 	}
 	if err := db.batchInsertLogsChunk(test.Context(), capture, batch); err != nil {
 		test.Fatal(err)
@@ -148,8 +157,9 @@ func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	}
 	for index, entry := range batch {
 		for name, expected := range map[string]interface{}{
-			"session_id_prefix": entry.SessionIDPrefix,
-			"request_type":      entry.RequestType, "request_diagnostics": entry.RequestDiagnostics, "newapi_user_name": entry.NewAPIUserName,
+			"session_id_prefix":      entry.SessionIDPrefix,
+			"window_number_original": entry.WindowNumberOriginal, "window_number_outbound": entry.WindowNumberOutbound,
+			"request_type": entry.RequestType, "request_diagnostics": entry.RequestDiagnostics, "newapi_user_name": entry.NewAPIUserName,
 			"request_id": entry.RequestID, "upstream_request_id": entry.UpstreamRequestID, "upstream_proxy_id": entry.UpstreamProxyID, "upstream_proxy_name": entry.UpstreamProxyName,
 			"image_input_tokens": entry.ImageInputTokens, "image_output_tokens": entry.ImageOutputTokens, "cached_image_input_tokens": entry.CachedImageInputTokens,
 		} {

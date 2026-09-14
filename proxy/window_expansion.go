@@ -46,6 +46,7 @@ type windowControlRequest struct {
 	AllowExpansion bool    `json:"allow_expansion"`
 	ExtraLimit     int     `json:"extra_limit"`
 	Multiplier     float64 `json:"multiplier"`
+	MultiplierStep float64 `json:"multiplier_step,omitempty"`
 	GrantID        string  `json:"grant_id,omitempty"`
 	ReservationID  string  `json:"reservation_id,omitempty"`
 	Root           string  `json:"root,omitempty"`
@@ -158,7 +159,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		return
 	}
 	switch input.Operation {
-	case "list", "quote", "release", "upgrade":
+	case "list", "quote", "release", "upgrade", "quote_tiered", "upgrade_tiered":
 		request.Set(windowControlOperationContextKey, input.Operation)
 	default:
 		request.Set(windowControlOperationContextKey, "unsupported")
@@ -176,6 +177,14 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 	if input.Multiplier < 1 || input.Multiplier > 10 || math.IsNaN(input.Multiplier) || math.IsInf(input.Multiplier, 0) {
 		writeWindowControlError(request, http.StatusBadRequest, "window_multiplier_invalid", "窗口扩容倍率必须在 1–10 之间")
 		return
+	}
+	tiered := input.Operation == "quote_tiered" || input.Operation == "upgrade_tiered"
+	if math.IsNaN(input.MultiplierStep) || math.IsInf(input.MultiplierStep, 0) || input.MultiplierStep < 0 || input.MultiplierStep > 9 || (tiered && input.MultiplierStep < 0.000001) || (input.MultiplierStep > 0 && input.MultiplierStep < 0.000001) {
+		writeWindowControlError(request, http.StatusBadRequest, "window_multiplier_step_invalid", "窗口扩容倍率步长必须在 0.000001–9 之间")
+		return
+	}
+	if tiered {
+		input.Operation = strings.TrimSuffix(input.Operation, "_tiered")
 	}
 	now := time.Now().UTC()
 	subject := cache.PromptSessionLimitSubject(identity.Platform, identity.Identity.UserID)
@@ -327,18 +336,17 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		ordinary, expanded := 0, 0
 		counted := make(map[string]bool, len(windows)+len(state.Windows))
 		for key, window := range windows {
-			counted[key] = true
-			if window.Expanded {
-				expanded++
-			} else {
-				ordinary++
-			}
+			counted[key] = window.Expanded
 		}
 		for key, window := range state.Windows {
-			if counted[key] || window.NoWindow {
+			if window.NoWindow {
 				continue
 			}
-			if window.Expanded {
+			// The locked grant may include an upgrade newer than the runtime snapshot.
+			counted[key] = window.Expanded
+		}
+		for _, isExpanded := range counted {
+			if isExpanded {
 				expanded++
 			} else {
 				ordinary++
@@ -379,7 +387,7 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		}
 		multiplier := 1.0
 		if useExpansion {
-			multiplier = input.Multiplier
+			multiplier = input.expansionMultiplier(expanded + 1)
 		}
 		granted = &database.UserWindowGrant{ID: uuid.NewString(), Root: root, CreatedAt: now, ExpiresAt: now.Add(time.Duration(seconds) * time.Second), PendingUntil: now.Add(30 * time.Second), Expanded: useExpansion, Multiplier: multiplier, ExtraLimit: input.ExtraLimit, OwnerAccountID: ownerAccountID, OwnerKey: ownerKey}
 		state.Windows[root] = granted
