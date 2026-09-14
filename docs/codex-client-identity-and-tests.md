@@ -14,15 +14,17 @@ OAuth、订阅、邀请等浏览器/认证端点不属于上述统一范围；Re
 
 原生 Codex 账号的连接测试使用独立诊断请求：
 
-- 每次测试新建 session_id 和 turn_id，thread_id 等于本次 session_id，window_id 为 `session_id:0`。
-- prompt_cache_key 和传入执行器的会话键使用本次 session_id，避免复用其他测试或用户会话。
+- 每个账号记录及实际上游工作区首次测试时保存一个 UUIDv7 主会话 session_id，复用现有身份映射表，无需新建数据表。后续单次、批量和回收站测试复用该值；进程重启、刷新 token、修改设备设置不改变主会话。不同账号记录或不同实际工作区使用不同测试主会话。
+- 每次测试新建子线程 thread_id、context_window_id、turn_id 和测试父轮次 ID；parent_thread_id 等于固定主会话，parent_turn_id 与 root_turn_id 指向本次测试父轮次。window_id 为 `thread_id:0`，window_number 为 0，不随测试次数递增。
+- prompt_cache_key 和传入执行器的会话键使用固定 session_id，账号级出站映射及缓存分区继续生效。测试使用专属的稳定内部归属，不借用真实用户身份；数据库读取或保存失败时停止测试，不退回随机新主会话。无数据库的嵌入式调用使用按账号派生的稳定 UUIDv7。
 - 通过 client_metadata 和内嵌 x-codex-turn-metadata 提供一致的当前请求快照；request_kind 为普通协议请求 `turn`。
-- 不携带 parent_thread_id、parent_turn_id、root_turn_id、forked_from_thread_id，不冒充 thread_title、guardian、memory_consolidation 或 ambient_suggestions。
+- thread_source 为 `subagent`，subagent_kind 与 X-OpenAI-Subagent 为 `thread_spawn`；这些字段描述测试专用父子线程结构，不会启动真实子智能体，也不表示已经发出父会话请求。
 - 不设置 passive_feature 或被动授权；仍直接测试管理员选中的账号，不查找父账号、不因等待主根而挂起，也不重新调度其他账号。
 - 有已保存/自定义设备 ID 时复用该值，不为每次测试重新生成设备 ID。
-- 保留测试模型、测试内容、SSE 结果与诊断；其他提供商的原有测试协议不变。
+- 使用配置的测试模型和测活内容，reasoning.effort 为 `medium`，instructions 为空字符串。每次仍只发送本次测活文本，不携带 previous_response_id 或累积历史。公共 Payload 改写规则仍按现有顺序执行。
+- 保留 SSE 结果与诊断；其他提供商的原有测试协议不变。WS 使用当前压缩设置，新线程在握手与当前帧中保持一致；固定主会话不保证复用物理连接。
 
-“无父根”只描述谱系关系，不等于被动权限或某个特定后台功能。测试的客户端身份是独立生成的，但最后出站仍服从该账号的指纹收敛模式；例如 full 模式仍可能把多个测试的元数据收敛到同一账号身份。这里没有更改收敛、缓存隔离策略或永久账号粘性。
+测试元数据不授予被动权限。默认 preserve 或账号级 account 出站模式会保留每次新子线程的结构；显式 legacy/off/observe 出站身份模式仍服从既有指纹收敛设置。这里没有更改真实用户请求的收敛、缓存隔离策略或永久账号粘性。
 
 独立测连验证认证、模型响应和身份字段传输，不代表已经验证真实附属请求的父根绑定，也不证明多轮历史、压缩或工具调用都能成功。
 

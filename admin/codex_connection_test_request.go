@@ -9,25 +9,40 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-func buildCodexIndependentTestPayload(account *auth.Account, model, content string) []byte {
+func buildCodexIndependentTestPayload(account *auth.Account, model, content, sessionID string) []byte {
 	payload := buildTestPayloadWithContent(model, content)
-	sessionID := proxy.NewUpstreamSessionUUID()
+	payload, _ = sjson.SetBytes(payload, "instructions", "")
+	payload, _ = sjson.SetBytes(payload, "reasoning.effort", "medium")
+	threadID := proxy.NewUpstreamSessionUUID()
 	turnID := proxy.NewUpstreamSessionUUID()
-	windowID := sessionID + ":0"
+	parentTurnID := proxy.NewUpstreamSessionUUID()
+	contextWindowID := proxy.NewUpstreamSessionUUID()
+	windowID := threadID + ":0"
 	turnMetadata := map[string]any{
 		"request_kind":            "turn",
+		"thread_source":           "subagent",
+		"subagent_kind":           "thread_spawn",
 		"session_id":              sessionID,
-		"thread_id":               sessionID,
+		"thread_id":               threadID,
+		"parent_thread_id":        sessionID,
 		"turn_id":                 turnID,
+		"parent_turn_id":          parentTurnID,
+		"root_turn_id":            parentTurnID,
+		"context_window_id":       contextWindowID,
 		"window_id":               windowID,
+		"window_number":           0,
 		"turn_started_at_unix_ms": time.Now().UnixMilli(),
 	}
 	clientMetadata := map[string]any{
-		"session_id":          sessionID,
-		"thread_id":           sessionID,
-		"turn_id":             turnID,
-		"x-codex-window-id":   windowID,
-		"x-client-request-id": sessionID,
+		"session_id":               sessionID,
+		"thread_id":                threadID,
+		"turn_id":                  turnID,
+		"parent_turn_id":           parentTurnID,
+		"root_turn_id":             parentTurnID,
+		"x-codex-parent-thread-id": sessionID,
+		"x-openai-subagent":        "thread_spawn",
+		"x-codex-window-id":        windowID,
+		"x-client-request-id":      threadID,
 	}
 	if account != nil {
 		if installationID := account.EffectiveCodexInstallationID(); installationID != "" {

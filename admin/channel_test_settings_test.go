@@ -100,7 +100,10 @@ func TestConnectionTestUsesChannelSettingsForAntigravity(t *testing.T) {
 	if err != nil || model != "claude-sonnet-4-6" {
 		t.Fatalf("model=%q err=%v, want configured channel default", model, err)
 	}
-	payload := handler.buildAccountConnectionTestPayload(context.Background(), account, model, auth.ClaudeSecurityConfig{})
+	payload, payloadErr := handler.buildAccountConnectionTestPayload(context.Background(), account, model, auth.ClaudeSecurityConfig{})
+	if payloadErr != nil {
+		t.Fatal(payloadErr)
+	}
 	if !strings.Contains(string(payload), "渠道专用测活") || strings.Contains(string(payload), "{{date}}") {
 		t.Fatalf("payload %s must carry the rendered channel test content", payload)
 	}
