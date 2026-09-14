@@ -14,22 +14,20 @@ export function UsageWindowNumberBadge({ log }: { log: UsageLog }) {
   const text = changed ? `${original} → ${outbound}` : original
 
   return (
-    <div className="mt-1 basis-full">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Badge
-            variant="outline"
-            tabIndex={0}
-            aria-label={text}
-            className={`cursor-default border-transparent px-1.5 py-0 font-mono text-[11px] tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${changed
-              ? 'bg-amber-500/12 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
-              : 'bg-emerald-500/12 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'}`}
-          >
-            {changed ? outbound : original}
-          </Badge>
-        </TooltipTrigger>
-        <TooltipContent><span className="font-mono tabular-nums">{text}</span></TooltipContent>
-      </Tooltip>
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          tabIndex={0}
+          aria-label={text}
+          className={`cursor-default border-transparent px-1.5 py-0 font-mono text-[11px] tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${changed
+            ? 'bg-amber-500/12 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
+            : 'bg-emerald-500/12 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'}`}
+        >
+          {changed ? outbound : original}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent><span className="font-mono tabular-nums">{text}</span></TooltipContent>
+    </Tooltip>
   )
 }

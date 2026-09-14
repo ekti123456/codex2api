@@ -2745,9 +2745,12 @@ export default function Usage() {
                               {log.model || '-'}
                             </Badge>
                           )}
-                          {log.reasoning_effort ? (
-                            <ReasoningEffortBadge effort={log.reasoning_effort} />
-                          ) : null}
+                          <span className="inline-flex shrink-0 items-center gap-1.5 empty:hidden">
+                            {log.reasoning_effort ? (
+                              <ReasoningEffortBadge effort={log.reasoning_effort} />
+                            ) : null}
+                            {visibleColumns.model && <UsageWindowNumberBadge log={log} />}
+                          </span>
                           {visibleColumns.type && isFastTier(log.billing_service_tier || log.service_tier) ? (
                             <Badge
                               variant="outline"
@@ -2757,7 +2760,6 @@ export default function Usage() {
                               {formatServiceTierLabel(t, log.billing_service_tier || log.service_tier)}
                             </Badge>
                           ) : null}
-                          {visibleColumns.model && <UsageWindowNumberBadge log={log} />}
                           {visibleColumns.type && <StreamBadge stream={log.stream} />}
                           <CompactionBadges
                             compact={log.compact}
@@ -2973,9 +2975,12 @@ export default function Usage() {
                                 → {log.effective_model}
                               </Badge>
                             )}
-                            {log.reasoning_effort ? (
-                              <ReasoningEffortBadge effort={log.reasoning_effort} />
-                            ) : null}
+                            <div className="flex basis-full items-center gap-1.5 empty:hidden">
+                              {log.reasoning_effort ? (
+                                <ReasoningEffortBadge effort={log.reasoning_effort} />
+                              ) : null}
+                              <UsageWindowNumberBadge log={log} />
+                            </div>
                             {isImageUsageLog(log) && (
                               <ImageUsageBadge log={log} />
                             )}
@@ -2990,7 +2995,6 @@ export default function Usage() {
                               </Badge>
                             )}
                           </div>
-                          <UsageWindowNumberBadge log={log} />
                         </TableCell>}
                         {visibleColumns.requestType && <TableCell><UsageRequestTypeButton log={log} onClick={() => setDiagnosticsLog(log)} /></TableCell>}
                         {visibleColumns.sessionIDPrefix && <TableCell className="font-mono text-xs" title={t('usage.sessionIDPrefixHint')}>{log.session_id_prefix ? <button type="button" className="text-primary hover:underline" onClick={() => searchSessionPrefix(log.session_id_prefix!)}>{log.session_id_prefix}</button> : '-'}</TableCell>}
