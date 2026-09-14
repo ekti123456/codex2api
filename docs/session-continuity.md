@@ -16,6 +16,8 @@
 
 API 独立路由或已有 API 归属直接豁免；混合池中，已有 Codex 归属继续受保护，正常新请求保持原调度。没有可确认归属且会被 Codex 非零窗口、压缩或后台/fork 根要求拦截时，可限定到授权范围内的 API 账号。进入豁免路径后，最终账号过滤必须保持 API-only；API 不可用也不能回退到未经过保护的 Codex 账号。诊断 `api_relay_session_exempt=true` 和窗口结果 `api_relay_exempt` 表示此路径。
 
+窗口预检没有模型路由信息，因此使用更严格的范围判断：已通过 API Key 鉴权，且该 Key 按账号白名单、分组、套餐和渠道权限可访问的账号全部为 Responses API 中转时，`/v1/session-windows` 的 `quote`、`quote_tiered`、`list` 直接返回 `ordinary_only`、空票据和空窗口列表，不要求 NewAPI 用户签名，也不读取或修改用户窗口。不依据 Key 名称或客户端豁免头判断；临时不可用的 Codex 账号仍计入授权范围。混合池、未知账号范围及升级/释放操作继续验证 NewAPI 身份。NewAPI 可使用已有的 `ordinary_only` 处理，无需额外升级。
+
 仍执行下游鉴权及 NewAPI 签名、账号分组权限、模型支持、预算/RPM/并发、内容防护和不透明响应/压缩上下文的来源校验。上游 API 或 NewAPI 自身返回的限制不会被网关清除。原生下游 WebSocket 端点目前仅调度 Codex 账号，本次不增加 API WebSocket 桥接能力，也不放宽该端点的 Codex 保护。
 
 | 已记录状态 → 当前主请求 | 处理 |

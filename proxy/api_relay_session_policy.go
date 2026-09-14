@@ -13,6 +13,28 @@ import (
 const apiRelaySessionExemptContextKey = "api_relay_session_exempt"
 const apiRelayAffinitySourceContextKey = "api_relay_affinity_source"
 
+// A window preflight has no model request to route. Exempt only an authenticated
+// key whose entire authorized account pool is API relay, including temporarily
+// unavailable accounts and both sides of fingerprint-based group routing.
+func (handler *Handler) apiRelayOnlyWindowControlKey(request *gin.Context) bool {
+	row := apiKeyRowFromContext(request)
+	keyID := requestAPIKeyID(request)
+	if handler == nil || handler.store == nil || row == nil || keyID <= 0 || row.ID != keyID {
+		return false
+	}
+	found := false
+	for _, account := range handler.store.Accounts() {
+		if account == nil || !account.AllowsAPIKey(keyID) || !handler.store.APIKeyAllowsAccount(keyID, account) {
+			continue
+		}
+		if !account.IsOpenAIResponsesAPI() {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
 func (handler *Handler) seedAPIRelayAffinity(request *gin.Context, identity requestSessionIdentity, key string) {
 	source := request.GetString(apiRelayAffinitySourceContextKey)
 	if source == "" || source == key {

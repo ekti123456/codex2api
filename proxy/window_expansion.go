@@ -146,14 +146,24 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		writeWindowControlError(request, http.StatusBadRequest, "window_request_invalid", "窗口控制请求过大或读取失败")
 		return
 	}
+	var input windowControlRequest
+	inputErr := json.Unmarshal(body, &input)
+	if inputErr == nil && (input.Operation == "quote" || input.Operation == "quote_tiered" || input.Operation == "list") && handler.apiRelayOnlyWindowControlKey(request) {
+		request.Set(windowControlOperationContextKey, input.Operation)
+		request.JSON(http.StatusOK, gin.H{
+			"version": 1, "reason": "ordinary_only", "api_relay_session_exempt": true,
+			"ticket": "", "multiplier": 1, "server_now": time.Now().UTC(),
+			"limit": 0, "used": 0, "windows": []personalWindow{},
+		})
+		return
+	}
 	config := handler.promptFilterConfigForRequest(request)
 	identity, verified := handler.verifyNewAPIPolicyContext(request, config.Advanced.NewAPI, body)
 	if !verified || !identity.MetaVerified || identity.Identity.UserID == "" {
 		writeWindowControlError(request, http.StatusUnauthorized, "window_identity_required", "需要已验证的 NewAPI 身份")
 		return
 	}
-	var input windowControlRequest
-	if json.Unmarshal(body, &input) != nil {
+	if inputErr != nil {
 		request.Set(windowControlOperationContextKey, "invalid")
 		writeWindowControlError(request, http.StatusBadRequest, "window_request_invalid", "窗口控制请求格式无效")
 		return
