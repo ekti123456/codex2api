@@ -35,6 +35,8 @@ export interface SessionErrorPage {
 export interface SessionErrorQuery {
   userID?: string
   sessionID?: string
+  model?: string
+  account?: string
   lockedOnly?: boolean
   lockState?: 'unlocked' | 'locked'
   cursor?: string

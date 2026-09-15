@@ -5,12 +5,93 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestSessionErrorModelAccountFiltersBeforeCountsAndPagination(t *testing.T) {
+	db, err := New("sqlite", filepath.Join(t.TempDir(), "model-account-filter.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	ctx := context.Background()
+	a, err := db.InsertAccountWithCredentials(ctx, "Team_A%", map[string]interface{}{"email": "alpha@example.com", "refresh_token": "private-search-token"}, "")
+	require.NoError(t, err)
+	b, err := db.InsertAccountWithCredentials(ctx, "Team-other", map[string]interface{}{"email": "beta@example.com"}, "")
+	require.NoError(t, err)
+	keys := []string{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)}
+	now := time.Now()
+	event := func(index int, model string, account int64, stamp time.Time) SessionErrorEvent {
+		return SessionErrorEvent{Identity: SessionErrorIdentity{Key: keys[index], UserID: "17", SessionID: keys[index]}, Model: model, AccountID: account, CreatedAt: stamp}
+	}
+	require.NoError(t, db.insertSessionErrors(ctx, []SessionErrorEvent{
+		event(0, "old-model", b, now.Add(-time.Hour)),
+		event(0, "gpt-6-astra", a, now),
+		event(1, "gpt-6-astra", a, now.Add(-time.Minute)),
+		event(2, "gpt-5.6-sol", b, now.Add(-2*time.Minute)),
+		event(3, "gpt-6-astra", 99999, now.Add(-3*time.Minute)),
+	}))
+	query := SessionErrorQuery{Model: " GPT-6 ", Account: " ALPHA@EXAMPLE ", LockState: "unlocked", Limit: 1}
+	first, err := db.ListSessionErrors(ctx, query)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), first.Groups)
+	require.Equal(t, int64(3), first.Errors)
+	require.Len(t, first.Items, 1)
+	require.Equal(t, keys[0], first.Items[0].Identity.Key)
+	require.Equal(t, int64(2), first.Items[0].Count)
+	require.NotEmpty(t, first.NextCursor)
+	query.Cursor = first.NextCursor
+	second, err := db.ListSessionErrors(ctx, query)
+	require.NoError(t, err)
+	require.Equal(t, first.Groups, second.Groups)
+	require.Equal(t, first.Errors, second.Errors)
+	require.Len(t, second.Items, 1)
+	require.Equal(t, keys[1], second.Items[0].Identity.Key)
+	require.Empty(t, second.NextCursor)
+	for _, sample := range []struct {
+		model, account string
+		groups         int64
+	}{
+		{"gpt-6", strconv.FormatInt(a, 10), 2},
+		{"", "Team_A%", 2}, {"", "_", 2}, {"", "%", 2},
+		{"%", "", 0}, {"old-model", "", 0},
+		{"gpt-6", strconv.FormatInt(b, 10), 0},
+		{"gpt-6", "99999", 1}, {"", "private-search-token", 0},
+		{"' OR 1=1 --", "", 0},
+	} {
+		page, err := db.ListSessionErrors(ctx, SessionErrorQuery{Model: sample.model, Account: sample.account})
+		require.NoError(t, err)
+		require.Equal(t, sample.groups, page.Groups, "%+v", sample)
+	}
+	// A matching descendant must still inherit a non-matching parent's lock.
+	require.NoError(t, db.RecordSessionParent(ctx, keys[1], keys[2]))
+	require.NoError(t, db.SetSessionBlacklist(ctx, []string{keys[0], keys[2]}, true))
+	for _, sample := range []struct {
+		state     string
+		blacklist bool
+		groups    int64
+	}{
+		{"unlocked", false, 0}, {"locked", false, 2}, {"", true, 1},
+	} {
+		page, err := db.ListSessionErrors(ctx, SessionErrorQuery{Model: "gpt-6", Account: "alpha@", LockState: sample.state, LockedOnly: sample.blacklist})
+		require.NoError(t, err)
+		require.Equal(t, sample.groups, page.Groups)
+	}
+	page, err := db.ListSessionErrors(ctx, SessionErrorQuery{Model: "gpt-6", Account: "alpha@", UserID: "18"})
+	require.NoError(t, err)
+	require.Zero(t, page.Groups)
+	// Blacklist entries outlive statistics, but cannot match missing snapshots.
+	require.NoError(t, db.pruneSessionErrors(ctx, now.Add(8*24*time.Hour)))
+	page, err = db.ListSessionErrors(ctx, SessionErrorQuery{LockedOnly: true, Model: "gpt-6"})
+	require.NoError(t, err)
+	require.Zero(t, page.Groups)
+	page, err = db.ListSessionErrors(ctx, SessionErrorQuery{LockedOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), page.Groups)
+}
 
 func TestSessionErrorAggregationAndBlacklistPersistence(test *testing.T) {
 	path := filepath.Join(test.TempDir(), "session-errors.db")

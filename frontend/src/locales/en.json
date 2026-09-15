@@ -1,5 +1,9 @@
 {
   "sessionErrors": {
+    "modelSearch": "Model name (contains)",
+    "accountSearch": "Account ID / name / email",
+    "resetFilters": "Reset filters",
+    "filterHint": "All filters apply together. Model and account match the latest overloaded request; counts remain cumulative per session. Numeric accounts match the exact ID; names and emails use contains matching.",
     "lockedFilter": "Locked",
     "lineageInvalid": "Invalid lineage",
     "title": "Session overload statistics", "description": "Only final 500 + server_is_overloaded, grouped by user and root session ID. Other 500 errors are excluded. Manual blacklisting blocks the session and identifiable descendants.",

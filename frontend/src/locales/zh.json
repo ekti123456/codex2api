@@ -1,5 +1,9 @@
 {
   "sessionErrors": {
+    "modelSearch": "模型名称（包含匹配）",
+    "accountSearch": "账号 ID / 名称 / 邮箱",
+    "resetFilters": "重置筛选",
+    "filterHint": "多个条件同时匹配。模型与账号按最近一次过载请求筛选，次数仍为该会话累计次数；账号纯数字按 ID 精确匹配，名称 / 邮箱按包含匹配。",
     "lockedFilter": "已锁定",
     "lineageInvalid": "派生关系无效",
     "title": "会话过载统计", "description": "仅统计最终 500 + server_is_overloaded，按用户与主会话 ID 汇总。其他 500 不计入；手动锁定后禁止该会话及已知派生链路继续调用。",

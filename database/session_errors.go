@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,7 @@ type SessionErrorRow struct {
 
 type SessionErrorQuery struct {
 	UserID, SessionID, Cursor string
+	Model, Account            string
 	LockState                 string
 	LockedOnly                bool
 	Limit                     int
@@ -283,6 +285,34 @@ func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (
 		if item.value != "" {
 			args = append(args, item.value)
 			conditions = append(conditions, fmt.Sprintf("%s.%s=$%d", identitySource, item.column, len(args)))
+		}
+	}
+	// Match the latest overload snapshot, consistent with the model/account shown
+	// in each row. Keep these predicates before both counts and cursor pagination.
+	modelExpr := `(stats.latest_data::jsonb ->> 'model')`
+	accountExpr := `(stats.latest_data::jsonb ->> 'account_id')`
+	emailExpr := `(account.credentials ->> 'email')`
+	if db.isSQLite() {
+		modelExpr = `json_extract(stats.latest_data, '$.model')`
+		accountExpr = `CAST(json_extract(stats.latest_data, '$.account_id') AS TEXT)`
+		emailExpr = `json_extract(account.credentials, '$.email')`
+	}
+	literalPattern := func(value string) string {
+		return "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(value)) + "%"
+	}
+	if model := strings.TrimSpace(filter.Model); model != "" {
+		args = append(args, literalPattern(model))
+		conditions = append(conditions, fmt.Sprintf("LOWER(%s) LIKE $%d ESCAPE '!'", modelExpr, len(args)))
+	}
+	if account := strings.TrimSpace(filter.Account); account != "" {
+		if id, err := strconv.ParseInt(account, 10, 64); err == nil && id > 0 {
+			args = append(args, strconv.FormatInt(id, 10))
+			conditions = append(conditions, fmt.Sprintf("%s=$%d", accountExpr, len(args)))
+		} else {
+			args = append(args, literalPattern(account))
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (SELECT 1 FROM accounts account
+				WHERE account.id=CAST(%s AS BIGINT) AND (LOWER(account.name) LIKE $%d ESCAPE '!'
+				OR LOWER(%s) LIKE $%d ESCAPE '!'))`, accountExpr, len(args), emailExpr, len(args)))
 		}
 	}
 	where := strings.Join(conditions, " AND ")

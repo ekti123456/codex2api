@@ -19,8 +19,8 @@ const emptyPage: SessionErrorPage = { items: [], groups: 0, errors: 0, collector
 
 export default function SessionErrors() {
   const { t } = useTranslation()
-  const [filters, setFilters] = useState({ userID: '', sessionID: '', lockedOnly: false, lockState: 'unlocked' as NonNullable<SessionErrorQuery['lockState']>, cursors: [''] })
-  const [draft, setDraft] = useState({ userID: '', sessionID: '' })
+  const [filters, setFilters] = useState({ userID: '', sessionID: '', model: '', account: '', lockedOnly: false, lockState: 'unlocked' as NonNullable<SessionErrorQuery['lockState']>, cursors: [''] })
+  const [draft, setDraft] = useState({ userID: '', sessionID: '', model: '', account: '' })
   const [selected, setSelected] = useState<string[]>([])
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -32,8 +32,8 @@ export default function SessionErrors() {
   const load = useCallback(async () => {
     controller.current?.abort()
     controller.current = new AbortController()
-    return api.getSessionErrors({ userID: filters.userID, sessionID: filters.sessionID, lockedOnly: filters.lockedOnly, lockState: filters.lockState, cursor }, controller.current.signal)
-  }, [filters.userID, filters.sessionID, filters.lockedOnly, filters.lockState, cursor])
+    return api.getSessionErrors({ userID: filters.userID, sessionID: filters.sessionID, model: filters.model, account: filters.account, lockedOnly: filters.lockedOnly, lockState: filters.lockState, cursor }, controller.current.signal)
+  }, [filters.userID, filters.sessionID, filters.model, filters.account, filters.lockedOnly, filters.lockState, cursor])
   const { data, loading, error, reload, reloadSilently } = useDataLoader({ initialData: emptyPage, load })
   const canPoll = useRef(true)
   canPoll.current = selected.length === 0 && !confirming && !busy
@@ -85,11 +85,19 @@ export default function SessionErrors() {
         </div>
         <p className="text-sm text-muted-foreground">{t('sessionErrors.summary', { groups: data.groups, count: data.errors })}</p>
       </div>
-      <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); changeQuery({ ...filters, userID: draft.userID.trim(), sessionID: draft.sessionID.trim(), cursors: [''] }) }}>
+      <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); changeQuery({ ...filters, userID: draft.userID.trim(), sessionID: draft.sessionID.trim(), model: draft.model.trim(), account: draft.account.trim(), cursors: [''] }) }}>
         <Input className="w-48 max-sm:w-full" aria-label={t('sessionErrors.userSearch')} placeholder={t('sessionErrors.userSearch')} maxLength={255} value={draft.userID} onChange={event => setDraft({ ...draft, userID: event.target.value })} />
         <Input className="min-w-56 flex-1" aria-label={t('sessionErrors.sessionSearch')} placeholder={t('sessionErrors.sessionSearch')} maxLength={256} value={draft.sessionID} onChange={event => setDraft({ ...draft, sessionID: event.target.value })} />
+        <Input className="w-56 max-sm:w-full" aria-label={t('sessionErrors.modelSearch')} placeholder={t('sessionErrors.modelSearch')} maxLength={256} value={draft.model} onChange={event => setDraft({ ...draft, model: event.target.value })} />
+        <Input className="w-64 max-sm:w-full" aria-label={t('sessionErrors.accountSearch')} placeholder={t('sessionErrors.accountSearch')} maxLength={256} value={draft.account} onChange={event => setDraft({ ...draft, account: event.target.value })} />
         <Button type="submit" variant="outline" disabled={busy}><Search className="size-4" />{t('serviceErrors.search')}</Button>
+        <Button type="button" variant="ghost" disabled={busy} onClick={() => {
+          const cleared = { userID: '', sessionID: '', model: '', account: '' }
+          setDraft(cleared)
+          changeQuery({ ...filters, ...cleared, cursors: [''] })
+        }}>{t('sessionErrors.resetFilters')}</Button>
       </form>
+      <p className="text-xs leading-relaxed text-muted-foreground">{t('sessionErrors.filterHint')}</p>
       <p className="text-xs leading-relaxed text-muted-foreground">{t('sessionErrors.retention')}</p>
       <p className="text-xs text-muted-foreground" role="status">{t('serviceErrors.collector', { pending: data.collector.pending, dropped: data.collector.dropped, failed: data.collector.write_failures })}</p>
       {(data.collector.dropped > 0 || data.collector.write_failures > 0) && <p role="alert" className="text-xs text-amber-600">{t('serviceErrors.lossWarning')}</p>}

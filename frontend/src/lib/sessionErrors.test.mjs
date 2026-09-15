@@ -31,3 +31,15 @@ test('session statistics default to unlocked and keep the persistent blacklist s
   assert.equal(blacklist.get('locked'), 'true')
   assert.equal(blacklist.has('lock_state'), false)
 })
+
+test('model and account filters are combined, trimmed and safely encoded on every page', () => {
+  const query = new URLSearchParams(sessionErrorSearchParams({ model: ' gpt-6&model=other ', account: ' team+a@example.com ', userID: '17', cursor: 'next+page', lockState: 'locked' }))
+  assert.equal(query.get('model'), 'gpt-6&model=other')
+  assert.equal(query.get('account'), 'team+a@example.com')
+  assert.equal(query.get('user_id'), '17')
+  assert.equal(query.get('cursor'), 'next+page')
+  assert.equal(query.get('lock_state'), 'locked')
+  const cleared = new URLSearchParams(sessionErrorSearchParams({ model: ' ', account: '' }))
+  assert.equal(cleared.has('model'), false)
+  assert.equal(cleared.has('account'), false)
+})

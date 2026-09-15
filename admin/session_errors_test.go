@@ -52,12 +52,40 @@ func TestSessionErrorAdminBatchValidationAndAtomicFailure(test *testing.T) {
 		require.NoError(test, err)
 		require.Empty(test, lockedBy)
 	}
-	for _, query := range []string{"limit=101", "locked=invalid", "lock_state=invalid", "cursor=bad", "user_id=" + strings.Repeat("x", 256)} {
+	for _, query := range []string{"limit=101", "locked=invalid", "lock_state=invalid", "cursor=bad", "user_id=" + strings.Repeat("x", 256), "model=" + strings.Repeat("x", 257), "account=" + strings.Repeat("x", 257)} {
 		response := httptest.NewRecorder()
 		ctx, _ := gin.CreateTestContext(response)
 		ctx.Request = httptest.NewRequest(http.MethodGet, "/api/admin/session-errors?"+query, nil)
 		handler.GetSessionErrors(ctx)
 		require.Equal(test, http.StatusBadRequest, response.Code)
+	}
+}
+
+func TestSessionErrorAdminModelAccountFilters(t *testing.T) {
+	handler := &Handler{db: newTestAdminDB(t)}
+	for index, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+		require.True(t, handler.db.EnqueueSessionError(database.SessionErrorEvent{
+			Identity:  database.SessionErrorIdentity{Key: strings.Repeat(string(rune('a'+index)), 64), UserID: "17", SessionID: model},
+			CreatedAt: time.Now(), Model: model, AccountID: int64(100 + index),
+		}))
+	}
+	require.Eventually(t, func() bool { return handler.db.SessionErrorCollectorStats().Pending == 0 }, 5*time.Second, 10*time.Millisecond)
+	for _, sample := range []struct {
+		query  string
+		groups int64
+	}{
+		{"model=%20GPT-6%20&account=%20100%20", 1},
+		{"model=gpt-6&account=101", 0},
+		{"model=gpt-5.6", 1}, {"account=100", 1},
+	} {
+		response := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(response)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/api/admin/session-errors?"+sample.query, nil)
+		handler.GetSessionErrors(ctx)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var page database.SessionErrorPage
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &page))
+		require.Equal(t, sample.groups, page.Groups)
 	}
 }
 
