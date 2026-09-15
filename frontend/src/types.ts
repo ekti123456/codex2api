@@ -2251,6 +2251,10 @@ export interface PromptFilterVerdict {
 }
 
 export interface PromptFilterLog {
+  group_id?: number
+  occurrence_count?: number
+  first_seen?: string
+  last_seen?: string
   id: number
   created_at: ISODateString
   source: string
