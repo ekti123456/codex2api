@@ -5,30 +5,31 @@ import "time"
 // WindowControlDiagnostic contains decision-time facts, never credentials,
 // authorization tickets, raw session identities, or request bodies.
 type WindowControlDiagnostic struct {
-	ObservedAt          time.Time                          `json:"observed_at"`
-	RootHash            string                             `json:"root_hash,omitempty"`
-	OwnerSource         string                             `json:"owner_source,omitempty"`
-	OwnerAccountID      int64                              `json:"owner_account_id,omitempty"`
-	OwnerLastSeen       time.Time                          `json:"owner_last_seen,omitzero"`
-	OwnerLastCompleted  time.Time                          `json:"owner_last_completed,omitzero"`
-	OwnerLastStatus     int                                `json:"owner_last_status,omitempty"`
-	AllowExpansion      bool                               `json:"allow_expansion"`
-	ExtraLimit          int                                `json:"extra_limit"`
-	Multiplier          float64                            `json:"multiplier"`
-	MultiplierStep      float64                            `json:"multiplier_step,omitempty"`
-	UserLimit           int                                `json:"user_limit"`
-	WindowSeconds       int                                `json:"window_seconds"`
-	ActiveWindows       int                                `json:"active_windows"`
-	RootWindowState     string                             `json:"root_window_state"`
-	RootWindowExpiresAt time.Time                          `json:"root_window_expires_at,omitzero"`
-	Grant               *WindowGrantDiagnostic             `json:"grant,omitempty"`
-	Account             *AccountSessionAdmissionDiagnostic `json:"account,omitempty"`
-	CountsEvaluated     bool                               `json:"counts_evaluated"`
-	OrdinaryUsed        int                                `json:"ordinary_used"`
-	ExpandedUsed        int                                `json:"expanded_used"`
-	NeedsExpansion      bool                               `json:"needs_expansion"`
-	Decision            string                             `json:"decision,omitempty"`
-	ExpansionBlock      string                             `json:"expansion_block,omitempty"`
+	ObservedAt               time.Time                          `json:"observed_at"`
+	RootHash                 string                             `json:"root_hash,omitempty"`
+	OwnerSource              string                             `json:"owner_source,omitempty"`
+	OwnerAccountID           int64                              `json:"owner_account_id,omitempty"`
+	OwnerLastSeen            time.Time                          `json:"owner_last_seen,omitzero"`
+	OwnerLastCompleted       time.Time                          `json:"owner_last_completed,omitzero"`
+	OwnerLastStatus          int                                `json:"owner_last_status,omitempty"`
+	AllowExpansion           bool                               `json:"allow_expansion"`
+	ExtraLimit               int                                `json:"extra_limit"`
+	Multiplier               float64                            `json:"multiplier"`
+	MultiplierStep           float64                            `json:"multiplier_step,omitempty"`
+	UserLimit                int                                `json:"user_limit"`
+	WindowSeconds            int                                `json:"window_seconds"`
+	ActiveWindows            int                                `json:"active_windows"`
+	RootWindowState          string                             `json:"root_window_state"`
+	RootWindowExpiresAt      time.Time                          `json:"root_window_expires_at,omitzero"`
+	Grant                    *WindowGrantDiagnostic             `json:"grant,omitempty"`
+	Account                  *AccountSessionAdmissionDiagnostic `json:"account,omitempty"`
+	CountsEvaluated          bool                               `json:"counts_evaluated"`
+	OrdinaryUsed             int                                `json:"ordinary_used"`
+	ExpandedUsed             int                                `json:"expanded_used"`
+	NeedsExpansion           bool                               `json:"needs_expansion"`
+	CapacityFailoverDeferred bool                               `json:"capacity_failover_deferred,omitempty"`
+	Decision                 string                             `json:"decision,omitempty"`
+	ExpansionBlock           string                             `json:"expansion_block,omitempty"`
 }
 
 type WindowGrantDiagnostic struct {

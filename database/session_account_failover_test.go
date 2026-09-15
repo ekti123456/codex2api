@@ -142,6 +142,49 @@ func TestSwitchSessionContinuityAccountWithoutGrant(test *testing.T) {
 	require.Equal(test, before[1:], fixture.snapshot(test)[1:])
 }
 
+func TestSwitchSessionContinuityAccountPendingGrant(test *testing.T) {
+	for _, scenario := range []string{"valid", "not_allowed", "expired", "missing_id", "wrong_id", "stale_owner"} {
+		test.Run(scenario, func(test *testing.T) {
+			fixture := newSessionAccountFailoverFixture(test)
+			grant := fixture.admissions.Windows[fixture.input.WindowRoot]
+			grant.Confirmed, grant.Expanded, grant.Multiplier = false, false, 1
+			grant.PendingUntil = fixture.input.At.Add(30 * time.Second)
+			fixture.input.AllowPendingWindowGrant = true
+			switch scenario {
+			case "not_allowed":
+				fixture.input.AllowPendingWindowGrant = false
+			case "expired":
+				grant.PendingUntil = fixture.input.At
+			case "missing_id":
+				fixture.input.WindowGrantID = ""
+			case "wrong_id":
+				fixture.input.WindowGrantID = "another"
+			case "stale_owner":
+				fixture.input.ExpectedAccountID = 9
+			}
+			require.NoError(test, fixture.db.UpdateUserWindowAdmissions(test.Context(), fixture.input.WindowSubject, func(state *UserWindowAdmissionState) error { *state = fixture.admissions; return nil }))
+			before := fixture.snapshot(test)
+			record, updated, err := fixture.db.SwitchSessionContinuityAccount(test.Context(), fixture.input)
+			if scenario != "valid" {
+				require.Error(test, err)
+				require.Equal(test, before, fixture.snapshot(test), "failed switch must roll back both ownership and grant")
+				return
+			}
+			require.NoError(test, err)
+			require.Equal(test, int64(2), record.AccountID)
+			require.Equal(test, int64(2), updated.OwnerAccountID)
+			require.False(test, updated.Confirmed, "dispatch must still perform normal user-window admission")
+			require.Equal(test, grant.ID, updated.ID)
+			require.Equal(test, grant.PendingUntil, updated.PendingUntil)
+			require.Equal(test, grant.ExpiresAt, updated.ExpiresAt)
+			require.Equal(test, 1.0, updated.Multiplier)
+			state, err := fixture.db.ReadUserWindowAdmissions(test.Context(), fixture.input.WindowSubject)
+			require.NoError(test, err)
+			require.Equal(test, fixture.admissions.Reservations, state.Reservations)
+		})
+	}
+}
+
 func TestSwitchSessionContinuityAccountRejectsInvalidState(test *testing.T) {
 	for _, testCase := range []struct {
 		name     string

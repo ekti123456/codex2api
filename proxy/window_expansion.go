@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/codex2api/api"
+	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
@@ -271,6 +272,19 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 	var deniedRecovery time.Time
 	quoteReason := ""
 	background := identity.Meta.RootSessionRelation == newAPIPolicyRootSessionRelationRelated && !userForkWindow(identity.Meta) || identity.Meta.SessionAccounting == newAPISessionAccountingBypass || identity.Meta.RequestKind == "compaction" || (identity.Meta.ThreadSource != "" && identity.Meta.ThreadSource != "user")
+	// Quote has no conversation body or final model filter. Defer migration to
+	// dispatch only when authorized expansion cannot keep the original account.
+	// The user's expansion quota is checked under the grant transaction below.
+	canDeferCapacityFailover := false
+	ownerCanExpand := false
+	if !background && input.Operation == "quote" && CurrentRuntimeSettings().CodexSessionFailoverEnabled && diagnostic.OwnerSource == "continuity" && diagnostic.Account != nil && diagnostic.Account.Reason == "session_capacity_full" {
+		if owner := handler.store.FindByID(ownerAccountID); owner != nil && !owner.IsRelayStyle() {
+			canDeferCapacityFailover = true
+			expansionTrace := &auth.SelectionTrace{}
+			expansionTrace.SetExpandedWindow(true)
+			ownerCanExpand = handler.store.CanAdmitAccountSession(owner, ownerKey, now, expansionTrace)
+		}
+	}
 	err = handler.db.UpdateUserWindowAdmissions(ctx, subject, func(state *database.UserWindowAdmissionState) error {
 		// Capture the root grant before expiry cleanup removes its evidence.
 		diagnostic.Grant = observeWindowGrant(state.Windows[root], now)
@@ -361,6 +375,10 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 			} else {
 				ordinary++
 			}
+		}
+		if canDeferCapacityFailover && !(input.AllowExpansion && input.ExtraLimit > expanded && input.Multiplier > 1 && ownerCanExpand) {
+			ownerNeedsExpansion = false
+			diagnostic.CapacityFailoverDeferred = true
 		}
 		useExpansion := ordinary >= limit || ownerNeedsExpansion
 		diagnostic.CountsEvaluated = true
@@ -611,7 +629,10 @@ func (handler *Handler) publishRequestWindowGrant(request *gin.Context, grant *s
 	ticket, err := encodeWindowGrant(identity.VerificationSecret, *grant)
 	if err == nil {
 		request.Header(windowGrantResponseHeader, ticket)
-		usageRequestDiagnosticState(request).WindowGrant = "confirmed"
+		usageRequestDiagnosticState(request).WindowGrant = "pending"
+		if grant.Grant.Confirmed {
+			usageRequestDiagnosticState(request).WindowGrant = "confirmed"
+		}
 	}
 }
 

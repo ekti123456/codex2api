@@ -322,15 +322,26 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 	excluded[old.ID()] = true
 	trace := &auth.SelectionTrace{}
 	trace.SetExpandedWindow(selectionTraceForRequest(request).ExpandedWindow())
+	defer func() {
+		for _, reason := range trace.Snapshot().Reasons {
+			selectionTraceForRequest(request).Reject(reason)
+		}
+	}()
 	ownerGroups := old.GroupIDSnapshot()
+	ownerTags := old.TagSnapshot()
 	eligible := func(account *auth.Account) bool {
 		if !account.HasExactGroupIDs(ownerGroups) {
 			trace.Reject("account_groups_mismatch")
 			return false
 		}
+		if !account.HasExactTags(ownerTags) {
+			trace.Reject("account_tags_mismatch")
+			return false
+		}
 		grant := windowGrantForRequest(request)
 		limits := account.SessionCapacityLimits()
 		if grant != nil && (grant.Grant.Expanded && !limits.Enabled || grant.Grant.NoWindow && limits.Enabled) {
+			trace.Reject("window_grant_capacity_mismatch")
 			return false
 		}
 		return !account.IsRelayStyle() && account.EffectiveAccountID() != "" && account.EffectiveAccountID() != old.EffectiveAccountID() && (filter == nil || filter(account)) && handler.store.CanAdmitAccountSession(account, key, time.Now(), trace)
@@ -362,6 +373,12 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 			plan.Diagnostic.Result, plan.Diagnostic.Reason = "blocked", "account_groups_changed"
 			return nil, "", true
 		}
+		if !old.HasExactTags(ownerTags) || !candidate.HasExactTags(ownerTags) {
+			handler.store.RemoveAccountSession(candidate.ID(), key)
+			handler.store.Release(candidate)
+			plan.Diagnostic.Result, plan.Diagnostic.Reason = "blocked", "account_tags_changed"
+			return nil, "", true
+		}
 		input := database.SessionAccountFailover{RootKey: state.Key, AffinityKey: key, ExpectedAccountID: old.ID(), AccountID: candidate.ID(), ExpectedGeneration: entry.Record.FailoverCount, Reason: plan.Diagnostic.Reason, At: time.Now().UTC(), ResetOutboundWindow: true, WindowThreadID: state.ThreadID, WindowNumber: state.Number}
 		input.WindowContextID = fingerprint.accountWindowInputs[state.ThreadID].ContextID
 		input.LossyContextRestart = true
@@ -369,6 +386,7 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 		if grant != nil {
 			input.WindowSubject = cache.PromptSessionLimitSubject(grant.Platform, grant.UserID)
 			input.WindowRoot, input.WindowGrantID = grant.Grant.Root, grant.Grant.ID
+			input.AllowPendingWindowGrant = !grant.Grant.Confirmed
 		}
 		committed, updatedGrant, commitErr := handler.db.SwitchSessionContinuityAccount(ctx, input)
 		if commitErr != nil {

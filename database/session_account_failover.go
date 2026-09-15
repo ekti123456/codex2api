@@ -11,21 +11,22 @@ import (
 )
 
 type SessionAccountFailover struct {
-	RootKey             string
-	AffinityKey         string
-	WindowSubject       string
-	WindowRoot          string
-	WindowGrantID       string
-	ExpectedAccountID   int64
-	AccountID           int64
-	ExpectedGeneration  uint64
-	Reason              string
-	At                  time.Time
-	ResetOutboundWindow bool
-	WindowThreadID      string
-	WindowNumber        uint64
-	WindowContextID     string
-	LossyContextRestart bool
+	RootKey                 string
+	AffinityKey             string
+	WindowSubject           string
+	WindowRoot              string
+	WindowGrantID           string
+	AllowPendingWindowGrant bool
+	ExpectedAccountID       int64
+	AccountID               int64
+	ExpectedGeneration      uint64
+	Reason                  string
+	At                      time.Time
+	ResetOutboundWindow     bool
+	WindowThreadID          string
+	WindowNumber            uint64
+	WindowContextID         string
+	LossyContextRestart     bool
 }
 
 func (db *DB) SwitchSessionContinuityAccount(ctx context.Context, input SessionAccountFailover) (SessionContinuityRecord, *UserWindowGrant, error) {
@@ -70,7 +71,8 @@ func (db *DB) SwitchSessionContinuityAccount(ctx context.Context, input SessionA
 			if grant.OwnerAccountID != input.ExpectedAccountID {
 				return ErrSessionOwnerConflict
 			}
-			if !grant.Confirmed || !grant.ExpiresAt.After(input.At) {
+			pendingAllowed := input.AllowPendingWindowGrant && input.WindowGrantID != "" && grant.PendingUntil.After(input.At)
+			if !grant.ExpiresAt.After(input.At) || !grant.Confirmed && !pendingAllowed {
 				return errors.New("session account failover window grant is unconfirmed or expired")
 			}
 		}
