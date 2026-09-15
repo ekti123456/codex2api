@@ -144,7 +144,7 @@ func (queue *sessionErrorQueue) close() {
 }
 
 func (db *DB) insertSessionErrors(ctx context.Context, events []SessionErrorEvent) error {
-	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
+	err := db.withWriteTx(ctx, func(tx *sql.Tx) error {
 		statement, err := tx.PrepareContext(ctx, `INSERT INTO session_error_stats(session_key,user_id,session_id,first_at,last_at,error_count,identity_data,latest_data) VALUES($1,$2,$3,$4,$4,1,$5,$6) ON CONFLICT(session_key) DO UPDATE SET error_count=session_error_stats.error_count+1, first_at=CASE WHEN excluded.first_at<session_error_stats.first_at THEN excluded.first_at ELSE session_error_stats.first_at END, last_at=CASE WHEN excluded.last_at>session_error_stats.last_at THEN excluded.last_at ELSE session_error_stats.last_at END, session_id=CASE WHEN excluded.session_id<>'' THEN excluded.session_id ELSE session_error_stats.session_id END, identity_data=CASE WHEN excluded.session_id<>'' THEN excluded.identity_data ELSE session_error_stats.identity_data END, latest_data=CASE WHEN excluded.last_at>=session_error_stats.last_at THEN excluded.latest_data ELSE session_error_stats.latest_data END`)
 		if err != nil {
 			return err
@@ -165,6 +165,19 @@ func (db *DB) insertSessionErrors(ctx context.Context, events []SessionErrorEven
 		}
 		return nil
 	})
+	// An activity flush can race the first overload's insert. Re-queue the
+	// existing timestamps once that session becomes eligible for persistence.
+	if err == nil && db.sessionActivity != nil {
+		tracker := db.sessionActivity
+		tracker.mu.Lock()
+		for _, event := range events {
+			if entry := tracker.entries[event.Identity.Key]; entry != nil {
+				tracker.markDirty(entry, time.Now())
+			}
+		}
+		tracker.mu.Unlock()
+	}
+	return err
 }
 
 func (db *DB) pruneSessionErrors(ctx context.Context, now time.Time) error {
@@ -173,6 +186,10 @@ func (db *DB) pruneSessionErrors(ctx context.Context, now time.Time) error {
 			return err
 		}
 		_, err := db.conn.ExecContext(ctx, `DELETE FROM session_error_stats WHERE session_key IN (SELECT session_key FROM session_error_stats ORDER BY last_at DESC,session_key DESC LIMIT 2147483647 OFFSET 100000)`)
+		if err != nil {
+			return err
+		}
+		_, err = db.conn.ExecContext(ctx, `DELETE FROM session_activity WHERE NOT EXISTS (SELECT 1 FROM session_error_stats stats WHERE stats.session_key=session_activity.session_key)`)
 		return err
 	})
 }

@@ -1,5 +1,12 @@
 {
   "sessionErrors": {
+    "activityHint": "Only current-page activity refreshes every 15 seconds; the list is not reloaded automatically. Main requests within 30 minutes count as recent. Auxiliary activity is separate. In-flight counts cover this instance only; client windows and local tool execution cannot be observed.",
+    "activityLimited": "The activity cache is at capacity; some session states cannot be confirmed.",
+    "activityUnknownTime": "No record",
+    "activityUnavailable": "No reliable state yet. Waiting for the current-page refresh.",
+    "activityRecovered": "Successful request after overload",
+    "activityDetails": "Main requests on this instance: {{active}}\nAuxiliary requests on this instance: {{auxiliary}}\nLast main activity: {{last}}\nLast main success: {{success}}\nLast auxiliary activity: {{related}}\nObserved: {{observed}}",
+    "activityStates": { "running": "Running · {{count}}", "auxiliary": "Auxiliary · {{count}}", "recent": "Recently active", "idle": "No recent requests", "unknown": "Unknown" },
     "modelSearch": "Model name (contains)",
     "accountSearch": "Account ID / name / email",
     "resetFilters": "Reset filters",
@@ -18,7 +25,7 @@
     "lockedSuccess": "Permanently locked {{count}} sessions", "unlockedSuccess": "Unlocked {{count}} sessions", "saving": "Saving…", "updateFailed": "Update failed. Refresh and verify before retrying.",
     "detailHint": "Latest server_is_overloaded (500) and subject-isolated session metadata. Unknown fields are not inferred; no API secrets are included.",
     "accountHint": "Upstream account used by the latest overloaded request",
-    "columns": { "user": "User / platform", "session": "Root session ID", "account": "Overloaded account", "count": "Overload count", "last": "Latest error", "error": "Error / model", "status": "Session status", "details": "Details" }
+    "columns": { "user": "User / platform", "session": "Root session ID", "account": "Overloaded account", "count": "Overload count", "last": "Latest error", "error": "Error / model", "activity": "Request activity", "status": "Session status", "details": "Details" }
   },
   "serviceErrors": {
     "title": "Service errors",

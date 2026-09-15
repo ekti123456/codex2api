@@ -42,6 +42,23 @@ export interface SessionErrorQuery {
   cursor?: string
 }
 
+export interface SessionActivity {
+  state: 'running' | 'auxiliary' | 'recent' | 'idle' | 'unknown'
+  active_requests: number
+  auxiliary_requests: number
+  last_active_at?: string
+  last_success_at?: string
+  last_auxiliary_at?: string
+  recovered: boolean
+}
+
+export interface SessionActivityPage {
+  items: Record<string, SessionActivity>
+  observed_at: string
+  live_scope: 'instance'
+  tracking_limited: boolean
+}
+
 export function selectableSessionKeys(items: SessionErrorRow[], lockedOnly: boolean): string[] {
   return items.filter(item => lockedOnly ? item.locked_by === item.identity.key : !item.locked).map(item => item.identity.key)
 }

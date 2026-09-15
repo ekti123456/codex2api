@@ -24,6 +24,9 @@ type serviceErrorAudit struct {
 	usageMu         sync.Mutex
 	usageStatus     int
 	usageError      string
+	usageSucceeded  bool
+	activityLease   *database.SessionActivityLease
+	activityStarted bool
 	authenticated   bool
 	websocket       bool
 	apiKeyID        int64
@@ -96,6 +99,7 @@ func (handler *Handler) beginServiceErrorAudit(ctx *gin.Context) func() {
 	writer := &serviceErrorResponseWriter{ResponseWriter: ctx.Writer}
 	ctx.Writer = writer
 	return func() {
+		defer handler.finishSessionActivity(ctx)
 		state := serviceErrorAuditForRequest(ctx)
 		if writer.Status() < 400 || writer.Status() > 599 || state.websocket {
 			handler.finishSessionErrorAudit(ctx)

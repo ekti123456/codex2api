@@ -1,5 +1,12 @@
 {
   "sessionErrors": {
+    "activityHint": "请求状态每 15 秒仅刷新当前页，不自动重查列表。30 分钟内有主请求记为最近活跃；辅助请求单独显示。进行中数量仅代表当前实例，无法判断客户端是否打开或是否正在执行本地工具。",
+    "activityLimited": "活跃记录达到容量上限，部分会话状态暂无法确认。",
+    "activityUnknownTime": "暂无记录",
+    "activityUnavailable": "暂无可靠状态，请等待当前页状态刷新。",
+    "activityRecovered": "过载后已有成功请求",
+    "activityDetails": "本实例主请求：{{active}}\n本实例辅助请求：{{auxiliary}}\n最近主请求活动：{{last}}\n最近主请求成功：{{success}}\n最近辅助活动：{{related}}\n状态采样：{{observed}}",
+    "activityStates": { "running": "请求中 · {{count}}", "auxiliary": "辅助请求中 · {{count}}", "recent": "最近活跃", "idle": "暂无近期请求", "unknown": "状态未知" },
     "modelSearch": "模型名称（包含匹配）",
     "accountSearch": "账号 ID / 名称 / 邮箱",
     "resetFilters": "重置筛选",
@@ -18,7 +25,7 @@
     "lockedSuccess": "已长期锁定 {{count}} 个会话", "unlockedSuccess": "已解锁 {{count}} 个会话", "saving": "正在保存…", "updateFailed": "更新失败，请刷新确认后重试",
     "detailHint": "最近一次 server_is_overloaded（500）与经身份隔离的会话信息。未知字段不推测，不包含密钥。",
     "accountHint": "最近一次过载请求使用的上游账号",
-    "columns": { "user": "用户 / 平台", "session": "主会话 ID", "account": "过载账号", "count": "过载次数", "last": "最近错误", "error": "错误 / 模型", "status": "会话状态", "details": "详情" }
+    "columns": { "user": "用户 / 平台", "session": "主会话 ID", "account": "过载账号", "count": "过载次数", "last": "最近错误", "error": "错误 / 模型", "activity": "请求状态", "status": "会话状态", "details": "详情" }
   },
   "serviceErrors": {
     "timeRange": "时间范围",

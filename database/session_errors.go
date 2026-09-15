@@ -89,6 +89,7 @@ func ValidSessionOperationKey(key string) bool {
 
 func (db *DB) ensureSessionErrorSchema(ctx context.Context) error {
 	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS session_activity (session_key TEXT PRIMARY KEY, last_active_at BIGINT NOT NULL, last_success_at BIGINT NOT NULL, last_auxiliary_at BIGINT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS session_error_stats (session_key TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, first_at BIGINT NOT NULL, last_at BIGINT NOT NULL, error_count BIGINT NOT NULL, identity_data TEXT NOT NULL, latest_data TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS idx_session_error_stats_last ON session_error_stats(last_at, session_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_session_error_stats_user ON session_error_stats(user_id, last_at)`,

@@ -204,6 +204,7 @@ type DB struct {
 	promptFilterAudit *promptFilterAuditQueue
 	serviceErrors     *serviceErrorQueue
 	sessionErrors     *sessionErrorQueue
+	sessionActivity   *sessionActivityTracker
 	sessionBlacklist  sessionBlacklistCache
 
 	backgroundTaskMu      sync.Mutex
@@ -574,6 +575,8 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	go db.serviceErrors.run()
 	db.sessionErrors = newSessionErrorQueue(db)
 	go db.sessionErrors.run()
+	db.sessionActivity = newSessionActivityTracker(sessionActivityCapacity)
+	go db.runSessionActivity()
 	db.RunBackgroundTask(func(taskCtx context.Context) {
 		if err := db.backfillPromptRiskEvents(taskCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("回填提示词风险画像失败，将在下次启动继续: %v", err)
@@ -921,6 +924,10 @@ func (db *DB) Close() error {
 	}
 	if db.sessionErrors != nil {
 		db.sessionErrors.close()
+	}
+	if db.sessionActivity != nil {
+		db.sessionActivity.closeOnce.Do(func() { close(db.sessionActivity.stop) })
+		<-db.sessionActivity.done
 	}
 	return db.conn.Close()
 }

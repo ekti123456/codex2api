@@ -65,6 +65,41 @@ func (handler *Handler) captureSessionOperationsIdentity(ctx *gin.Context, body 
 		identity.ParentKey = sessionOperationKey(identity.Kind, identity.Platform, identity.UserID, parent)
 	}
 	ctx.Set(sessionOperationsContextKey, identity)
+	handler.beginSessionActivity(ctx, identity)
+}
+
+func (handler *Handler) beginSessionActivity(ctx *gin.Context, identity database.SessionErrorIdentity) {
+	state := serviceErrorAuditForRequest(ctx)
+	if state == nil || handler.db == nil {
+		return
+	}
+	state.usageMu.Lock()
+	defer state.usageMu.Unlock()
+	if state.activityStarted {
+		return
+	}
+	state.activityStarted = true
+	auxiliary := false
+	if value, exists := ctx.Get(usageRequestDiagnosticsContextKey); exists {
+		if diagnostics, ok := value.(*usageRequestDiagnostics); ok && diagnostics != nil && diagnostics.Resolved != nil {
+			resolved := diagnostics.Resolved
+			auxiliary = resolved.ThreadSource != "" && resolved.ThreadSource != "user" || resolved.RequestKind != "" && resolved.RequestKind != "turn"
+		}
+	}
+	state.activityLease = handler.db.BeginSessionActivity(identity.Key, auxiliary, time.Now())
+}
+
+func (handler *Handler) finishSessionActivity(ctx *gin.Context) {
+	state := serviceErrorAuditForRequest(ctx)
+	if state == nil {
+		return
+	}
+	state.usageMu.Lock()
+	lease, success := state.activityLease, state.usageSucceeded
+	state.usageMu.Unlock()
+	// A 200 SSE/WS handshake is not proof of a successful model response.
+	// Use the terminal usage result, and never mark a canceled request successful.
+	lease.Finish(success && ctx.Request.Context().Err() == nil && (state.websocket || ctx.Writer.Status() < 400), time.Now())
 }
 
 func sessionOperationsIdentity(ctx *gin.Context) (database.SessionErrorIdentity, bool) {
@@ -101,6 +136,11 @@ func (handler *Handler) sessionBlacklistError(ctx *gin.Context) *api.APIError {
 }
 
 func (handler *Handler) recordObservedError(ctx *gin.Context, status int, apiError *api.APIError) {
+	if state := serviceErrorAuditForRequest(ctx); state != nil && status >= 400 {
+		state.usageMu.Lock()
+		state.usageSucceeded = false
+		state.usageMu.Unlock()
+	}
 	handler.recordSessionError(ctx, status, apiError)
 	handler.recordServiceError(ctx, status, apiError)
 }
@@ -144,6 +184,7 @@ func rememberSessionErrorUsage(ctx *gin.Context, input *database.UsageLogInput) 
 		state.usageMu.Lock()
 		defer state.usageMu.Unlock()
 		state.usageStatus = input.StatusCode
+		state.usageSucceeded = !input.IsRetryAttempt && input.StatusCode >= 200 && input.StatusCode < 300 && strings.TrimSpace(input.ErrorMessage) == ""
 		state.usageError = ""
 		if input.StatusCode == http.StatusInternalServerError && !input.IsRetryAttempt && isSessionOverloadUsageMessage(input.ErrorMessage) {
 			state.usageError = serviceErrorSafeText(ctx, input.ErrorMessage, 2048)

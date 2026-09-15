@@ -3307,6 +3307,7 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 		}
 		finishServiceAudit := h.beginServiceErrorAudit(c)
 		defer func() {
+			defer h.finishSessionActivity(c)
 			if panicValue := recover(); panicValue != nil {
 				api.ObserveError(c, http.StatusInternalServerError, api.NewAPIError(api.ErrCodeServerError, "Service handler panic", api.ErrorTypeServer))
 				panic(panicValue)

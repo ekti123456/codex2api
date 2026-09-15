@@ -5,6 +5,7 @@ import { api } from '../api'
 import PageHeader from '../components/PageHeader'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
+import { useSessionActivity } from '../hooks/useSessionActivity'
 import { selectableSessionKeys, validSessionSelection, type SessionErrorPage, type SessionErrorRow, type SessionErrorQuery } from '../lib/sessionErrors'
 import { formatBeijingTime } from '../utils/time'
 import { Button } from '@/components/ui/button'
@@ -34,17 +35,9 @@ export default function SessionErrors() {
     controller.current = new AbortController()
     return api.getSessionErrors({ userID: filters.userID, sessionID: filters.sessionID, model: filters.model, account: filters.account, lockedOnly: filters.lockedOnly, lockState: filters.lockState, cursor }, controller.current.signal)
   }, [filters.userID, filters.sessionID, filters.model, filters.account, filters.lockedOnly, filters.lockState, cursor])
-  const { data, loading, error, reload, reloadSilently } = useDataLoader({ initialData: emptyPage, load })
-  const canPoll = useRef(true)
-  canPoll.current = selected.length === 0 && !confirming && !busy
+  const { data, loading, error, reload } = useDataLoader({ initialData: emptyPage, load })
+  const activity = useSessionActivity(data.items.map(row => row.identity.key), !loading && !error, JSON.stringify(filters))
   useEffect(() => () => controller.current?.abort(), [])
-  useEffect(() => {
-    if (cursor) return
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && canPoll.current) void reloadSilently()
-    }, 30000)
-    return () => window.clearInterval(timer)
-  }, [cursor, reloadSilently])
 
   const unlockMode = filters.lockedOnly || filters.lockState === 'locked'
   const selection = validSessionSelection(selected, data.items, unlockMode)
@@ -98,6 +91,8 @@ export default function SessionErrors() {
         }}>{t('sessionErrors.resetFilters')}</Button>
       </form>
       <p className="text-xs leading-relaxed text-muted-foreground">{t('sessionErrors.filterHint')}</p>
+      <p className="text-xs leading-relaxed text-muted-foreground">{t('sessionErrors.activityHint')}</p>
+      {activity?.tracking_limited && <p role="status" className="text-xs text-amber-600">{t('sessionErrors.activityLimited')}</p>}
       <p className="text-xs leading-relaxed text-muted-foreground">{t('sessionErrors.retention')}</p>
       <p className="text-xs text-muted-foreground" role="status">{t('serviceErrors.collector', { pending: data.collector.pending, dropped: data.collector.dropped, failed: data.collector.write_failures })}</p>
       {(data.collector.dropped > 0 || data.collector.write_failures > 0) && <p role="alert" className="text-xs text-amber-600">{t('serviceErrors.lossWarning')}</p>}
@@ -119,7 +114,7 @@ export default function SessionErrors() {
         {data.items.length === 0 ? <p className="p-10 text-center text-sm text-muted-foreground">{t('sessionErrors.empty')}</p> : <div className="overflow-x-auto"><Table className="min-w-[900px]">
           <TableHeader><TableRow>
             <TableHead className="w-10"><input type="checkbox" aria-label={t('sessionErrors.selectPage')} disabled={busy || eligible.length === 0} checked={eligible.length > 0 && selection.length === eligible.length} onChange={event => setSelected(event.target.checked ? eligible : [])} /></TableHead>
-            {['user', 'session', 'account', 'count', 'last', 'error', 'status', 'details'].map(column => <TableHead key={column} title={column === 'account' ? t('sessionErrors.accountHint') : undefined}>{t(`sessionErrors.columns.${column}`)}</TableHead>)}
+            {['user', 'session', 'account', 'count', 'last', 'error', 'activity', 'status', 'details'].map(column => <TableHead key={column} title={column === 'account' ? t('sessionErrors.accountHint') : undefined}>{t(`sessionErrors.columns.${column}`)}</TableHead>)}
           </TableRow></TableHeader>
           <TableBody>{data.items.map(row => <TableRow key={row.identity.key}>
             <TableCell><input type="checkbox" aria-label={t('sessionErrors.selectSession', { user: row.identity.user_id, session: row.identity.session_id || row.identity.root_fingerprint })} checked={selection.includes(row.identity.key)} disabled={busy || !eligible.includes(row.identity.key)} onChange={event => setSelected(current => event.target.checked ? [...current, row.identity.key] : current.filter(key => key !== row.identity.key))} /></TableCell>
@@ -134,6 +129,7 @@ export default function SessionErrors() {
             <TableCell className="font-mono font-semibold">{row.count.toLocaleString()}</TableCell>
             <TableCell className="whitespace-nowrap text-xs">{row.count ? formatBeijingTime(row.last_at) : '—'}</TableCell>
             <TableCell className="max-w-64"><p className="truncate text-xs" title={row.latest.message}>{row.latest.code || '—'}</p><span className="text-xs text-muted-foreground">{row.latest.model}</span></TableCell>
+            <TableCell><SessionActivityBadge value={activity?.items[row.identity.key]} observedAt={activity?.observed_at} /></TableCell>
             <TableCell><Badge variant="outline">{t(row.lineage_invalid ? 'sessionErrors.lineageInvalid' : !row.locked ? 'sessionErrors.allowed' : row.locked_by === row.identity.key ? 'sessionErrors.locked' : 'sessionErrors.inherited')}</Badge></TableCell>
             <TableCell><Button size="sm" variant="ghost" onClick={() => setDetail(row)}>{t('sessionErrors.columns.details')}</Button></TableCell>
           </TableRow>)}</TableBody>
@@ -158,4 +154,25 @@ export default function SessionErrors() {
       <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs">{JSON.stringify(detail, null, 2)}</pre>
     </DialogContent></Dialog>
   </>
+}
+
+function SessionActivityBadge({ value, observedAt }: { value?: import('../lib/sessionErrors').SessionActivity; observedAt?: string }) {
+  const { t } = useTranslation()
+  const state = value?.state ?? 'unknown'
+  const colors = {
+    running: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    auxiliary: 'border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+    recent: 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400',
+    idle: 'text-muted-foreground', unknown: 'text-muted-foreground',
+  }
+  const stamp = (date?: string) => date ? formatBeijingTime(date) : t('sessionErrors.activityUnknownTime')
+  const hint = t('sessionErrors.activityDetails', {
+    active: value?.active_requests ?? 0, auxiliary: value?.auxiliary_requests ?? 0,
+    last: stamp(value?.last_active_at), success: stamp(value?.last_success_at),
+    related: stamp(value?.last_auxiliary_at), observed: stamp(observedAt),
+  })
+  return <div className="space-y-1" title={value ? hint : t('sessionErrors.activityUnavailable')}>
+    <Badge variant="outline" className={colors[state]}>{t(`sessionErrors.activityStates.${state}`, { count: state === 'auxiliary' ? value?.auxiliary_requests : value?.active_requests })}</Badge>
+    {value?.recovered && <p className="text-xs text-emerald-600 dark:text-emerald-400">{t('sessionErrors.activityRecovered')}</p>}
+  </div>
 }

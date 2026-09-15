@@ -47,6 +47,38 @@ func (handler *Handler) GetSessionErrors(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, page)
 }
 
+func (handler *Handler) GetSessionActivities(ctx *gin.Context) {
+	var request struct {
+		Keys []string `json:"keys"`
+	}
+	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, 8192)
+	if ctx.ShouldBindJSON(&request) != nil || len(request.Keys) == 0 || len(request.Keys) > 100 {
+		writeError(ctx, http.StatusBadRequest, "请选择当前页的 1 到 100 个会话")
+		return
+	}
+	seen := make(map[string]bool, len(request.Keys))
+	for _, key := range request.Keys {
+		if !database.ValidSessionOperationKey(key) || seen[key] {
+			writeError(ctx, http.StatusBadRequest, "会话标识无效或重复")
+			return
+		}
+		seen[key] = true
+	}
+	if handler.db == nil {
+		writeError(ctx, http.StatusServiceUnavailable, "会话状态暂不可用")
+		return
+	}
+	lookup, cancel := context.WithTimeout(ctx.Request.Context(), 2*time.Second)
+	defer cancel()
+	page, err := handler.db.SessionActivities(lookup, request.Keys, time.Now())
+	if err != nil {
+		writeError(ctx, http.StatusServiceUnavailable, "会话状态查询失败，请稍后重试")
+		return
+	}
+	ctx.Header("Cache-Control", "no-store")
+	ctx.JSON(http.StatusOK, page)
+}
+
 func (handler *Handler) SetSessionBlacklist(ctx *gin.Context) {
 	var request struct {
 		Keys   []string `json:"keys"`
