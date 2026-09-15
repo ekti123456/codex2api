@@ -76,6 +76,7 @@ func (handler *Handler) configureAPIRelaySessionPolicy(request *gin.Context, bod
 	if handler == nil || handler.store == nil || request.Request == nil || request.Request.URL == nil {
 		return identity
 	}
+	handler.prepareChatGroupRouting(request, identity)
 	if isResponsesWebSocketUpgradeRequest(request.Request) {
 		return identity
 	}

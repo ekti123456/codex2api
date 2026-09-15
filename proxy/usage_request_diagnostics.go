@@ -95,6 +95,7 @@ type usageRequestDiagnostics struct {
 	WindowGrant            string                                   `json:"window_grant,omitempty"`
 	Continuity             *sessionContinuityDiagnostic             `json:"session_continuity,omitempty"`
 	AccountFailover        *sessionAccountFailoverDiagnostic        `json:"account_failover,omitempty"`
+	GroupRouting           *groupRoutingDiagnostic                  `json:"group_routing,omitempty"`
 	PromptSafety           *database.PromptSafetyDiagnostic         `json:"prompt_safety,omitempty"`
 	APIRelaySessionExempt  bool                                     `json:"api_relay_session_exempt,omitempty"`
 	UserWindowKeyHash      string                                   `json:"user_window_key_hash,omitempty"`

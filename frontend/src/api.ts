@@ -1371,7 +1371,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  getPromptFilterLogs: (params: number | { page?: number; pageSize?: number; limit?: number; source?: string; action?: string; endpoint?: string; model?: string; apiKeyId?: string; q?: string; reviewed?: boolean; reviewResult?: string } = 100) => {
+  getPromptFilterLogs: (params: number | { page?: number; pageSize?: number; limit?: number; source?: string; action?: string; endpoint?: string; model?: string; apiKeyId?: string; q?: string; searchScope?: string; sort?: string; reviewed?: boolean; reviewResult?: string } = 100) => {
     const search = new URLSearchParams()
     if (typeof params === 'number') {
       search.set('limit', String(params))
@@ -1387,6 +1387,8 @@ export const api = {
       if (params.q) search.set('q', params.q)
       if (typeof params.reviewed === 'boolean') search.set('reviewed', String(params.reviewed))
       if (params.reviewResult) search.set('review_result', params.reviewResult)
+      if (params.searchScope) search.set('search_scope', params.searchScope)
+      if (params.sort) search.set('sort', params.sort)
     }
     return request<PromptFilterLogsResponse>(`/prompt-filter/logs?${search.toString()}`)
   },

@@ -441,8 +441,8 @@ func codexContinuationPinned(turnContinuation, hasPreviousResponse, hasBinding b
 }
 
 // applyAffinityGroupRouting keeps fingerprinted requests on the API key's original groups
-// and routes requests without either a Codex engine fingerprint or the dedicated local
-// affinity header to the configured split groups.
+// and routes new Chat Completions requests, or requests without either a Codex
+// engine fingerprint or the dedicated local affinity header, to split groups.
 //
 // 当 Key 没配「允许账号分组」（= 不限分组）时，带指纹的请求改为「除分流组以外的全部账号」：
 // 否则分流组既服务无指纹请求、又照常接真 Codex 流量，隔离等于没做——而不限分组恰恰是
@@ -463,10 +463,15 @@ func applyAffinityGroupRouting(c *gin.Context, identity requestSessionIdentity, 
 	if len(splitGroups) == 0 {
 		return filter
 	}
+	if chatCompletionsGroupRouting(c) {
+		return applyChatGroupRouting(c, filter, splitGroups)
+	}
 
 	if !identity.hasRequestFingerprint {
+		usageRequestDiagnosticState(c).GroupRouting = &groupRoutingDiagnostic{Reason: "no_request_fingerprint"}
 		return groupMembershipFilter(splitGroups, true, filter, selectionTraceForRequest(c))
 	}
+	usageRequestDiagnosticState(c).GroupRouting = &groupRoutingDiagnostic{Reason: "request_fingerprint"}
 
 	allowedGroups := int64GroupSet(row.AllowedGroupIDs)
 	if len(allowedGroups) == 0 {
