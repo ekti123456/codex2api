@@ -144,3 +144,68 @@ func BenchmarkPromptAuditGroups(b *testing.B) {
 	}
 	b.StopTimer()
 }
+
+func TestPromptAuditGroupsIgnoreClearedReviewDetailsForAuxiliaryEvidence(t *testing.T) {
+	db, err := New("sqlite", filepath.Join(t.TempDir(), "review-groups.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	base := PromptFilterLogInput{Source: "local_filter", Action: "allow", PrimaryOrigin: "developer", APIKeyID: 1, NewAPIPlatform: "test", NewAPIUserID: "1", NewAPIPolicyStatus: "verified", AuditScore: 200, MatchContext: "same developer rule evidence", MatchedPatterns: `[{"name":"rule","weight":85}]`, Reviewed: true, ReviewModel: "omni-moderation-latest"}
+	for i, prompt := range []string{"first user prompt", "second user prompt", "third user prompt"} {
+		item := base
+		item.TextPreview, item.FullText = prompt, prompt
+		confidence, threshold := 0.01*float64(i+1), 0.8+0.05*float64(i)
+		item.ReviewConfidence, item.ReviewThreshold = &confidence, &threshold
+		item.ReviewReason = fmt.Sprintf("different category/reason %d", i)
+		if err := db.InsertPromptFilterLog(ctx, &item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flagged := base
+	flagged.ReviewFlagged = true
+	flagged.Action = "block"
+	if err := db.InsertPromptFilterLog(ctx, &flagged); err != nil {
+		t.Fatal(err)
+	}
+	different := base
+	different.MatchContext = "different developer evidence"
+	if err := db.InsertPromptFilterLog(ctx, &different); err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{"first direct request", "different direct request"} {
+		item := base
+		item.PrimaryOrigin = "current_user"
+		item.TextPreview, item.FullText = prompt, prompt
+		if err := db.InsertPromptFilterLog(ctx, &item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	groups, total, err := db.ListPromptFilterLogsPage(ctx, PromptFilterLogQuery{Grouped: true})
+	if err != nil || total != 5 {
+		t.Fatalf("want 5 groups, got %d: %v", total, err)
+	}
+	var groupID int64
+	for _, group := range groups {
+		if group.OccurrenceCount == 3 {
+			groupID = group.GroupID
+		}
+	}
+	if groupID == 0 {
+		t.Fatalf("passing review details split identical auxiliary evidence: %+v", groups)
+	}
+	rows, count, err := db.ListPromptFilterLogsPage(ctx, PromptFilterLogQuery{GroupID: groupID})
+	if err != nil || count != 3 || len(rows) != 3 {
+		t.Fatalf("group details: %d %v", count, err)
+	}
+	for _, row := range rows {
+		if row.ReviewConfidence == nil || row.ReviewReason == "" || row.FullText == "" {
+			t.Fatal("grouping erased original details")
+		}
+	}
+	rows, count, err = db.ListPromptFilterLogsPage(ctx, PromptFilterLogQuery{Grouped: true, SearchScope: "content", Query: "second user prompt"})
+	if err != nil || count != 1 || len(rows) != 1 || rows[0].OccurrenceCount != 1 {
+		t.Fatalf("prompt search no longer filters original rows: %d %v", count, err)
+	}
+}

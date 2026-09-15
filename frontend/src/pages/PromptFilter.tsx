@@ -6012,15 +6012,19 @@ function PromptAuditGroupDialog({ log, filters, onClose }: { log: PromptFilterLo
     return () => { active = false }
   }, [log.group_id, filters, page, reload])
   return <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-    <DialogContent className="w-[96vw] max-w-[1600px] max-h-[90vh] overflow-y-auto">
-      <DialogHeader>
+    <DialogContent className="flex h-[90dvh] w-[96vw] max-w-[1600px] flex-col overflow-hidden sm:max-w-[1600px]">
+      <DialogHeader className="shrink-0 pr-8">
         <DialogTitle>{t('promptFilter.groupDetailsTitle')} · {total}</DialogTitle>
         <DialogDescription>{t('promptFilter.groupDetailsHint')}</DialogDescription>
       </DialogHeader>
-      <StateShell loading={loading} error={error} isEmpty={!loading && rows.length === 0} onRetry={() => setReload(value => value + 1)} emptyTitle={t('promptFilter.noLogs')}>
-        <div className="overflow-x-auto"><PromptFilterLogsTable logs={rows} /></div>
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+        <StateShell loading={loading} error={error} isEmpty={!loading && rows.length === 0} onRetry={() => setReload(value => value + 1)} emptyTitle={t('promptFilter.noLogs')}>
+          <div className="min-w-[1420px]"><PromptFilterLogsTable logs={rows} /></div>
+        </StateShell>
+      </div>
+      <div className="shrink-0">
         <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / pageSize))} totalItems={total} pageSize={pageSize} onPageChange={setPage} />
-      </StateShell>
+      </div>
     </DialogContent>
   </Dialog>
 }

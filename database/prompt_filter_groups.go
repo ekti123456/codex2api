@@ -12,7 +12,9 @@ import (
 // Keep request IDs, timestamps, latency and session IDs in individual records.
 func promptLogGroupExpressions(prefix string) []string {
 	var fields []string
-	for _, column := range []string{"source", "request_protocol", "request_provider", "endpoint", "model", "action", "mode", "policy_profile", "reason_code", "primary_origin", "newapi_policy_status", "newapi_platform", "newapi_user_id", "matched_patterns", "error_code", "review_model", "review_error", "review_reason", "review_endpoint", "review_request_mode"} {
+	auxiliaryEvidence := prefix + "primary_origin IN ('developer', 'system', 'instructions', 'history', 'tool_output', 'tool_arguments', 'attachment_refs', 'attachment_content', 'session_context', 'application_candidate') AND COALESCE(" + prefix + "match_context, '') <> ''"
+	clearedAuxiliaryReview := "(" + auxiliaryEvidence + ") AND COALESCE(" + prefix + "reviewed, false) = true AND COALESCE(" + prefix + "review_flagged, false) = false AND COALESCE(TRIM(" + prefix + "review_error), '') = ''"
+	for _, column := range []string{"source", "request_protocol", "request_provider", "endpoint", "model", "action", "mode", "policy_profile", "reason_code", "primary_origin", "newapi_policy_status", "newapi_platform", "newapi_user_id", "matched_patterns", "error_code", "review_model", "review_error", "review_endpoint", "review_request_mode"} {
 		fields = append(fields, "COALESCE("+prefix+column+", '')")
 	}
 	for _, column := range []string{"api_key_id", "score", "audit_score", "threshold_value"} {
@@ -22,11 +24,16 @@ func promptLogGroupExpressions(prefix string) []string {
 		fields = append(fields, "COALESCE("+prefix+column+", false)")
 	}
 	for _, column := range []string{"review_confidence", "review_threshold"} {
-		fields = append(fields, "COALESCE("+prefix+column+", -1)")
+		// A passing review may inspect a different current-user prompt on every
+		// request. Its probability/category threshold is not auxiliary evidence.
+		fields = append(fields, "CASE WHEN "+clearedAuxiliaryReview+" THEN -1 ELSE COALESCE("+prefix+column+", -1) END")
 	}
+	fields = append(fields, "CASE WHEN "+clearedAuxiliaryReview+" THEN '' ELSE COALESCE("+prefix+"review_reason, '') END")
 	fields = append(fields,
 		"CASE WHEN COALESCE("+prefix+"newapi_user_id, '') <> '' AND "+prefix+"newapi_policy_status IN ('verified', 'signed_response') THEN '' ELSE COALESCE("+prefix+"client_ip, '') END",
-		"COALESCE(NULLIF("+prefix+"match_context, ''), NULLIF("+prefix+"full_text, ''), "+prefix+"text_preview, '')",
+		// Auxiliary audit groups follow their own evidence, not the unrelated
+		// current-user preview. User-origin records must retain prompt identity.
+		"CASE WHEN "+auxiliaryEvidence+" THEN "+prefix+"match_context ELSE COALESCE(NULLIF("+prefix+"full_text, ''), NULLIF("+prefix+"text_preview, ''), "+prefix+"match_context, '') END",
 	)
 	return fields
 }
