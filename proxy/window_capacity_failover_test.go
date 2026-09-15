@@ -119,6 +119,7 @@ func TestWindowCapacityQuoteReachesAccountFailover(test *testing.T) {
 			case "opaque_only":
 				body, _ = sjson.SetRawBytes(body, "input", []byte(`[{"type":"compaction","encrypted_content":"old-only"}]`))
 			}
+			body = addSessionTools(test, body)
 			meta.WindowGrant = result.Ticket
 			request, _ := windowExpansionTestContext(test, "/v1/responses", body, meta)
 			request.Set(ingressRequestBodyContextKey, body)
@@ -209,6 +210,7 @@ func TestWindowCapacityQuoteReachesAccountFailover(test *testing.T) {
 			require.NoError(test, err)
 			require.NoError(test, response.Body.Close())
 			outbound := <-sent
+			assertSessionTools(test, outbound.body)
 			require.Equal(test, "Bearer target-token", outbound.headers.Get("Authorization"))
 			require.NotEqual(test, continuityTestThread, outbound.headers.Get("Session-Id"))
 			require.NotContains(test, string(outbound.body), "old-encrypted")

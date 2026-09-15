@@ -760,6 +760,9 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			upstreamCancel()
 			h.store.Release(account)
 			failure := api.NewAPIError("codex_session_failover_context_required", restartError.Error(), api.ErrorTypeInvalidRequest)
+			if typed := codexIdentityRequestError(restartError); typed != nil {
+				failure = typed
+			}
 			_ = writeAuditedResponsesWSError(c, conn, failure)
 			return newResponsesWSCloseError(websocket.ClosePolicyViolation, failure.Message, failure)
 		}

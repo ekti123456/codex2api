@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"container/list"
 	"crypto/sha256"
 	"encoding/json"
@@ -1123,6 +1124,8 @@ func repairResponsesToolCallPairing(body map[string]any) bool {
 		typ := strings.TrimSpace(firstNonEmptyAnyString(item["type"]))
 		callID := strings.TrimSpace(firstNonEmptyAnyString(item["call_id"]))
 		switch {
+		case typ == "tool_search_output":
+			out = append(out, raw)
 		case isCodexToolCallOutputType(typ):
 			if callID != "" && callIDs[callID] {
 				out = append(out, raw)
@@ -1406,7 +1409,9 @@ func isMissingEncryptedContentError(body []byte) bool {
 
 func stripInvalidEncryptedContentFromResponsesBody(body []byte) ([]byte, bool) {
 	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil || root == nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil || root == nil {
 		return body, false
 	}
 	input, ok := root["input"]
@@ -1424,6 +1429,10 @@ func stripInvalidEncryptedContentFromResponsesBody(body []byte) ([]byte, bool) {
 	}
 	stripped, err := json.Marshal(root)
 	if err != nil {
+		return body, false
+	}
+	// Never recover from an encrypted-state error by damaging declarations.
+	if !sessionToolsEqual(body, stripped) {
 		return body, false
 	}
 	return stripped, true
@@ -1484,8 +1493,9 @@ func stripInvalidEncryptedContentValue(value any, arrayItem bool) (any, bool, bo
 			delete(v, "encrypted_content")
 			changed = true
 		}
-		for key, child := range v {
-			stripped, childChanged, keep := stripInvalidEncryptedContentValue(child, false)
+		rawObject, _ := json.Marshal(v)
+		for _, key := range responseContextChildFields(gjson.ParseBytes(rawObject)) {
+			stripped, childChanged, keep := stripInvalidEncryptedContentValue(v[key], false)
 			if childChanged {
 				changed = true
 			}

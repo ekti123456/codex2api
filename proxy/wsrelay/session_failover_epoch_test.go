@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,12 @@ import (
 )
 
 func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
+	for _, native := range []bool{false, true} {
+		test.Run(fmt.Sprintf("native_ingress=%v", native), func(t *testing.T) { runWebsocketToolFailover(t, native) })
+	}
+}
+
+func runWebsocketToolFailover(test *testing.T, native bool) {
 	oldRuntime, oldResin, oldExecutor := proxy.CurrentRuntimeSettings(), proxy.GetResinConfig(), proxy.WebsocketExecuteFunc
 	test.Cleanup(func() {
 		proxy.ApplyRuntimeSettings(oldRuntime)
@@ -33,7 +40,8 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 	settings := proxy.DefaultRuntimeSettings()
 	settings.CodexSessionFailoverEnabled, settings.CodexForceWebsocket = true, true
 	proxy.ApplyRuntimeSettings(settings)
-	db, err := database.New("sqlite", filepath.Join(test.TempDir(), "epoch.db"))
+	dbPath := filepath.Join(test.TempDir(), "epoch.db")
+	db, err := database.New("sqlite", dbPath)
 	require.NoError(test, err)
 	test.Cleanup(func() { require.NoError(test, db.Close()) })
 	memory := cache.NewMemory(100)
@@ -66,7 +74,7 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 				return
 			}
 			seen <- capture{request.Header.Clone(), body, index}
-			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"epoch-response","status":"completed","output":[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"gAAAAepoch-state-%d"}],"usage":{"input_tokens":1,"output_tokens":1}}}`, index))); err != nil {
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"epoch-response","status":"completed","output":[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"gAAAAepoch-state-%d"},{"type":"function_call","call_id":"tool-call","name":"exec_command","arguments":"{}"}],"usage":{"input_tokens":1,"output_tokens":1}}}`, index))); err != nil {
 				return
 			}
 		}
@@ -83,6 +91,16 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 		}
 		return websocketResponseToHTTP(ctx, response, http.StatusOK, nil), nil
 	}
+	var downstream *websocket.Conn
+	if native {
+		engine := gin.New()
+		engine.GET("/v1/responses", handler.ResponsesWebSocket)
+		frontend := httptest.NewServer(engine)
+		test.Cleanup(frontend.Close)
+		downstream, _, err = websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(frontend.URL, "http")+"/v1/responses", http.Header{"Authorization": {"Bearer test-user-key"}})
+		require.NoError(test, err)
+		test.Cleanup(func() { _ = downstream.Close() })
+	}
 	const root = "01a09351-7b81-7ae0-afd0-225e178ea131"
 	var captures []capture
 	const originalTurn = "01a095b5-86a3-7ec2-af42-0bb1111ef330"
@@ -91,6 +109,13 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 		if number == 2 {
 			atomic.StoreInt32(&first.Disabled, 1)
 			atomic.StoreInt32(&second.Disabled, 0)
+		}
+		if number == 3 && !native {
+			require.NoError(test, db.Close())
+			db, err = database.New("sqlite", dbPath)
+			require.NoError(test, err)
+			handler = proxy.NewHandler(store, db, nil, nil)
+			handler.SetRuntimeCache(memory)
 		}
 		if number == 4 {
 			atomic.StoreInt32(&first.Disabled, 0)
@@ -111,19 +136,40 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 			body, err = sjson.SetRawBytes(body, "input", []byte(fmt.Sprintf(`[{"type":"reasoning","encrypted_content":"gAAAAepoch-state-%d"},{"type":"compaction","encrypted_content":"gAAAAold-compaction"},{"role":"user","content":[{"type":"input_file","file_id":"old-file"},{"type":"input_text","text":"current task"}]}]`, number/2)))
 			require.NoError(test, err)
 		}
-		recorder := httptest.NewRecorder()
-		request, _ := gin.CreateTestContext(recorder)
-		request.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-		request.Request.Header.Set("Authorization", "Bearer test-user-key")
-		ctx, cancel := context.WithTimeout(request.Request.Context(), 5*time.Second)
-		request.Request = request.Request.WithContext(ctx)
-		handler.Responses(request)
-		cancel()
-		require.Equal(test, http.StatusOK, recorder.Code, recorder.Body.String())
-		require.Contains(test, recorder.Body.String(), "response.completed")
+		body = addSessionWireTools(test, body)
+		if native {
+			body, err = sjson.SetBytes(body, "type", "response.create")
+			require.NoError(test, err)
+			require.NoError(test, downstream.SetReadDeadline(time.Now().Add(5*time.Second)))
+			require.NoError(test, downstream.WriteMessage(websocket.TextMessage, body))
+			for {
+				_, event, readErr := downstream.ReadMessage()
+				require.NoError(test, readErr)
+				kind := gjson.GetBytes(event, "type").String()
+				require.NotEqual(test, "error", kind, string(event))
+				require.NotEqual(test, "response.failed", kind, string(event))
+				if kind == "response.completed" {
+					require.Contains(test, string(event), "exec_command")
+					break
+				}
+			}
+		} else {
+			recorder := httptest.NewRecorder()
+			request, _ := gin.CreateTestContext(recorder)
+			request.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			request.Request.Header.Set("Authorization", "Bearer test-user-key")
+			ctx, cancel := context.WithTimeout(request.Request.Context(), 5*time.Second)
+			request.Request = request.Request.WithContext(ctx)
+			handler.Responses(request)
+			cancel()
+			require.Equal(test, http.StatusOK, recorder.Code, recorder.Body.String())
+			require.Contains(test, recorder.Body.String(), "response.completed")
+			require.Contains(test, recorder.Body.String(), "exec_command")
+		}
 		select {
 		case sent := <-seen:
 			captures = append(captures, sent)
+			assertSessionWireTools(test, sent.body)
 			if number == 2 || number == 4 {
 				require.NotContains(test, string(sent.body), "gAAAAepoch-state-")
 				require.NotContains(test, string(sent.body), "gAAAAold-compaction")

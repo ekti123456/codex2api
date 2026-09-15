@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,8 +21,17 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 		return nil, nil, report, codexAccountIdentityError("换号重开无法解析请求正文。")
 	}
 	allowed := func(kind, value string) bool { return known != nil && known(kind, value) }
-	remove := func(kind string) { report.Removed[kind]++ }
+	currentPath, currentType := "", ""
+	remove := func(kind string) {
+		report.Removed[kind]++
+		if len(report.Items) < 32 {
+			report.Items = append(report.Items, database.SessionContextRemoval{Kind: kind, Path: currentPath, ItemType: currentType})
+		} else {
+			report.OmittedItems++
+		}
+	}
 	for _, field := range []string{"previous_response_id", "conversation", "conversation_id"} {
+		currentPath, currentType = field, ""
 		value := gjson.ParseBytes(payload[field])
 		if value.Exists() && value.Type != gjson.Null && value.String() != "" && !allowed(field, value.String()) {
 			delete(payload, field)
@@ -31,6 +41,7 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 	headers = headers.Clone()
 	if token := headers.Get("X-Codex-Turn-State"); token != "" && !allowed("turn_state", token) {
 		headers.Del("X-Codex-Turn-State")
+		currentPath, currentType = "headers.X-Codex-Turn-State", ""
 		remove("turn_state")
 	}
 	var metadata map[string]json.RawMessage
@@ -38,19 +49,21 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 		if token := gjson.ParseBytes(metadata["x-codex-turn-state"]).String(); token != "" && !allowed("turn_state", token) {
 			delete(metadata, "x-codex-turn-state")
 			payload["client_metadata"], _ = json.Marshal(metadata)
+			currentPath, currentType = "client_metadata.x-codex-turn-state", ""
 			remove("turn_state")
 		}
 	}
-	var scrub func(gjson.Result, int) (json.RawMessage, bool)
-	scrub = func(value gjson.Result, depth int) (json.RawMessage, bool) {
+	var scrub func(gjson.Result, int, string) (json.RawMessage, bool)
+	scrub = func(value gjson.Result, depth int, path string) (json.RawMessage, bool) {
+		currentPath, currentType = path, responseContextSafeType(value)
 		if depth > 64 {
 			remove("unsupported_depth")
 			return nil, false
 		}
 		if value.IsArray() {
 			items := make([]json.RawMessage, 0)
-			for _, item := range value.Array() {
-				if cleaned, keep := scrub(item, depth+1); keep {
+			for index, item := range value.Array() {
+				if cleaned, keep := scrub(item, depth+1, path+"["+strconv.Itoa(index)+"]"); keep {
 					items = append(items, cleaned)
 				}
 			}
@@ -85,19 +98,20 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 			}
 			delete(object, "file_id")
 		}
-		for field, raw := range object {
-			child := gjson.ParseBytes(raw)
+		for _, field := range responseContextChildFields(value) {
+			child := gjson.ParseBytes(object[field])
 			if !child.IsArray() && !child.IsObject() {
 				continue
 			}
-			cleaned, keep := scrub(child, depth+1)
+			cleaned, keep := scrub(child, depth+1, path+"."+responseContextSafeField(field))
 			if keep {
 				object[field] = cleaned
 			} else {
 				delete(object, field)
 			}
 		}
-		if kind == "message" || value.Get("role").String() != "" {
+		currentPath, currentType = path, responseContextSafeType(value)
+		if responseContextMessage(value) {
 			content := gjson.ParseBytes(object["content"])
 			if !content.Exists() || content.IsArray() && len(content.Array()) == 0 || content.Type == gjson.String && strings.TrimSpace(content.String()) == "" {
 				remove("empty_message")
@@ -108,10 +122,14 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 		return raw, true
 	}
 	input := gjson.ParseBytes(payload["input"])
+	if input.IsObject() {
+		return nil, headers, report, &Error{Code: "codex_session_failover_context_required", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: "重建会话的 input 必须是输入项数组或文本，请检查请求格式。"}
+	}
 	if input.IsArray() {
 		items := make([]json.RawMessage, 0)
-		for _, item := range input.Array() {
-			if cleaned, keep := scrub(item, 0); keep {
+		indices := make([]int, 0)
+		for index, item := range input.Array() {
+			if cleaned, keep := scrub(item, 0, "input["+strconv.Itoa(index)+"]"); keep {
 				if identifier := item.Get("id").String(); identifier != "" && item.Get("type").String() != "item_reference" && !allowed("item_reference", identifier) {
 					var fullItem map[string]json.RawMessage
 					if json.Unmarshal(cleaned, &fullItem) == nil && fullItem != nil {
@@ -121,6 +139,7 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 					}
 				}
 				items = append(items, cleaned)
+				indices = append(indices, index)
 			}
 		}
 		if gjson.ParseBytes(payload["previous_response_id"]).String() == "" {
@@ -131,7 +150,8 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 				}
 			}
 			paired := items[:0]
-			for _, item := range items {
+			for index, item := range items {
+				currentPath, currentType = "input["+strconv.Itoa(indices[index])+"]", responseContextSafeType(gjson.ParseBytes(item))
 				if strings.HasSuffix(gjson.GetBytes(item, "type").String(), "_call_output") && !calls[gjson.GetBytes(item, "call_id").String()] {
 					remove("orphan_tool_output")
 					continue
@@ -143,10 +163,16 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 		payload["input"], _ = json.Marshal(items)
 	}
 	input = gjson.ParseBytes(payload["input"])
-	if (!input.Exists() || input.Type == gjson.Null || input.IsArray() && len(input.Array()) == 0 || input.Type == gjson.String && strings.TrimSpace(input.String()) == "") && gjson.ParseBytes(payload["previous_response_id"]).String() == "" {
+	if gjson.ParseBytes(payload["previous_response_id"]).String() == "" && missingToolSearchCall(input) >= 0 {
+		return nil, headers, report, &Error{Code: "codex_session_failover_context_required", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: "重建会话缺少动态工具搜索结果对应的调用，请恢复完整上下文后重试。"}
+	}
+	if !responseContextHasInput(input) && gjson.ParseBytes(payload["previous_response_id"]).String() == "" {
 		return nil, headers, report, &Error{Code: "codex_session_failover_context_required", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: "清理旧账号上下文后没有可用输入，请补充当前问题和必要资料，或新开对话。"}
 	}
 	cleaned, err := json.Marshal(payload)
+	if err == nil {
+		err = checkSessionToolPreservation(body, cleaned, report)
+	}
 	return cleaned, headers, report, err
 }
 
@@ -174,12 +200,19 @@ func PrepareSessionRestartOutbound(ctx context.Context, account *auth.Account, b
 	known, cancel := epoch.restartContextVerifier(ctx)
 	defer cancel()
 	cleaned, outgoingHeaders, report, err := cleanSessionRestartContext(headers, body, known)
-	if epoch.diagnostic != nil && len(report.Removed) > 0 {
+	if epoch.diagnostic != nil {
 		report.Phase = "outbound"
-		previous := epoch.diagnostic.ContextCleanup
-		if previous != nil && previous.Phase == "outbound" {
-			for kind, count := range previous.Removed {
-				report.Removed[kind] += count
+		report.Pass, report.DetailsPass = 1, 1
+		if previous := epoch.diagnostic.ContextCleanup; previous != nil && previous.Phase == "outbound" {
+			report.Pass = previous.Pass + 1
+			report.DetailsPass = report.Pass
+			// A second executor boundary may receive an already-cleaned body.
+			// Preserve the last modifying pass's evidence without adding its
+			// counts twice. Pass and DetailsPass make the distinction explicit.
+			if err == nil && len(report.Removed) == 0 && previous.ToolsAfter != nil && report.ToolsBefore != nil && *previous.ToolsAfter == *report.ToolsBefore {
+				retained := *previous
+				retained.Pass = report.Pass
+				report = &retained
 			}
 		}
 		epoch.diagnostic.ContextCleanup = report

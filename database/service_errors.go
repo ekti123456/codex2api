@@ -59,9 +59,35 @@ type SessionAccountFailoverDiagnostic struct {
 }
 
 type SessionContextCleanup struct {
-	Mode    string         `json:"mode"`
-	Phase   string         `json:"phase"`
-	Removed map[string]int `json:"removed"`
+	Mode             string                  `json:"mode"`
+	Phase            string                  `json:"phase"`
+	Removed          map[string]int          `json:"removed"`
+	Items            []SessionContextRemoval `json:"items,omitempty"`
+	OmittedItems     int                     `json:"omitted_items,omitempty"`
+	Pass             int                     `json:"pass,omitempty"`
+	DetailsPass      int                     `json:"details_pass,omitempty"`
+	ToolsBefore      *SessionToolSummary     `json:"tools_before,omitempty"`
+	ToolsAfter       *SessionToolSummary     `json:"tools_after,omitempty"`
+	ToolPreservation string                  `json:"tool_preservation,omitempty"`
+}
+
+type SessionContextRemoval struct {
+	Kind     string `json:"kind"`
+	Path     string `json:"path,omitempty"`
+	ItemType string `json:"item_type,omitempty"`
+}
+
+// Counts and digests only: never persist tool definitions, names or arguments.
+type SessionToolSummary struct {
+	TopLevel          int    `json:"top_level"`
+	AdditionalItems   int    `json:"additional_items"`
+	SearchOutputItems int    `json:"search_output_items"`
+	Namespaces        int    `json:"namespaces"`
+	Functions         int    `json:"functions"`
+	Custom            int    `json:"custom"`
+	Other             int    `json:"other"`
+	Digest            string `json:"digest"`
+	Choice            string `json:"choice"`
 }
 
 type ServiceErrorEvent struct {

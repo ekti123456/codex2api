@@ -764,7 +764,7 @@ func responseContextPairType(typ string) (callType string, isCall, isOutput bool
 		return "shell_call", false, true
 	case "apply_patch_call_output":
 		return "apply_patch_call", false, true
-	case "tool_search_call_output":
+	case "tool_search_call_output", "tool_search_output":
 		return "tool_search_call", false, true
 	case "custom_tool_call_output":
 		return "custom_tool_call", false, true
@@ -1083,6 +1083,7 @@ func inputHasFunctionCallOutput(input gjson.Result) bool {
 func isCodexToolCallOutputType(typ string) bool {
 	switch typ {
 	case "function_call_output",
+		"tool_search_output",
 		"tool_call_output",
 		"local_shell_call_output",
 		"shell_call_output",
@@ -1188,7 +1189,7 @@ func replayableCachedInputItem(item gjson.Result) (json.RawMessage, bool) {
 }
 
 func replayableCachedOutputItem(item gjson.Result) (json.RawMessage, bool) {
-	if !isCodexToolCallContextType(item.Get("type").String()) {
+	if !isCodexToolCallContextType(item.Get("type").String()) && item.Get("type").String() != "tool_search_output" {
 		return nil, false
 	}
 	raw, ok := normalizeReplayableCachedFunctionCall(json.RawMessage(item.Raw))

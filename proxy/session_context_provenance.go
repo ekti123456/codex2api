@@ -182,29 +182,28 @@ func inspectSessionFailoverContext(headers http.Header, body []byte, known sessi
 			blockers = append(blockers, database.SessionContextBlocker{Kind: "item_reference", Path: path + ".id", ItemType: itemType})
 			return
 		}
-		index := 0
-		value.ForEach(func(key, item gjson.Result) bool {
-			childPath := path + ".[field]"
-			if value.IsArray() {
-				childPath = path + "[" + strconv.Itoa(index) + "]"
-				index++
-			} else {
-				switch key.String() {
-				case "content", "encrypted_content", "file_id", "image_url", "file", "data":
-					childPath = path + "." + key.String()
-				}
+		for _, field := range []string{"encrypted_content", "file_id"} {
+			token := value.Get(field)
+			if len(blockers) < 8 && token.Exists() && token.Type != gjson.Null && token.String() != "" && !allowed(field, token.String()) {
+				blockers = append(blockers, database.SessionContextBlocker{Kind: field, Path: path + "." + field, ItemType: itemType})
 			}
-			if (key.String() == "encrypted_content" || key.String() == "file_id") && item.Type != gjson.Null && item.String() != "" && !allowed(key.String(), item.String()) {
-				blockers = append(blockers, database.SessionContextBlocker{Kind: key.String(), Path: childPath, ItemType: itemType})
-			} else {
-				inspect(item, childPath, itemType)
+		}
+		if value.IsArray() {
+			for index, item := range value.Array() {
+				inspect(item, path+"["+strconv.Itoa(index)+"]", itemType)
 			}
-			return len(blockers) < 8
-		})
+		} else {
+			for _, field := range responseContextChildFields(value) {
+				inspect(value.Map()[field], path+"."+responseContextSafeField(field), itemType)
+			}
+		}
 	}
 	inspect(input, "input", "")
 	if len(blockers) > 0 {
 		return "opaque_upstream_context", blockers
+	}
+	if index := missingToolSearchCall(input); index >= 0 {
+		return "incomplete_tool_context", []database.SessionContextBlocker{{Kind: "missing_tool_call", Path: "input[" + strconv.Itoa(index) + "].call_id"}}
 	}
 	calls := make(map[string]bool)
 	for _, item := range input.Array() {

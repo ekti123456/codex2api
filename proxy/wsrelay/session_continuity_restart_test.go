@@ -92,6 +92,7 @@ func TestWebsocketContinuityOffRestartsIdentityAndConnection(t *testing.T) {
 	var previous capture
 	for i, step := range []struct{ incoming, outgoing int }{{47, 0}, {47, 0}, {48, 1}, {55, 0}, {56, 1}} {
 		body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":true,"previous_response_id":"old-response","input":"full plaintext context","client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","thread_source":"user","request_kind":"turn","window_id":"%s:%d","window_number":%d}}}`, root, root, root, root, root, step.incoming, step.incoming))
+		body = addSessionWireTools(t, body)
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 		request.Header.Set("Authorization", "Bearer test-user-key")
@@ -109,8 +110,11 @@ func TestWebsocketContinuityOffRestartsIdentityAndConnection(t *testing.T) {
 		detail, err := db.GetUsageRequestDiagnostics(t.Context(), logs[0].ID)
 		require.NoError(t, err)
 		require.Equal(t, fmt.Sprint(step.outgoing), logs[0].WindowNumberOutbound, string(detail.Diagnostics))
+		require.Contains(t, string(detail.Diagnostics), `"tool_preservation":"preserved"`)
+		require.Contains(t, string(detail.Diagnostics), `"additional_items":1`)
 		select {
 		case sent := <-seen:
+			assertSessionWireTools(t, sent.body)
 			meta := gjson.Parse(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata").String())
 			require.EqualValues(t, step.outgoing, meta.Get("window_number").Uint())
 			require.NotEqual(t, root, sent.headers.Get("Session-Id"))

@@ -93,6 +93,9 @@ func (handler *Handler) validateMigratedSessionContext(request *gin.Context, bod
 		defer cancel()
 		_, _, report, err := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, known)
 		if err != nil {
+			if failure := sessionToolPreservationAPIError(err, report); failure != nil {
+				return failure
+			}
 			diagnostic := &sessionAccountFailoverDiagnostic{Phase: "after_switch", PreviousAccountID: record.PreviousAccountID, AccountID: record.AccountID, Generation: record.FailoverCount, ContextCleanup: report}
 			failure := sessionFailoverContextError(request, diagnostic, "missing_request_context")
 			failure.Message = err.Error()
@@ -250,6 +253,9 @@ func (handler *Handler) prepareSessionAccountFailover(request *gin.Context, key 
 	usageRequestDiagnosticState(request).AccountFailover = diagnostic
 	cleaned, cleanedHeaders, cleanup, cleanupError := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, nil)
 	diagnostic.ContextCleanup = cleanup
+	if failure := sessionToolPreservationAPIError(cleanupError, cleanup); failure != nil {
+		return false, failure
+	}
 	block, blockers := inspectSessionFailoverContext(cleanedHeaders, cleaned, nil)
 	if cleanupError != nil {
 		block, blockers = "missing_request_context", nil

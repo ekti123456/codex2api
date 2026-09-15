@@ -30,6 +30,8 @@ func codexIdentityRequestError(err error) *api.APIError {
 		return nil
 	}
 	switch requestError.Code {
+	case "codex_session_tool_context_lost":
+		return api.NewAPIError(api.ErrorCode(requestError.Code), requestError.Message, api.ErrorTypeServer)
 	case "codex_session_identity_invalid", "codex_session_identity_conflict", "codex_session_identity_unavailable", "codex_background_account_mismatch", "codex_session_failover_context_required":
 		return api.NewAPIError(api.ErrorCode(requestError.Code), requestError.Message, api.ErrorTypeInvalidRequest)
 	default:
@@ -45,7 +47,8 @@ func sendCodexIdentityRequestError(ctx *gin.Context, err error, protocol continu
 	if !claimContinuousRetryTerminal(ctx, protocol) {
 		return true
 	}
-	api.ObserveError(ctx, http.StatusBadRequest, identityError)
+	status := api.HTTPStatusCode(identityError.Code)
+	api.ObserveError(ctx, status, identityError)
 	if retryKeepaliveCommitted(ctx) {
 		if ctx.Request.Context().Err() != nil {
 			return true
@@ -65,9 +68,9 @@ func sendCodexIdentityRequestError(ctx *gin.Context, err error, protocol continu
 		return true
 	}
 	if protocol == continuousRetryProtocolAnthropic {
-		ctx.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": identityError})
+		ctx.JSON(status, gin.H{"type": "error", "error": identityError})
 	} else {
-		ctx.JSON(http.StatusBadRequest, api.ErrorResponse{Error: *identityError})
+		ctx.JSON(status, api.ErrorResponse{Error: *identityError})
 	}
 	return true
 }

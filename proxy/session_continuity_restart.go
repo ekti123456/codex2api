@@ -17,6 +17,9 @@ func (handler *Handler) prepareContinuityRestart(request *gin.Context, body []by
 	}
 	_, _, cleanup, err := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, nil)
 	if err != nil {
+		if failure := sessionToolPreservationAPIError(err, cleanup); failure != nil {
+			return failure
+		}
 		failure := api.NewAPIError("codex_session_restart_context_required", "重建出站会话后没有可用输入，请补充当前问题和必要资料，或新开对话。", api.ErrorTypeInvalidRequest)
 		failure.Details = gin.H{"retry": "stop", "context_cleanup": cleanup}
 		return failure

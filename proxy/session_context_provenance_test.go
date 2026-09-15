@@ -177,6 +177,7 @@ func TestSessionContextProvenanceNativeWebsocketFlow(test *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		step := received.Add(1)
 		body := readUpstreamRequestBody(request)
+		assertSessionTools(test, body)
 		if step > 1 {
 			require.NotContains(test, string(body), "old-restart-")
 		}
@@ -213,6 +214,7 @@ func TestSessionContextProvenanceNativeWebsocketFlow(test *testing.T) {
 		if step == 2 {
 			body, _ = sjson.SetRawBytes(body, "input", []byte(`[{"type":"reasoning","id":"native-ws-reasoning","encrypted_content":"gAAAAnative-ws-state"},{"role":"user","content":"continue"}]`))
 		}
+		body = addSessionTools(test, body)
 		require.NoError(test, connection.WriteMessage(websocket.TextMessage, body))
 		require.NoError(test, connection.SetReadDeadline(time.Now().Add(5*time.Second)))
 		for {

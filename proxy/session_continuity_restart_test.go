@@ -46,6 +46,7 @@ func TestContinuityOffRestartsOutboundIdentityAndNumbers(t *testing.T) {
 				request, body := outboundEpochTestRequest(t, handler, step.inbound)
 				body, _ = sjson.SetBytes(body, "previous_response_id", "old-response")
 				request.Request.Header.Set("X-Codex-Turn-State", "old-turn-state")
+				body = addSessionTools(t, body)
 				original := bytes.Clone(body)
 				require.Nil(t, handler.configureSessionModelAffinity(request, requestSessionIdentity{stableIdentity: true}, key, "gpt-5.6-sol", "gpt-5.6-sol", false, body))
 				if i == 0 || i == 3 {
@@ -70,6 +71,7 @@ func TestContinuityOffRestartsOutboundIdentityAndNumbers(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, response.Body.Close())
 				sent := <-seen
+				assertSessionTools(t, sent.body)
 				metadata := diagnosticMetadataObject(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata"))
 				session := sent.headers.Get("Session-Id")
 				require.NotEmpty(t, session)
