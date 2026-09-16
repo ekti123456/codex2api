@@ -79,6 +79,7 @@ func TestSessionContinuityHeaderOnlyCreatesAndRestoresPermanentOwner(test *testi
 		request, _ := gin.CreateTestContext(httptest.NewRecorder())
 		request.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 		request.Request.Header.Set("Session-Id", continuityTestThread)
+		usageRequestDiagnosticState(request).StartedAt = time.UnixMilli(0x01a03bb09da5).Add(time.Second)
 		request.Set(contextAPIKeyID, keyID)
 		identity := handler.resolveRequestSessionIdentityForContext(request, body)
 		beginDispatchSelection(request)
@@ -137,6 +138,7 @@ func TestSessionContinuityMissingSourceUsesCurrentWebSocketFrame(test *testing.T
 	request.Request.Header.Set("Connection", "Upgrade")
 	request.Request.Header.Set("Upgrade", "websocket")
 	request.Request.Header.Set("Session-Id", continuityTestThread)
+	usageRequestDiagnosticState(request).StartedAt = time.UnixMilli(0x01a03bb09da5).Add(time.Second)
 	request.Request.Header.Set("X-Codex-Window-Id", continuityTestThread+":0")
 	request.Set(contextAPIKeyID, int64(101))
 	identity := handler.resolveRequestSessionIdentityForContext(request, body)
@@ -165,6 +167,7 @@ func TestSessionContinuitySignedSourceDisappearsWithoutChangingOwner(test *testi
 			}
 			meta := newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved, RootSessionRelation: newAPIPolicyRootSessionRelationRoot, RootSessionFingerprint: fingerprint, ThreadSource: source, RequestKind: "turn"}
 			request, _ := signedRootlessPassiveModelContext(test, http.MethodPost, "/v1/responses", body, meta)
+			usageRequestDiagnosticState(request).StartedAt = time.UnixMilli(0x01a03bb09da5).Add(time.Second)
 			handler.primeNewAPIPolicyContext(request, body)
 			status, policy := handler.cachedNewAPIPolicyAuditState(request)
 			require.Equal(test, "verified", status)

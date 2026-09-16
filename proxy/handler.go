@@ -3994,6 +3994,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	defer h.finishSessionCooldown(c)
 	// 1. 读取请求体
 	handlerStart := time.Now()
+	usageRequestDiagnosticState(c).StartedAt = handlerStart.UTC()
 	rawBody, err := readRawRequestBody(c)
 	if err != nil {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Failed to read request body", api.ErrorTypeInvalidRequest))

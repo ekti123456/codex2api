@@ -275,6 +275,9 @@
     "proxyPoolLinkedHint": "已關聯代理池節點（按位址綁定）：在「代理」頁修改該節點位址會同步到所有綁定帳號，刪除則自動解除綁定。"
   },
   "settings": {
+    "initialSessionAge": "首次會話 ID 最大年齡（秒）",
+    "initialSessionAgeHint": "預設 60，範圍 1–86400。僅在 Codex 主會話無帳號綁定、首次選號前檢查；已有綁定不受影響，獨立於序號校驗。未來時間或無效 ID 不放行。",
+
     "codexWSContextTakeover": "WS 壓縮字典重用",
     "codexWSCompressionLevel": "WS 壓縮等級",
     "codexWSCompressionLevelHint": "開啟 WS 壓縮字典重用後可設定。1 級優先速度，等級越高通常壓得更小、越耗 CPU；預設 1。僅在協商視窗為 32 KiB 時生效，較小視窗使用固定壓縮策略。僅影響新建立的連線。",
@@ -2006,5 +2009,19 @@
       "6": "週六",
       "7": "週日"
     }
+  },
+  "runtime": {
+    "initialSessionAge": "首次會話 ID 時間差統計",
+    "initialSessionAgeHint": "目前閾值 {{limit}} 秒；本程序自 {{started}} 開始統計，重新啟動後歸零。包含放行與攔截；平均值、最大值不含無效及未來 ID。內部重試只計一次，用戶端重新請求另計。最近一小時按秒分桶。",
+    "initialAge_recent_hour": "最近 1 小時",
+    "initialAge_since_start": "本次程序啟動以來",
+    "initialAge_samples": "檢查請求數",
+    "initialAge_valid": "有效時間樣本",
+    "initialAge_average": "平均時間差",
+    "initialAge_max": "最大時間差",
+    "initialAge_allowed": "放行次數",
+    "initialAge_rejected": "超限攔截",
+    "initialAge_invalid": "無效 ID",
+    "initialAge_future": "未來時間 ID"
   }
 }

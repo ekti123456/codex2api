@@ -18,6 +18,7 @@ import (
 	"github.com/codex2api/database"
 	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +46,9 @@ func TestWebsocketSessionFailoverRejectsGenerationZeroAfterHandshakeWait(test *t
 	store.AddAccount(target)
 	handler := proxy.NewHandler(store, db, nil, nil)
 	handler.SetRuntimeCache(memory)
-	const root = "01a09351-7b81-7ae0-afd0-225e178ea131"
+	rootID, err := uuid.NewV7()
+	require.NoError(test, err)
+	root := rootID.String()
 	digest := sha256.Sum256([]byte(root))
 	rootKey := hex.EncodeToString(digest[:12])
 	var frames atomic.Int32

@@ -1133,6 +1133,9 @@ func (db *DB) migrate(ctx context.Context) error {
 		if err := db.ensureSQLiteColumn(ctx, "system_settings", "codex_web_search_proxy_location", "INTEGER DEFAULT 0"); err != nil {
 			return err
 		}
+		if err := db.ensureSQLiteColumn(ctx, "system_settings", "codex_initial_session_max_age_seconds", "INTEGER DEFAULT 60"); err != nil {
+			return err
+		}
 		if err := db.ensureSQLiteColumn(ctx, "system_settings", "codex_session_failover_enabled", "INTEGER DEFAULT 0"); err != nil {
 			return err
 		}
@@ -1549,6 +1552,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_capacity_retry_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_session_failover_preserve_input BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_web_search_proxy_location BOOLEAN DEFAULT FALSE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_initial_session_max_age_seconds INTEGER DEFAULT 60;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_session_failover_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_overload_threshold_percent INT DEFAULT 20;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_overload_pause_minutes INT DEFAULT 30;
@@ -2507,6 +2511,7 @@ type SystemSettings struct {
 	CodexCapacityRetryEnabled           bool
 	CodexSessionFailoverPreserveInput   bool
 	CodexWebSearchProxyLocation         bool
+	CodexInitialSessionMaxAgeSeconds    int
 	CodexSessionFailoverEnabled         bool
 	CodexOverloadThresholdPercent       int  // 触发比例（%），默认 20，范围 1-100
 	CodexOverloadPauseMinutes           int  // 暂停时长（分钟），默认 30，范围 1-1440
@@ -2794,6 +2799,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(codex_telemetry_enabled, false),
 		       COALESCE(codex_session_failover_preserve_input, false),
 		       COALESCE(codex_web_search_proxy_location, false),
+		       COALESCE(codex_initial_session_max_age_seconds, 60),
 		       COALESCE(codex_session_failover_enabled, false),
 		       COALESCE(codex_ws_context_takeover, false),
 		       CASE WHEN codex_ws_compression_level BETWEEN 1 AND 9 THEN codex_ws_compression_level ELSE 1 END,
@@ -2887,6 +2893,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.CodexTelemetryEnabled,
 		&s.CodexSessionFailoverPreserveInput,
 		&s.CodexWebSearchProxyLocation,
+		&s.CodexInitialSessionMaxAgeSeconds,
 		&s.CodexSessionFailoverEnabled,
 		&s.CodexWSContextTakeover,
 		&s.CodexWSCompressionLevel,
@@ -3149,9 +3156,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_ws_compression_level,
 					codex_ws_disable_fragmentation,
 					codex_session_failover_preserve_input,
-					codex_web_search_proxy_location
+					codex_web_search_proxy_location,
+					codex_initial_session_max_age_seconds
 					)
-						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126, $127, $128, $129, $130, $133, $134)
+						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126, $127, $128, $129, $130, $133, $134, $135)
 				ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -3270,6 +3278,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_capacity_retry_enabled = EXCLUDED.codex_capacity_retry_enabled,
 					codex_session_failover_preserve_input = EXCLUDED.codex_session_failover_preserve_input,
 					codex_web_search_proxy_location = EXCLUDED.codex_web_search_proxy_location,
+					codex_initial_session_max_age_seconds = EXCLUDED.codex_initial_session_max_age_seconds,
 					codex_session_failover_enabled = EXCLUDED.codex_session_failover_enabled,
 					codex_overload_threshold_percent = EXCLUDED.codex_overload_threshold_percent,
 					codex_overload_pause_minutes = EXCLUDED.codex_overload_pause_minutes,
@@ -3345,7 +3354,8 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.PreservePromptFilterCustomPatterns,
 		s.PreservePromptFilterReviewAPIKey,
 		s.CodexSessionFailoverPreserveInput,
-		s.CodexWebSearchProxyLocation)
+		s.CodexWebSearchProxyLocation,
+		NormalizeCodexInitialSessionMaxAgeSeconds(s.CodexInitialSessionMaxAgeSeconds))
 	return err
 }
 

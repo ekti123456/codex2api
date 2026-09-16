@@ -2074,6 +2074,20 @@
     "accountTrendEmpty": "选定范围内暂无账号增删记录"
   },
   "runtime": {
+
+    "initialSessionAge": "首次会话 ID 时间差统计",
+    "initialSessionAgeHint": "当前阈值 {{limit}} 秒；本进程自 {{started}} 开始统计，重启重置。包含放行和拦截；平均值、最大值不含无效及未来 ID。内部重试只计一次，客户端重新请求另计。最近一小时按秒分桶。",
+    "initialAge_recent_hour": "最近 1 小时",
+    "initialAge_since_start": "本次进程启动以来",
+    "initialAge_samples": "检查请求数",
+    "initialAge_valid": "有效时间样本",
+    "initialAge_average": "平均时间差",
+    "initialAge_max": "最大时间差",
+    "initialAge_allowed": "放行次数",
+    "initialAge_rejected": "超限拦截",
+    "initialAge_invalid": "无效 ID",
+    "initialAge_future": "未来时间 ID",
+
     "title": "运行时状态",
     "description": "后台依赖、写入器、探针和存储的实时检查结果。",
     "loadingTitle": "正在加载运行时状态",
@@ -4028,6 +4042,10 @@
     }
   },
   "settings": {
+
+    "initialSessionAge": "首次会话 ID 最大年龄（秒）",
+    "initialSessionAgeHint": "默认 60，范围 1–86400。仅在 Codex 主会话无账号绑定、首次选号前检查；已有绑定不受影响，独立于序号校验。未来时间或无效 ID 不放行。",
+
     "title": "系统设置",
     "description": "管理系统配置和运行参数。多数开关会即时自动保存。",
     "loadingTitle": "正在加载设置",

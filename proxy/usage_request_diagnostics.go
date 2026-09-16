@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -68,6 +69,7 @@ type usageRecentAccountDiagnostic struct {
 }
 
 type usageRequestDiagnostics struct {
+	InitialSession         *initialSessionDiagnostic                `json:"initial_session,omitempty"`
 	WindowNumberOriginal   string                                   `json:"window_number_original,omitempty"`
 	WindowNumberOutbound   string                                   `json:"window_number_outbound,omitempty"`
 	SessionIDPrefix        string                                   `json:"session_id_prefix,omitempty"`
@@ -263,6 +265,9 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 		return
 	}
 	state.rootCaptured = true
+	if c.Request != nil {
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), initialSessionContextKey{}, (*initialSessionDiagnostic)(nil)))
+	}
 	endpoint := ""
 	var headers http.Header
 	if c.Request != nil {

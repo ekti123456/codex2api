@@ -26,6 +26,7 @@ func continuityTestRequest(number uint64, kind string) (*gin.Context, []byte) {
 	request, _ := gin.CreateTestContext(httptest.NewRecorder())
 	request.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	beginDispatchSelection(request)
+	usageRequestDiagnosticState(request).StartedAt = time.UnixMilli(0x01a03bb09da5).Add(time.Second)
 	usageRequestDiagnosticState(request).Resolved = &usageRequestResolution{ThreadSource: "user", RequestKind: kind, Stable: true}
 	return request, body
 }
@@ -198,6 +199,7 @@ func TestSessionContinuityMissingWindowPreservesOwnerWithoutInventingZero(test *
 	account := &auth.Account{DBID: 1695, AccessToken: "test", Status: auth.StatusReady}
 	handler.store.AddAccount(account)
 	request, _ := continuityTestRequest(71, "turn")
+	request.Request.Header.Set("Session-Id", continuityTestThread)
 	key := "missing-frame::api-key:101"
 	identity := requestSessionIdentity{stableIdentity: true}
 	require.Nil(test, handler.prepareSessionContinuity(request, identity, key, []byte(`{"client_metadata":{}}`)))
@@ -284,4 +286,46 @@ func TestSessionContinuityCapacityGuidanceKeepsOriginalAccount(test *testing.T) 
 	require.Equal(test, "当前窗口绑定账号的普通及扩容会话容量均已满，请新开对话或切换其他窗口使用。", apiErr.Message)
 	require.Equal(test, http.StatusBadRequest, api.HTTPStatusCode(apiErr.Code))
 	require.Equal(test, account.ID(), trace.PinnedAccount())
+}
+
+func TestInitialSessionHTTPAndWebsocketEntrypoints(test *testing.T) {
+	for _, endpoint := range []string{"/v1/responses", "/v1/responses/compact", "/v1/chat/completions", "websocket"} {
+		test.Run(endpoint, func(test *testing.T) {
+			handler := newRootlessPassiveModelTestHandler(test)
+			config := handler.store.GetPromptFilterConfig()
+			config.Advanced.Risk.SessionContinuityMode = "off"
+			handler.store.SetPromptFilterConfig(config)
+			_, body := continuityTestRequest(0, "turn")
+			body = []byte(strings.Replace(string(body), `"model":`, `"type":"response.create","input":"continue","messages":[{"role":"user","content":"continue"}],"model":`, 1))
+			meta := newAPIPolicyMeta{RootSessionVersion: 1, RootSessionState: newAPIPolicyRootSessionResolved, RootSessionRelation: newAPIPolicyRootSessionRelationRoot, RootSessionFingerprint: newAPIRootSessionFingerprint("test-platform", "42", continuityTestThread), ThreadSource: "user", RequestKind: "turn"}
+			if endpoint != "websocket" {
+				request, recorder := signedRootlessPassiveModelContext(test, http.MethodPost, endpoint, body, meta)
+				map[string]func(*gin.Context){"/v1/responses": handler.Responses, "/v1/responses/compact": handler.ResponsesCompact, "/v1/chat/completions": handler.ChatCompletions}[endpoint](request)
+				require.Equal(test, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+				expectedCode := "codex_session_identity_unavailable"
+				if endpoint == "/v1/responses/compact" {
+					expectedCode = "codex_session_continuity_unbound_compaction"
+				}
+				require.Equal(test, expectedCode, gjson.GetBytes(recorder.Body.Bytes(), "error.code").String())
+				return
+			}
+			router := gin.New()
+			router.GET("/v1/responses", func(request *gin.Context) {
+				request.Set(contextAPIKeyID, int64(101))
+				handler.ResponsesWebSocket(request)
+			})
+			server := httptest.NewServer(router)
+			defer server.Close()
+			request, _ := signedRootlessPassiveModelContext(test, http.MethodGet, "/v1/responses", nil, meta)
+			request.Request.Header.Set(codexWindowIDHeader, continuityTestThread+":0")
+			connection, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", request.Request.Header)
+			require.NoError(test, err)
+			defer connection.Close()
+			require.NoError(test, connection.WriteMessage(websocket.TextMessage, body))
+			require.NoError(test, connection.SetReadDeadline(time.Now().Add(5*time.Second)))
+			_, response, err := connection.ReadMessage()
+			require.NoError(test, err)
+			require.Equal(test, "codex_session_identity_unavailable", gjson.GetBytes(response, "error.code").String(), string(response))
+		})
+	}
 }

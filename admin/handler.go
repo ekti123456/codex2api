@@ -9247,6 +9247,7 @@ type settingsResponse struct {
 	CodexSessionFailoverEnabled         bool   `json:"codex_session_failover_enabled"`
 	CodexSessionFailoverPreserveInput   bool   `json:"codex_session_failover_preserve_input"`
 	CodexWebSearchProxyLocation         bool   `json:"codex_web_search_proxy_location"`
+	CodexInitialSessionMaxAgeSeconds    int    `json:"codex_initial_session_max_age_seconds"`
 	CodexOverloadThresholdPercent       int    `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           int    `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          int    `json:"codex_overload_window_minutes"`
@@ -9439,6 +9440,7 @@ type updateSettingsReq struct {
 	CodexSessionFailoverEnabled         *bool                            `json:"codex_session_failover_enabled"`
 	CodexSessionFailoverPreserveInput   *bool                            `json:"codex_session_failover_preserve_input"`
 	CodexWebSearchProxyLocation         *bool                            `json:"codex_web_search_proxy_location"`
+	CodexInitialSessionMaxAgeSeconds    *int                             `json:"codex_initial_session_max_age_seconds"`
 	CodexOverloadThresholdPercent       *int                             `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           *int                             `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          *int                             `json:"codex_overload_window_minutes"`
@@ -10278,6 +10280,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
 		CodexWebSearchProxyLocation:         runtimeCfg.CodexWebSearchProxyLocation,
+		CodexInitialSessionMaxAgeSeconds:    runtimeCfg.CodexInitialSessionMaxAgeSeconds,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -10777,6 +10780,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.CodexSessionFailoverEnabled = existingSettings.CodexSessionFailoverEnabled
 		runtimeCfg.CodexSessionFailoverPreserveInput = existingSettings.CodexSessionFailoverPreserveInput
 		runtimeCfg.CodexWebSearchProxyLocation = existingSettings.CodexWebSearchProxyLocation
+		runtimeCfg.CodexInitialSessionMaxAgeSeconds = existingSettings.CodexInitialSessionMaxAgeSeconds
 		runtimeCfg.CodexWSContextTakeover = existingSettings.CodexWSContextTakeover
 		runtimeCfg.CodexWSCompressionLevel = database.NormalizeCodexWSCompressionLevel(existingSettings.CodexWSCompressionLevel)
 		runtimeCfg.CodexWSDisableFragmentation = existingSettings.CodexWSDisableFragmentation
@@ -11118,6 +11122,13 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if req.CodexWebSearchProxyLocation != nil {
 		runtimeCfg.CodexWebSearchProxyLocation = *req.CodexWebSearchProxyLocation
+	}
+	if req.CodexInitialSessionMaxAgeSeconds != nil {
+		if *req.CodexInitialSessionMaxAgeSeconds < 1 || *req.CodexInitialSessionMaxAgeSeconds > 86400 {
+			writeError(c, http.StatusBadRequest, "首次会话 ID 最大年龄须为 1–86400 秒")
+			return
+		}
+		runtimeCfg.CodexInitialSessionMaxAgeSeconds = *req.CodexInitialSessionMaxAgeSeconds
 	}
 	if req.CodexSessionFailoverEnabled != nil {
 		runtimeCfg.CodexSessionFailoverEnabled = *req.CodexSessionFailoverEnabled
@@ -11849,6 +11860,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
 		CodexWebSearchProxyLocation:         runtimeCfg.CodexWebSearchProxyLocation,
+		CodexInitialSessionMaxAgeSeconds:    runtimeCfg.CodexInitialSessionMaxAgeSeconds,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -12183,6 +12195,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
 		CodexWebSearchProxyLocation:         runtimeCfg.CodexWebSearchProxyLocation,
+		CodexInitialSessionMaxAgeSeconds:    runtimeCfg.CodexInitialSessionMaxAgeSeconds,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,

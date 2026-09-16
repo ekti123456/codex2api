@@ -306,6 +306,28 @@ func (handler *Handler) prepareSessionContinuity(request *gin.Context, identity 
 		diagnostic.Result, diagnostic.WouldBlock, diagnostic.Action = "unbound_compaction", true, "blocked"
 		return sessionContinuityError("unbound_compaction")
 	}
+	if mode == "enforce" && diagnostic.WouldBlock {
+		diagnostic.Action = "blocked"
+		return sessionContinuityError(diagnostic.Result)
+	}
+	// First-account admission is independent from the sequence-validation mode.
+	// This function already excludes unrelated/background and API-relay traffic.
+	if !found && owner == 0 {
+		initialThread := resolveRequestRootSessionIdentity(request.Request.Header, body).sessionID
+		if status, policy := handler.cachedNewAPIPolicyAuditState(request); (status == "verified" || status == "signed_response") && policy.MetaVerified && policy.Meta.RootSessionID != "" {
+			initialThread = policy.Meta.RootSessionID
+		}
+		if initialThread == "" {
+			initialThread = thread
+		}
+		if invalid != "" && invalid != "window_missing" {
+			initialThread = ""
+		}
+		if failure := checkInitialSessionAdmission(request, initialThread); failure != nil {
+			diagnostic.Action, diagnostic.WouldBlock = "blocked", true
+			return failure
+		}
+	}
 	restartReason := ""
 	if mode == "off" && known && invalid == "" && err == nil && (diagnostic.Result == "window_gap" || diagnostic.Result == "unbound_nonzero") {
 		if restartError := handler.prepareContinuityRestart(request, body); restartError != nil {
@@ -345,6 +367,8 @@ func sessionContinuityError(reason string) *api.APIError {
 		message = "会话窗口标识缺失或不一致，请重新连接正确的对话。"
 	} else if reason == "ownership_unavailable" || reason == "storage_unavailable" {
 		message = "会话账号归属暂时无法确认，请稍后重试。"
+	} else if reason == "owner_conflict" {
+		message = "会话账号归属或切号代次不一致，请重新发起请求。"
 	}
 	result := api.NewAPIError(api.ErrorCode("codex_session_continuity_"+reason), message, api.ErrorTypeInvalidRequest)
 	result.Details = gin.H{"reason": reason, "retry": "stop"}

@@ -133,6 +133,18 @@ func (handler *Handler) waitForBackgroundActiveWindow(ctx context.Context, reque
 		diagnostic.AccountID, diagnostic.Generation = accountID, entry.Record.FailoverCount
 		diagnostic.OwnerLastSeen, diagnostic.OwnerLastCompleted = entry.Record.LastSeen, entry.Record.LastCompleted
 		if entry.Record.FailoverCount > 0 {
+			// Migrated-context validation needs the same outbound epoch that the
+			// later account-match check uses. Initialize it from the verified
+			// owner, but never replace an existing conflicting request snapshot.
+			key := hashRiskIdentity(rootKey)
+			epoch := outboundEpochFromContext(request.Request.Context())
+			if epoch == nil {
+				handler.attachSessionOutboundEpoch(request, key, entry.Record)
+			} else if epoch.key != key || epoch.record.AccountID != entry.Record.AccountID || epoch.record.FailoverCount != entry.Record.FailoverCount || epoch.record.OutboundWindowReset != entry.Record.OutboundWindowReset {
+				diagnostic.Result = "owner_changed"
+				diagnostic.Reason = "outbound_epoch_mismatch"
+				return sessionContinuityError("owner_conflict")
+			}
 			if failure := handler.validateMigratedSessionContext(request, body, entry.Record, rootKey); failure != nil {
 				diagnostic.Result = "context_unavailable"
 				return failure

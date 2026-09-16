@@ -2156,6 +2156,7 @@ export default function Settings() {
       codex_session_failover_enabled: cacheNormalized.codex_session_failover_enabled ?? false,
       codex_session_failover_preserve_input: cacheNormalized.codex_session_failover_preserve_input ?? false,
       codex_web_search_proxy_location: cacheNormalized.codex_web_search_proxy_location ?? false,
+      codex_initial_session_max_age_seconds: cacheNormalized.codex_initial_session_max_age_seconds ?? 60,
       codex_ws_context_takeover: cacheNormalized.codex_ws_context_takeover ?? false,
       codex_ws_compression_level: cacheNormalized.codex_ws_compression_level ?? 1,
       codex_ws_disable_fragmentation: cacheNormalized.codex_ws_disable_fragmentation ?? false,
@@ -2232,6 +2233,7 @@ export default function Settings() {
     codex_session_failover_enabled: false,
     codex_session_failover_preserve_input: false,
     codex_web_search_proxy_location: false,
+    codex_initial_session_max_age_seconds: 60,
     codex_overload_threshold_percent: 20,
     codex_overload_pause_minutes: 30,
     codex_overload_window_minutes: 5,
@@ -3476,6 +3478,12 @@ export default function Settings() {
                       checked={settingsForm.codex_session_failover_enabled}
                       onCheckedChange={(checked) => autoSaveBooleanField('codex_session_failover_enabled', checked)}
                     />
+                  </SettingField>
+                  <SettingField label={t('settings.initialSessionAge')} description={t('settings.initialSessionAgeHint')} channels={CHANNELS_CODEX_ONLY}>
+                    <DraftNumberInput min={1} max={86400} integer emptyValue={60}
+                      value={settingsForm.codex_initial_session_max_age_seconds}
+                      onValueChange={(value) => setSettingsForm(f => ({ ...f, codex_initial_session_max_age_seconds: value }))}
+                      onValueCommit={(value) => { void autoSaveSettingsPatch({ codex_initial_session_max_age_seconds: value }) }} />
                   </SettingField>
                   <SettingField
                     label={t('settings.codexSessionFailoverPreserveInput')}

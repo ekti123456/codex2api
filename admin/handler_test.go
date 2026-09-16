@@ -1503,6 +1503,9 @@ func TestRuntimeStatusRouteReturnsDependencySnapshot(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+	if payload.InitialSession.StartedAt.IsZero() || payload.InitialSession.LimitSeconds < 1 {
+		t.Fatal("initial session statistics and threshold missing")
+	}
 	if payload.Status != runtimeStatusDegraded {
 		t.Fatalf("status = %q, want %q for empty account pool", payload.Status, runtimeStatusDegraded)
 	}

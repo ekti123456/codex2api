@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Select } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -59,6 +60,38 @@ import {
 } from "../lib/proxyTestState";
 import { getErrorMessage } from "../utils/error";
 import { cn } from "@/lib/utils";
+
+function ProxyTimezone({ proxy }: { proxy: ProxyRow }) {
+  const { t } = useTranslation();
+  const timezone = proxy.timezone_override || proxy.test_timezone || t("proxies.timezoneUnknown");
+  const location = [
+    proxy.country_code_override || proxy.test_country_code,
+    proxy.region_override || proxy.test_region,
+    proxy.city_override || proxy.test_city,
+  ].filter(Boolean).join(" · ") || proxy.test_location || t("proxies.locationUnknown");
+  const hasManualLocation = Boolean(proxy.country_code_override || proxy.region_override || proxy.city_override);
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" className="flex max-w-full min-w-0 items-center gap-1 text-left text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm">
+            <MapPin className="size-3 shrink-0" />
+            <span className="truncate border-b border-dotted border-muted-foreground/50">{timezone}</span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={6} className="max-w-[min(360px,calc(100vw-2rem))] space-y-1 whitespace-normal break-words text-left">
+          <div className="font-medium">{timezone}</div>
+          <div>{t(proxy.timezone_override ? "proxies.timezoneManual" : proxy.test_timezone ? "proxies.timezoneInferred" : "proxies.timezoneUnknownHint")}</div>
+          <div>{t("proxies.colLocation")}: {location}</div>
+          {hasManualLocation && proxy.test_location && (
+            <div className="opacity-80">{t("proxies.locationDetected")}: {proxy.test_location}</div>
+          )}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
 const PROXY_SCHEMES = ["http:", "https:", "socks5:", "socks5h:"];
 
@@ -1668,13 +1701,10 @@ export default function Proxies() {
                             {isTesting ? (
                               <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
                             ) : (
-                              <span
-                                className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground"
-                                title={t(p.timezone_override ? "proxies.timezoneManual" : p.test_timezone ? "proxies.timezoneInferred" : "proxies.timezoneUnknownHint")}
-                              >
-                                <MapPin className="size-3 text-primary" />
-                                {[p.test_location, p.test_ip, p.timezone_override || p.test_timezone || t("proxies.timezoneUnknown")].filter(Boolean).join(" · ")}
-                              </span>
+                              <div className="flex min-w-0 max-w-full flex-col gap-1">
+                                {p.test_ip && <span className="break-all font-mono text-xs text-muted-foreground">{p.test_ip}</span>}
+                                <ProxyTimezone proxy={p} />
+                              </div>
                             )}
                           </div>
                           <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-2">
@@ -1749,14 +1779,13 @@ export default function Proxies() {
 
               {/* Desktop table */}
               <div className="data-table-shell hidden lg:block">
-                <Table className="table-fixed min-w-[2360px]">
+                <Table className="table-fixed min-w-[2210px]">
                   <colgroup>
                     <col className="w-10" />
                     <col className="w-[400px]" />
                     <col className="w-[130px]" />
                     <col className="w-[120px]" />
-                    <col className="w-[210px]" />
-                    <col className="w-[160px]" />
+                    <col className="w-[220px]" />
                     <col className="w-[110px]" />
                     <col className="w-[110px]" />
                     <col className="w-[110px]" />
@@ -1778,8 +1807,7 @@ export default function Proxies() {
                       <TableHead className="w-[400px] min-w-[400px]">{t("proxies.colUrl")}</TableHead>
                       <TableHead className="w-[130px] min-w-[130px]">{t("proxies.colStatus")}</TableHead>
                       <TableHead className="w-[120px] min-w-[120px]">{t("proxies.colBound")}</TableHead>
-                      <TableHead className="w-[210px] min-w-[210px]">{t("proxies.colLocation")}</TableHead>
-                      <TableHead className="w-[160px] min-w-[160px]">{t("proxies.colIp")}</TableHead>
+                      <TableHead className="w-[220px] min-w-[220px]">{t("proxies.colIp")}</TableHead>
                       <TableHead className="w-[110px] min-w-[110px]">{t("proxies.colLatency")}</TableHead>
                       <TableHead className="w-[110px] min-w-[110px]">{t("proxies.riskScoreValueColumn")}</TableHead>
                       <TableHead className="w-[110px] min-w-[110px]">{t("proxies.riskLevelColumn")}</TableHead>
@@ -1864,37 +1892,17 @@ export default function Proxies() {
                               </span>
                             </button>
                           </TableCell>
-                          {/* Location */}
-                          <TableCell className="w-[210px] min-w-[210px]">
-                            {isTesting ? (
-                              <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-                            ) : p.test_location ? (
-                              <div className="flex items-center gap-1 text-xs font-medium text-foreground whitespace-nowrap">
-                                <MapPin className="size-3 text-primary shrink-0" />
-                                {p.test_location}
-                              </div>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">
-                                -
+                          {/* IP and timezone; location appears on hover. */}
+                          <TableCell className="w-[220px] min-w-[220px] max-w-[220px]">
+                            <div className="min-w-0 space-y-1">
+                              <span className="block truncate text-[13px] font-mono font-medium text-foreground" title={p.test_ip || undefined}>
+                                {p.test_ip || "-"}
                               </span>
-                            )}
-                          </TableCell>
-                          {/* IP */}
-                          <TableCell className="w-[160px] min-w-[160px]">
-                            {p.test_ip ? (
-                              <span className="text-[13px] font-mono font-medium text-foreground whitespace-nowrap">
-                                {p.test_ip}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">
-                                -
-                              </span>
-                            )}
-                            <div
-                              className="text-[11px] text-muted-foreground whitespace-nowrap"
-                              title={t(p.timezone_override ? "proxies.timezoneManual" : p.test_timezone ? "proxies.timezoneInferred" : "proxies.timezoneUnknownHint")}
-                            >
-                              {p.timezone_override || p.test_timezone || t("proxies.timezoneUnknown")}
+                              {isTesting ? (
+                                <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                              ) : (
+                                <ProxyTimezone proxy={p} />
+                              )}
                             </div>
                           </TableCell>
                           {/* Latency */}

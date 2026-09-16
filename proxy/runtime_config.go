@@ -112,6 +112,7 @@ type RuntimeSettings struct {
 	CodexSessionFailoverEnabled       bool
 	CodexSessionFailoverPreserveInput bool
 	CodexWebSearchProxyLocation       bool
+	CodexInitialSessionMaxAgeSeconds  int
 	CodexOverloadThresholdPercent     int // 触发比例（%），默认 20
 	CodexOverloadPauseMinutes         int // 暂停时长（分钟），默认 30
 	CodexOverloadWindowMinutes        int // 统计窗口（分钟），默认 5
@@ -184,6 +185,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		CodexSessionFailoverEnabled:       false,
 		CodexSessionFailoverPreserveInput: false,
 		CodexWebSearchProxyLocation:       false,
+		CodexInitialSessionMaxAgeSeconds:  60,
 		StreamFlushPolicy:                 defaultStreamFlushPolicy,
 		StreamFlushIntervalMS:             defaultStreamFlushIntervalMS,
 		FirstTokenMode:                    defaultFirstTokenMode,
@@ -278,6 +280,7 @@ func NormalizeBillingTierPolicy(policy string) string {
 }
 
 func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
+	settings.CodexInitialSessionMaxAgeSeconds = database.NormalizeCodexInitialSessionMaxAgeSeconds(settings.CodexInitialSessionMaxAgeSeconds)
 	settings.CodexWSCompressionLevel = database.NormalizeCodexWSCompressionLevel(settings.CodexWSCompressionLevel)
 	defaults := DefaultRuntimeSettings()
 	settings.ClientCompatMode = NormalizeClientCompatMode(settings.ClientCompatMode)
@@ -390,6 +393,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexSessionFailoverEnabled = settings.CodexSessionFailoverEnabled
 		next.CodexSessionFailoverPreserveInput = settings.CodexSessionFailoverPreserveInput
 		next.CodexWebSearchProxyLocation = settings.CodexWebSearchProxyLocation
+		next.CodexInitialSessionMaxAgeSeconds = database.NormalizeCodexInitialSessionMaxAgeSeconds(settings.CodexInitialSessionMaxAgeSeconds)
 		next.CodexOverloadThresholdPercent = settings.CodexOverloadThresholdPercent
 		next.CodexOverloadPauseMinutes = settings.CodexOverloadPauseMinutes
 		next.CodexOverloadWindowMinutes = settings.CodexOverloadWindowMinutes

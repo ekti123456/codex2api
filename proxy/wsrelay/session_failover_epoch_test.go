@@ -17,6 +17,7 @@ import (
 	"github.com/codex2api/database"
 	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -103,7 +104,9 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 		require.NoError(test, err)
 		test.Cleanup(func() { _ = downstream.Close() })
 	}
-	const root = "01a09351-7b81-7ae0-afd0-225e178ea131"
+	rootID, err := uuid.NewV7()
+	require.NoError(test, err)
+	root := rootID.String()
 	var captures []capture
 	const originalTurn = "01a095b5-86a3-7ec2-af42-0bb1111ef330"
 	var mappedTurns []string

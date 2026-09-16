@@ -1888,7 +1888,24 @@ export interface RuntimeCheck {
   message: string
 }
 
+export interface InitialSessionAgeSummary {
+  samples: number
+  valid_samples: number
+  allowed: number
+  rejected: number
+  invalid: number
+  future: number
+  average_ms: number
+  max_ms: number
+}
+
 export interface RuntimeStatusResponse {
+  initial_session?: {
+    started_at: string
+    limit_seconds: number
+    recent_hour: InitialSessionAgeSummary
+    since_start: InitialSessionAgeSummary
+  }
   updated_at: ISODateString
   status: RuntimeHealthStatus
   service: {
@@ -2055,6 +2072,7 @@ export interface SystemSettings {
   codex_session_failover_enabled: boolean
   codex_session_failover_preserve_input: boolean
   codex_web_search_proxy_location: boolean
+  codex_initial_session_max_age_seconds: number
   codex_overload_threshold_percent: number
   codex_overload_pause_minutes: number
   codex_overload_window_minutes: number

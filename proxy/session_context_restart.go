@@ -200,6 +200,12 @@ func (epoch *sessionOutboundEpoch) restartContextVerifier(ctx context.Context) (
 }
 
 func PrepareSessionRestartOutbound(ctx context.Context, account *auth.Account, body []byte, headers http.Header) ([]byte, http.Header, error) {
+	var initialErr error
+	body, headers, initialErr = PrepareInitialSessionOutbound(ctx, account, body, headers)
+	if initialErr != nil {
+		return nil, nil, initialErr
+	}
+
 	epoch := outboundEpochFromContext(ctx)
 	if epoch == nil || !epoch.record.LossyContextRestart || account == nil || account.IsRelayStyle() {
 		return body, headers, nil

@@ -15,6 +15,7 @@ import (
 	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -252,6 +253,10 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool, preserve ..
 	test.Cleanup(server.Close)
 	SetResinConfig(&ResinConfig{BaseURL: server.URL, PlatformName: "failover-ingress"})
 	atomic.StoreInt32(&target.Disabled, 1)
+	// This exercises real ingress, so the first request needs a freshly
+	// created root ID under initial-session admission.
+	threadID, err := uuid.NewV7()
+	require.NoError(test, err)
 	var lastSession string
 	for _, expected := range []*auth.Account{owner, target} {
 		if expected == target {
@@ -259,6 +264,7 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool, preserve ..
 			atomic.StoreInt32(&target.Disabled, 0)
 		}
 		_, body := failoverTestRequest(test, handler)
+		body = bytes.ReplaceAll(body, []byte(continuityTestThread), []byte(threadID.String()))
 		body, _ = sjson.SetBytes(body, "stream", true)
 		if expected == target {
 			body, _ = sjson.SetRawBytes(body, "input", []byte(`[{"type":"reasoning","encrypted_content":"gAAAAold-restart-reasoning"},{"type":"compaction","encrypted_content":"gAAAAold-restart-compaction"},{"role":"user","content":[{"type":"input_file","file_id":"old-restart-file"},{"type":"input_text","text":"current plaintext"}]}]`))
