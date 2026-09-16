@@ -14,19 +14,27 @@ func TestServiceErrorQueueKeepsWindowDecisionSnapshot(test *testing.T) {
 	defer db.serviceErrors.cancel()
 	diagnostic := &WindowControlDiagnostic{
 		RootHash: strings.Repeat("r", 200), Decision: "owner_admission_rejected",
-		Grant:   &WindowGrantDiagnostic{State: "expired"},
-		Account: &AccountSessionAdmissionDiagnostic{Reason: "session_capacity_full", SlotState: "missing", TotalUsed: 8},
+		Grant:        &WindowGrantDiagnostic{State: "expired"},
+		Account:      &AccountSessionAdmissionDiagnostic{Reason: "session_capacity_full", SlotState: "missing", TotalUsed: 8},
+		OwnerLookups: []WindowOwnerLookupDiagnostic{{Target: "fork_parent", Persistent: "missing", Live: "missing", Result: "missing"}},
 	}
-	require.True(test, db.EnqueueServiceError(ServiceErrorEvent{ID: "window-decision", StatusCode: 400, WindowControl: diagnostic}))
+	wait := &BackgroundWindowWaitDiagnostic{Result: "timeout", WaitingFor: "account_window", Reason: "account_window_timeout", InitialWindow: &RootAccountWindowDiagnostic{SlotState: "expired"}, FinalWindow: &RootAccountWindowDiagnostic{SlotState: "missing"}}
+	require.True(test, db.EnqueueServiceError(ServiceErrorEvent{ID: "window-decision", StatusCode: 400, WindowControl: diagnostic, BackgroundWindowWait: wait}))
 	diagnostic.Decision = "changed"
 	diagnostic.Grant.State = "changed"
 	diagnostic.Account.TotalUsed = 0
+	diagnostic.OwnerLookups[0].Result = "changed"
+	wait.InitialWindow.SlotState, wait.FinalWindow.SlotState = "changed", "changed"
 	job := <-db.serviceErrors.jobs
 	require.Equal(test, "owner_admission_rejected", job.event.WindowControl.Decision)
 	require.Equal(test, "expired", job.event.WindowControl.Grant.State)
 	require.EqualValues(test, 8, job.event.WindowControl.Account.TotalUsed)
+	require.Equal(test, "missing", job.event.WindowControl.OwnerLookups[0].Result)
+	require.Equal(test, "expired", job.event.BackgroundWindowWait.InitialWindow.SlotState)
+	require.Equal(test, "missing", job.event.BackgroundWindowWait.FinalWindow.SlotState)
 	require.Len(test, job.event.WindowControl.RootHash, 80)
 	var persisted ServiceErrorEvent
 	require.NoError(test, json.Unmarshal([]byte(job.payload), &persisted))
 	require.Equal(test, job.event.WindowControl, persisted.WindowControl)
+	require.Equal(test, job.event.BackgroundWindowWait, persisted.BackgroundWindowWait)
 }

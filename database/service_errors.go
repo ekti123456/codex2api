@@ -29,10 +29,38 @@ type SessionContextBlocker struct {
 }
 
 type BackgroundWindowWaitDiagnostic struct {
-	Result     string `json:"result"`
-	AccountID  int64  `json:"account_id"`
-	Generation uint64 `json:"generation"`
-	DurationMs int64  `json:"duration_ms"`
+	Result             string                       `json:"result"`
+	AccountID          int64                        `json:"account_id"`
+	Generation         uint64                       `json:"generation"`
+	DurationMs         int64                        `json:"duration_ms"`
+	WaitingFor         string                       `json:"waiting_for,omitempty"`
+	Reason             string                       `json:"reason,omitempty"`
+	BudgetRemainingMs  int64                        `json:"budget_remaining_ms"`
+	DeadlineAt         time.Time                    `json:"deadline_at,omitzero"`
+	RootScopeHash      string                       `json:"root_scope_hash,omitempty"`
+	GrantState         string                       `json:"grant_state,omitempty"`
+	OwnerLastSeen      time.Time                    `json:"owner_last_seen,omitzero"`
+	OwnerLastCompleted time.Time                    `json:"owner_last_completed,omitzero"`
+	InitialWindow      *RootAccountWindowDiagnostic `json:"initial_window,omitempty"`
+	FinalWindow        *RootAccountWindowDiagnostic `json:"final_window,omitempty"`
+}
+
+// A local read-only snapshot, not an admission decision or cache availability claim.
+type RootAccountWindowDiagnostic struct {
+	ObservedAt           time.Time `json:"observed_at"`
+	Scope                string    `json:"scope"`
+	AccountPresent       bool      `json:"account_present"`
+	CapacityEnabled      bool      `json:"capacity_enabled"`
+	SlotState            string    `json:"slot_state"`
+	SlotReserved         bool      `json:"slot_reserved"`
+	UpgradePending       bool      `json:"upgrade_pending"`
+	LastSeen             time.Time `json:"last_seen,omitzero"`
+	ExpiresAt            time.Time `json:"expires_at,omitzero"`
+	IdleTTLSeconds       int64     `json:"idle_ttl_seconds"`
+	TotalLimit           int64     `json:"total_limit"`
+	TotalUsed            int       `json:"total_used"`
+	LiveBindingState     string    `json:"live_binding_state"`
+	LiveBindingAccountID int64     `json:"live_binding_account_id,omitempty"`
 }
 
 type PromptSafetyDiagnostic struct {
@@ -240,6 +268,14 @@ func normalizeServiceError(event ServiceErrorEvent) ServiceErrorEvent {
 	if event.BackgroundWindowWait != nil {
 		wait := *event.BackgroundWindowWait
 		wait.Result = serviceErrorString(wait.Result, 64)
+		if wait.InitialWindow != nil {
+			value := *wait.InitialWindow
+			wait.InitialWindow = &value
+		}
+		if wait.FinalWindow != nil {
+			value := *wait.FinalWindow
+			wait.FinalWindow = &value
+		}
 		event.BackgroundWindowWait = &wait
 	}
 	if event.CreatedAt.IsZero() {

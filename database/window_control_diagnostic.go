@@ -8,6 +8,7 @@ type WindowControlDiagnostic struct {
 	ObservedAt               time.Time                          `json:"observed_at"`
 	RootHash                 string                             `json:"root_hash,omitempty"`
 	OwnerSource              string                             `json:"owner_source,omitempty"`
+	OwnerLookups             []WindowOwnerLookupDiagnostic      `json:"owner_lookups,omitempty"`
 	OwnerAccountID           int64                              `json:"owner_account_id,omitempty"`
 	OwnerLastSeen            time.Time                          `json:"owner_last_seen,omitzero"`
 	OwnerLastCompleted       time.Time                          `json:"owner_last_completed,omitzero"`
@@ -30,6 +31,18 @@ type WindowControlDiagnostic struct {
 	CapacityFailoverDeferred bool                               `json:"capacity_failover_deferred,omitempty"`
 	Decision                 string                             `json:"decision,omitempty"`
 	ExpansionBlock           string                             `json:"expansion_block,omitempty"`
+}
+
+type WindowOwnerLookupDiagnostic struct {
+	Target         string `json:"target"`
+	IdentitySource string `json:"identity_source"`
+	RootHash       string `json:"root_hash"`
+	ScopeHash      string `json:"scope_hash"`
+	Persistent     string `json:"persistent"`
+	Live           string `json:"live"`
+	Result         string `json:"result"`
+	ErrorKind      string `json:"error_kind,omitempty"`
+	AccountID      int64  `json:"account_id,omitempty"`
 }
 
 type WindowGrantDiagnostic struct {
@@ -63,6 +76,13 @@ func cloneWindowControlDiagnostic(source *WindowControlDiagnostic) *WindowContro
 		return nil
 	}
 	result := *source
+	result.OwnerLookups = append([]WindowOwnerLookupDiagnostic(nil), source.OwnerLookups[:min(len(source.OwnerLookups), 2)]...)
+	for index := range result.OwnerLookups {
+		lookup := &result.OwnerLookups[index]
+		for _, field := range []*string{&lookup.Target, &lookup.IdentitySource, &lookup.RootHash, &lookup.ScopeHash, &lookup.Persistent, &lookup.Live, &lookup.Result, &lookup.ErrorKind} {
+			*field = serviceErrorString(*field, 80)
+		}
+	}
 	for _, field := range []*string{&result.RootHash, &result.OwnerSource, &result.RootWindowState, &result.Decision, &result.ExpansionBlock} {
 		*field = serviceErrorString(*field, 80)
 	}

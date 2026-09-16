@@ -82,20 +82,41 @@ func (handler *Handler) waitForBackgroundRootAccount(requestContext *gin.Context
 }
 
 func (handler *Handler) waitForBackgroundActiveWindow(ctx context.Context, request *gin.Context, rootKey string, accountID int64, expected *database.SessionContinuityRecord) *api.APIError {
-	diagnostic := &database.BackgroundWindowWaitDiagnostic{Result: "waiting", AccountID: accountID}
+	diagnostic := &database.BackgroundWindowWaitDiagnostic{Result: "waiting", AccountID: accountID, WaitingFor: "ownership_validation", RootScopeHash: hashRiskIdentity(rootKey)}
 	if expected != nil {
 		diagnostic.Generation = expected.FailoverCount
+		diagnostic.OwnerLastSeen, diagnostic.OwnerLastCompleted = expected.LastSeen, expected.LastCompleted
 	}
 	usageRequestDiagnosticState(request).BackgroundWindowWait = diagnostic
 	started := time.Now()
-	defer func() { diagnostic.DurationMs = time.Since(started).Milliseconds() }()
+	if deadline, ok := ctx.Deadline(); ok {
+		diagnostic.DeadlineAt = deadline.UTC()
+		diagnostic.BudgetRemainingMs = max(time.Until(deadline).Milliseconds(), 0)
+	}
+	diagnostic.InitialWindow = handler.store.RootAccountWindowDiagnostic(rootKey, accountID, started)
+	defer func() {
+		diagnostic.DurationMs = time.Since(started).Milliseconds()
+		diagnostic.FinalWindow = handler.store.RootAccountWindowDiagnostic(rootKey, diagnostic.AccountID, time.Now())
+		diagnostic.GrantState = "not_required"
+		if grant := windowGrantForRequest(request); grant != nil {
+			diagnostic.GrantState = "pending"
+			if grant.Grant.Confirmed {
+				diagnostic.GrantState = "confirmed"
+			}
+		}
+		if diagnostic.Reason == "" && diagnostic.Result != "waiting" && diagnostic.Result != "ready" {
+			diagnostic.Reason = diagnostic.WaitingFor + "_" + diagnostic.Result
+		}
+	}()
 	if ctx.Err() != nil {
+		diagnostic.Reason = "shared_wait_budget_exhausted"
 		if request.Request.Context().Err() != nil {
+			diagnostic.Reason = "request_canceled"
 			diagnostic.Result = "canceled"
 			return api.NewAPIError(api.ErrCodeInvalidRequest, "Background request was canceled while waiting for its main conversation window.", api.ErrorTypeInvalidRequest)
 		}
 		diagnostic.Result = "timeout"
-		return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "主会话账号已找到，但有效窗口未在共享等待预算内恢复，后台请求已停止。", api.ErrorTypeInvalidRequest)
+		return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "主会话账号已找到，但等待其有效窗口超时。后台请求未执行，请先恢复主会话请求。", api.ErrorTypeInvalidRequest)
 	}
 	entry, persisted, err := handler.readSessionContinuity(ctx, hashRiskIdentity(rootKey))
 	if err != nil {
@@ -110,6 +131,7 @@ func (handler *Handler) waitForBackgroundActiveWindow(ctx context.Context, reque
 	if persisted {
 		accountID = entry.Record.AccountID
 		diagnostic.AccountID, diagnostic.Generation = accountID, entry.Record.FailoverCount
+		diagnostic.OwnerLastSeen, diagnostic.OwnerLastCompleted = entry.Record.LastSeen, entry.Record.LastCompleted
 		if entry.Record.FailoverCount > 0 {
 			if failure := handler.validateMigratedSessionContext(request, body, entry.Record, rootKey); failure != nil {
 				diagnostic.Result = "context_unavailable"
@@ -125,10 +147,12 @@ func (handler *Handler) waitForBackgroundActiveWindow(ctx context.Context, reque
 		return api.NewAPIError(api.ErrCodeBackgroundRootUnavailable, "主会话绑定账号不存在，后台请求已停止，未选择其他账号。", api.ErrorTypeInvalidRequest)
 	}
 	recordUsageRootAccount(request, accountID, true)
+	diagnostic.WaitingFor = "grant_confirmation"
 	if failure := handler.waitForBackgroundWindowGrant(ctx, request); failure != nil {
 		diagnostic.Result = "grant_unavailable"
 		return failure
 	}
+	diagnostic.WaitingFor = "account_window"
 	if err := handler.store.WaitForRootAccountWindow(ctx, rootKey, accountID); err != nil {
 		switch {
 		case request.Request.Context().Err() != nil:
@@ -136,7 +160,7 @@ func (handler *Handler) waitForBackgroundActiveWindow(ctx context.Context, reque
 			return api.NewAPIError(api.ErrCodeInvalidRequest, "Background request was canceled while waiting for its main conversation window.", api.ErrorTypeInvalidRequest)
 		case errors.Is(err, context.DeadlineExceeded):
 			diagnostic.Result = "timeout"
-			return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "主会话账号已找到，但有效窗口未在共享等待预算内恢复，后台请求已停止。", api.ErrorTypeInvalidRequest)
+			return api.NewAPIError(api.ErrCodeRootAccountWaitTimeout, "主会话账号已找到，但等待其有效窗口超时。后台请求未执行，请先恢复主会话请求。", api.ErrorTypeInvalidRequest)
 		case errors.Is(err, auth.ErrRootAccountOwnerChanged):
 			diagnostic.Result = "owner_changed"
 		default:
@@ -144,6 +168,7 @@ func (handler *Handler) waitForBackgroundActiveWindow(ctx context.Context, reque
 		}
 		return api.NewAPIError(api.ErrCodeBackgroundRootUnavailable, "等待期间主会话账号归属已变化或窗口暂不可用，后台请求已停止，未选择其他账号。", api.ErrorTypeInvalidRequest)
 	}
+	diagnostic.WaitingFor = "account_match_validation"
 	if failure := handler.prepareBackgroundAccountMatch(request, rootKey, body); failure != nil {
 		diagnostic.Result = "validation_failed"
 		return failure
@@ -155,5 +180,6 @@ func (handler *Handler) waitForBackgroundActiveWindow(ctx context.Context, reque
 		return api.NewAPIError(api.ErrCodeBackgroundRootUnavailable, "等待期间主会话账号或换号代次已变化，后台请求已停止，请重新发起请求。", api.ErrorTypeInvalidRequest)
 	}
 	diagnostic.Result = "ready"
+	diagnostic.WaitingFor = "none"
 	return nil
 }

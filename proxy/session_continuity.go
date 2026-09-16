@@ -175,21 +175,40 @@ func (handler *Handler) cacheSessionContinuity(key string, entry sessionContinui
 }
 
 func (handler *Handler) resolveForkSourceOwner(ctx context.Context, identity requestSessionIdentity, targetKey string, apiKeyID int64) (int64, string, error) {
+	return handler.resolveForkSourceOwnerWithDiagnostic(ctx, identity, targetKey, apiKeyID, nil)
+}
+
+func (handler *Handler) resolveForkSourceOwnerWithDiagnostic(ctx context.Context, identity requestSessionIdentity, targetKey string, apiKeyID int64, diagnostic *database.WindowOwnerLookupDiagnostic) (int64, string, error) {
 	if strings.TrimSpace(identity.forkSourceAffinityID) == "" {
 		return 0, "", nil
 	}
 	sourceKey := sessionAffinityKey(identity.forkSourceAffinityID, apiKeyID)
 	if sourceKey == "" || sourceKey == targetKey {
+		if diagnostic != nil {
+			diagnostic.Result = "invalid_parent_key"
+		}
 		return 0, "", nil
 	}
 	entry, found, err := handler.readSessionContinuity(ctx, hashRiskIdentity(sourceKey))
 	if err != nil {
+		if diagnostic != nil {
+			diagnostic.Persistent, diagnostic.Result, diagnostic.ErrorKind = "failed", "lookup_failed", windowLookupErrorKind(err)
+		}
 		return 0, "", err
 	}
 	if found {
+		if diagnostic != nil {
+			diagnostic.Persistent, diagnostic.Result, diagnostic.AccountID = "found", "found", entry.Record.AccountID
+		}
 		return entry.Record.AccountID, "fork_source_persistent", nil
 	}
 	accountID, _ := handler.store.LiveSessionAccountID(sourceKey, time.Now())
+	if diagnostic != nil {
+		diagnostic.Persistent, diagnostic.Live, diagnostic.Result = "missing", "missing", "missing"
+		if accountID > 0 {
+			diagnostic.Live, diagnostic.Result, diagnostic.AccountID = "found", "found", accountID
+		}
+	}
 	return accountID, "fork_source_live", nil
 }
 

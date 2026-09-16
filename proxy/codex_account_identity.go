@@ -59,17 +59,29 @@ type codexAccountReferenceDiagnostic struct {
 }
 
 type codexAccountIdentityDiagnostic struct {
-	Version          string                            `json:"version,omitempty"`
-	Status           string                            `json:"status"`
-	ScopeHash        string                            `json:"scope_hash,omitempty"`
-	UpstreamAccount  string                            `json:"chatgpt_account_id,omitempty"`
-	CachePartitioned bool                              `json:"cache_partitioned,omitempty"`
-	Changes          []codexAccountIdentityChange      `json:"changes,omitempty"`
-	PreservedIDs     []string                          `json:"preserved_ids,omitempty"`
-	Generation       uint64                            `json:"generation,omitempty"`
-	SegmentHash      string                            `json:"segment_hash,omitempty"`
-	Windows          []codexAccountWindowChange        `json:"windows,omitempty"`
-	References       []codexAccountReferenceDiagnostic `json:"references,omitempty"`
+	Version             string                              `json:"version,omitempty"`
+	Status              string                              `json:"status"`
+	ScopeHash           string                              `json:"scope_hash,omitempty"`
+	UpstreamAccount     string                              `json:"chatgpt_account_id,omitempty"`
+	CachePartitioned    bool                                `json:"cache_partitioned,omitempty"`
+	Changes             []codexAccountIdentityChange        `json:"changes,omitempty"`
+	PreservedIDs        []string                            `json:"preserved_ids,omitempty"`
+	Generation          uint64                              `json:"generation,omitempty"`
+	SegmentHash         string                              `json:"segment_hash,omitempty"`
+	Windows             []codexAccountWindowChange          `json:"windows,omitempty"`
+	References          []codexAccountReferenceDiagnostic   `json:"references,omitempty"`
+	InvalidTurnIdentity *codexInvalidTurnIdentityDiagnostic `json:"invalid_turn_identity,omitempty"`
+}
+
+type codexInvalidTurnIdentityDiagnostic struct {
+	Stage       string   `json:"stage"`
+	Sources     []string `json:"sources"`
+	Reason      string   `json:"reason"`
+	Expected    string   `json:"expected"`
+	UUIDVersion int      `json:"uuid_version,omitempty"`
+	UUIDVariant string   `json:"uuid_variant,omitempty"`
+	ValueHash   string   `json:"value_hash"`
+	ValueLength int      `json:"value_length"`
 }
 
 type codexAccountIdentity struct {

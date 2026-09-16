@@ -101,34 +101,65 @@ func (handler *Handler) windowQuoteOwner(request *gin.Context, identity verified
 		diagnostic.OwnerSource = "none"
 	}
 	key := sessionAffinityKey("newapi-root-session:"+identity.Meta.RootSessionFingerprint, identity.APIKeyID)
+	lookup := appendWindowOwnerLookup(diagnostic, "current_root", identity.Meta.RootSessionFingerprint, key)
 	entry, found, err := handler.readSessionContinuity(request.Request.Context(), hashRiskIdentity(key))
 	if err != nil {
+		lookup.Persistent, lookup.Result, lookup.ErrorKind = "failed", "lookup_failed", windowLookupErrorKind(err)
 		return 0, "", err
 	}
 	if found {
+		lookup.Persistent, lookup.Result, lookup.AccountID = "found", "found", entry.Record.AccountID
 		if diagnostic != nil {
 			diagnostic.OwnerSource = "continuity"
 			diagnostic.OwnerLastSeen, diagnostic.OwnerLastCompleted, diagnostic.OwnerLastStatus = entry.Record.LastSeen, entry.Record.LastCompleted, entry.Record.LastStatus
 		}
 		return entry.Record.AccountID, key, nil
 	}
+	lookup.Persistent = "missing"
 	if owner, found := handler.store.LiveSessionAccountID(key, time.Now()); found {
+		lookup.Live, lookup.Result, lookup.AccountID = "found", "found", owner
 		if diagnostic != nil {
 			diagnostic.OwnerSource = "live_session"
 		}
 		return owner, key, nil
 	}
+	lookup.Live, lookup.Result = "missing", "missing"
 	if userForkWindow(identity.Meta) {
 		if diagnostic != nil {
 			diagnostic.OwnerSource = "fork_parent"
 		}
-		owner, _, err := handler.resolveForkSourceOwner(request.Request.Context(), requestSessionIdentity{forkSourceAffinityID: "newapi-root-session:" + identity.Meta.ForkedFromSessionFingerprint}, key, identity.APIKeyID)
+		parentKey := sessionAffinityKey("newapi-root-session:"+identity.Meta.ForkedFromSessionFingerprint, identity.APIKeyID)
+		parentLookup := appendWindowOwnerLookup(diagnostic, "fork_parent", identity.Meta.ForkedFromSessionFingerprint, parentKey)
+		owner, _, err := handler.resolveForkSourceOwnerWithDiagnostic(request.Request.Context(), requestSessionIdentity{forkSourceAffinityID: "newapi-root-session:" + identity.Meta.ForkedFromSessionFingerprint}, key, identity.APIKeyID, parentLookup)
 		if err != nil || owner == 0 {
 			return 0, "", errors.New("无法恢复 fork 父会话账号")
 		}
 		return owner, key, nil
 	}
 	return 0, "", nil
+}
+
+func appendWindowOwnerLookup(diagnostic *database.WindowControlDiagnostic, target, fingerprint, key string) *database.WindowOwnerLookupDiagnostic {
+	lookup := database.WindowOwnerLookupDiagnostic{Target: target, IdentitySource: "signed_original_root_fingerprint", RootHash: hashRiskIdentity(fingerprint), ScopeHash: hashRiskIdentity(key), Persistent: "not_checked", Live: "not_checked", Result: "not_checked"}
+	if target == "fork_parent" {
+		lookup.IdentitySource = "signed_original_fork_parent_fingerprint"
+	}
+	if diagnostic == nil {
+		return &lookup
+	}
+	diagnostic.OwnerLookups = append(diagnostic.OwnerLookups, lookup)
+	return &diagnostic.OwnerLookups[len(diagnostic.OwnerLookups)-1]
+}
+
+func windowLookupErrorKind(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "storage_error"
+	}
 }
 
 func userForkWindow(meta newAPIPolicyMeta) bool {

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -12,8 +13,9 @@ import (
 )
 
 type codexTurnIdentityInput struct {
-	Turn bool
-	Root bool
+	Turn    bool
+	Root    bool
+	Sources []string
 }
 
 type codexTurnIdentityPlan struct {
@@ -25,7 +27,7 @@ type codexTurnIdentityPlan struct {
 func codexAccountTurnIdentityInputs(headers http.Header, body []byte) map[string]codexTurnIdentityInput {
 	inputs := make(map[string]codexTurnIdentityInput)
 	metadata := gjson.GetBytes(body, "client_metadata")
-	for _, source := range []gjson.Result{metadata, diagnosticMetadataObject(metadata.Get("x-codex-turn-metadata")), gjson.Parse(headers.Get(codexTurnMetadataHeader))} {
+	for index, source := range []gjson.Result{metadata, diagnosticMetadataObject(metadata.Get("x-codex-turn-metadata")), gjson.Parse(headers.Get(codexTurnMetadataHeader))} {
 		for _, field := range []string{"turn_id", "root_turn_id"} {
 			value := source.Get(field)
 			original := strings.ToLower(strings.TrimSpace(value.String()))
@@ -38,6 +40,8 @@ func codexAccountTurnIdentityInputs(headers http.Header, body []byte) map[string
 			input := inputs[original]
 			input.Turn = input.Turn || field == "turn_id"
 			input.Root = input.Root || field == "root_turn_id"
+			location := []string{"client_metadata", "client_metadata.x-codex-turn-metadata", "headers.X-Codex-Turn-Metadata"}[index]
+			input.Sources = append(input.Sources, location+"."+field)
 			inputs[original] = input
 		}
 	}
@@ -63,7 +67,21 @@ func (fingerprint *CodexFingerprint) prepareAccountTurnIdentity(ctx context.Cont
 		}
 		parsed, err := uuid.Parse(original)
 		if err != nil || parsed.Version() != 7 || parsed.Variant() != uuid.RFC4122 {
-			return nil, codexAccountIdentityError("账号级出站轮次映射仅支持 UUIDv7，请检查 turn_id 与 root_turn_id。")
+			failure := &codexInvalidTurnIdentityDiagnostic{Stage: "normalized_pre_mapping", Sources: append([]string(nil), input.Sources...), Reason: "invalid_uuid", Expected: "UUIDv7/RFC4122", ValueHash: hashRiskIdentity(original), ValueLength: len(original)}
+			description := "不是有效 UUID"
+			if err == nil {
+				failure.UUIDVersion, failure.UUIDVariant = int(parsed.Version()), parsed.Variant().String()
+				failure.Reason, description = "unsupported_uuid_version", fmt.Sprintf("为 UUIDv%d", parsed.Version())
+				if parsed.Variant() != uuid.RFC4122 {
+					failure.Reason, description = "unsupported_uuid_variant", "UUID 变体不符合 RFC4122"
+				}
+			}
+			diagnostic.InvalidTurnIdentity = failure
+			source := strings.Join(input.Sources, ", ")
+			if source == "" {
+				source = "turn_id/root_turn_id"
+			}
+			return nil, codexAccountIdentityError(fmt.Sprintf("账号级出站轮次映射仅支持 UUIDv7；%s %s，请检查轮次元数据。", source, description))
 		}
 		if len(mapping.secret) != 32 {
 			return nil, codexAccountIdentityError("出站轮次映射密钥不可用，请核实会话身份策略。")

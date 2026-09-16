@@ -65,6 +65,16 @@ func TestBackgroundWindowWaitBudgetAndOwnership(test *testing.T) {
 				failure := <-result
 				diagnostic := state.BackgroundWindowWait
 				require.NotNil(test, diagnostic)
+				require.NotNil(test, diagnostic.InitialWindow)
+				require.NotNil(test, diagnostic.FinalWindow)
+				require.Equal(test, "missing", diagnostic.InitialWindow.SlotState)
+				require.Equal(test, "local", diagnostic.InitialWindow.Scope)
+				require.LessOrEqual(test, diagnostic.BudgetRemainingMs, int64(7000))
+				if scenario == "timeout" {
+					require.Equal(test, "account_window", diagnostic.WaitingFor)
+					require.Equal(test, "account_window_timeout", diagnostic.Reason)
+					require.Equal(test, "missing", diagnostic.FinalWindow.SlotState)
+				}
 				require.Equal(test, account.ID(), diagnostic.AccountID)
 				require.Equal(test, time.Since(started).Milliseconds(), state.RootAccountWaitMillis)
 				switch scenario {

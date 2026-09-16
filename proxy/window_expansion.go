@@ -255,7 +255,14 @@ func (handler *Handler) ControlNewAPIUserWindows(request *gin.Context) {
 		ownerAccountID, ownerKey, err = handler.windowQuoteOwner(request, identity)
 		if err != nil {
 			diagnostic.Decision = "owner_lookup_failed"
-			writeWindowControlError(request, http.StatusServiceUnavailable, "window_owner_unavailable", "会话账号归属暂时无法确认，请稍后重试")
+			message := "读取会话账号归属失败，请稍后重试。"
+			if diagnostic.OwnerSource == "fork_parent" {
+				message = "无法恢复 fork 父会话的账号绑定，请先恢复父会话后重试。"
+				if len(diagnostic.OwnerLookups) > 0 && diagnostic.OwnerLookups[len(diagnostic.OwnerLookups)-1].ErrorKind != "" {
+					message = "读取 fork 父会话账号归属失败，请稍后重试。"
+				}
+			}
+			writeWindowControlError(request, http.StatusServiceUnavailable, "window_owner_unavailable", message)
 			return
 		}
 	}
