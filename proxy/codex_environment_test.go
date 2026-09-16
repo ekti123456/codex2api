@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/database"
 	"github.com/codex2api/internal/timezone"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -142,8 +143,15 @@ func TestCodexEnvironmentHTTPAndCompactForwarding(test *testing.T) {
 			}
 			return location
 		}, reference)
+		ctx = WithCodexWebSearchLocation(ctx, true, func(selected string) database.ProxyLocation {
+			if selected != proxyURL {
+				test.Fatalf("location selected for wrong egress: %s", selected)
+			}
+			return database.ProxyLocation{Country: "US", City: "Los Angeles", Timezone: location.String()}
+		})
 		for _, compact := range []bool{false, true} {
 			body := environmentTestBody(environmentTestText("2026-09-06", "Asia/Shanghai"))
+			body, _ = sjson.SetRawBytes(body, "tools", []byte(`[{"type":"web_search","user_location":{"country":"JP","city":"Tokyo"}}]`))
 			var response *http.Response
 			var err error
 			if compact {
@@ -155,6 +163,9 @@ func TestCodexEnvironmentHTTPAndCompactForwarding(test *testing.T) {
 				test.Fatal(err)
 			}
 			response.Body.Close()
+			if gjson.GetBytes(received, "tools.0.user_location.country").String() != "US" || gjson.GetBytes(received, "tools.0.user_location.city").String() != "Los Angeles" {
+				test.Fatalf("mode=%s compact=%t location not forwarded: %s", mode, compact, received)
+			}
 			if actual := gjson.GetBytes(received, "input.0.content.0.text").String(); actual != environmentTestText("2026-09-05", location.String()) {
 				test.Fatalf("mode=%s compact=%t body=%s", mode, compact, received)
 			}

@@ -1130,6 +1130,9 @@ func (db *DB) migrate(ctx context.Context) error {
 		if err := db.ensureSQLiteColumn(ctx, "system_settings", "codex_session_failover_preserve_input", "INTEGER DEFAULT 0"); err != nil {
 			return err
 		}
+		if err := db.ensureSQLiteColumn(ctx, "system_settings", "codex_web_search_proxy_location", "INTEGER DEFAULT 0"); err != nil {
+			return err
+		}
 		if err := db.ensureSQLiteColumn(ctx, "system_settings", "codex_session_failover_enabled", "INTEGER DEFAULT 0"); err != nil {
 			return err
 		}
@@ -1545,6 +1548,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_overload_pause_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_capacity_retry_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_session_failover_preserve_input BOOLEAN DEFAULT FALSE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_web_search_proxy_location BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_session_failover_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_overload_threshold_percent INT DEFAULT 20;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_overload_pause_minutes INT DEFAULT 30;
@@ -1701,6 +1705,12 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_ip VARCHAR(100) DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_location VARCHAR(255) DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_timezone VARCHAR(100) DEFAULT '';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_country_code VARCHAR(128) DEFAULT '';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_region VARCHAR(128) DEFAULT '';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_city VARCHAR(128) DEFAULT '';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS country_code_override VARCHAR(128) DEFAULT '';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS region_override VARCHAR(128) DEFAULT '';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS city_override VARCHAR(128) DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS timezone_override VARCHAR(100) DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_latency_ms INT DEFAULT 0;
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_status VARCHAR(20) NOT NULL DEFAULT 'untested';
@@ -2496,6 +2506,7 @@ type SystemSettings struct {
 	CodexOverloadPauseEnabled           bool
 	CodexCapacityRetryEnabled           bool
 	CodexSessionFailoverPreserveInput   bool
+	CodexWebSearchProxyLocation         bool
 	CodexSessionFailoverEnabled         bool
 	CodexOverloadThresholdPercent       int  // 触发比例（%），默认 20，范围 1-100
 	CodexOverloadPauseMinutes           int  // 暂停时长（分钟），默认 30，范围 1-1440
@@ -2782,6 +2793,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(codex_images_main_model, ''),
 		       COALESCE(codex_telemetry_enabled, false),
 		       COALESCE(codex_session_failover_preserve_input, false),
+		       COALESCE(codex_web_search_proxy_location, false),
 		       COALESCE(codex_session_failover_enabled, false),
 		       COALESCE(codex_ws_context_takeover, false),
 		       CASE WHEN codex_ws_compression_level BETWEEN 1 AND 9 THEN codex_ws_compression_level ELSE 1 END,
@@ -2874,6 +2886,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.CodexImagesMainModel,
 		&s.CodexTelemetryEnabled,
 		&s.CodexSessionFailoverPreserveInput,
+		&s.CodexWebSearchProxyLocation,
 		&s.CodexSessionFailoverEnabled,
 		&s.CodexWSContextTakeover,
 		&s.CodexWSCompressionLevel,
@@ -3135,9 +3148,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_ws_context_takeover,
 					codex_ws_compression_level,
 					codex_ws_disable_fragmentation,
-					codex_session_failover_preserve_input
+					codex_session_failover_preserve_input,
+					codex_web_search_proxy_location
 					)
-						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126, $127, $128, $129, $130, $133)
+						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126, $127, $128, $129, $130, $133, $134)
 				ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -3255,6 +3269,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 					codex_overload_pause_enabled = EXCLUDED.codex_overload_pause_enabled,
 					codex_capacity_retry_enabled = EXCLUDED.codex_capacity_retry_enabled,
 					codex_session_failover_preserve_input = EXCLUDED.codex_session_failover_preserve_input,
+					codex_web_search_proxy_location = EXCLUDED.codex_web_search_proxy_location,
 					codex_session_failover_enabled = EXCLUDED.codex_session_failover_enabled,
 					codex_overload_threshold_percent = EXCLUDED.codex_overload_threshold_percent,
 					codex_overload_pause_minutes = EXCLUDED.codex_overload_pause_minutes,
@@ -3329,7 +3344,8 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.CodexWSDisableFragmentation,
 		s.PreservePromptFilterCustomPatterns,
 		s.PreservePromptFilterReviewAPIKey,
-		s.CodexSessionFailoverPreserveInput)
+		s.CodexSessionFailoverPreserveInput,
+		s.CodexWebSearchProxyLocation)
 	return err
 }
 
@@ -3639,17 +3655,23 @@ var ErrProxyTestTargetChanged = errors.New("proxy test target changed")
 
 // ProxyRow 代理行
 type ProxyRow struct {
-	ID               int64     `json:"id"`
-	URL              string    `json:"url"`
-	Label            string    `json:"label"`
-	Enabled          bool      `json:"enabled"`
-	CreatedAt        time.Time `json:"created_at"`
-	TestIP           string    `json:"test_ip"`
-	TestLocation     string    `json:"test_location"`
-	TestTimezone     string    `json:"test_timezone"`
-	TimezoneOverride string    `json:"timezone_override"`
-	TestLatencyMs    int       `json:"test_latency_ms"`
-	TestStatus       string    `json:"test_status"`
+	ID                  int64     `json:"id"`
+	URL                 string    `json:"url"`
+	Label               string    `json:"label"`
+	Enabled             bool      `json:"enabled"`
+	CreatedAt           time.Time `json:"created_at"`
+	TestIP              string    `json:"test_ip"`
+	TestLocation        string    `json:"test_location"`
+	TestTimezone        string    `json:"test_timezone"`
+	TimezoneOverride    string    `json:"timezone_override"`
+	TestCountryCode     string    `json:"test_country_code"`
+	TestRegion          string    `json:"test_region"`
+	TestCity            string    `json:"test_city"`
+	CountryCodeOverride string    `json:"country_code_override"`
+	RegionOverride      string    `json:"region_override"`
+	CityOverride        string    `json:"city_override"`
+	TestLatencyMs       int       `json:"test_latency_ms"`
+	TestStatus          string    `json:"test_status"`
 	// BoundCount 是绑定到该代理的账号数,由列表接口按 proxy_url 聚合填充,
 	// 前端据此免拉全量账号(代理页大号池卡死问题)。
 	BoundCount int64                   `json:"bound_count"`
@@ -3715,7 +3737,7 @@ func (db *DB) CountAccountsByProxyURL(ctx context.Context) (map[string]int64, er
 
 // ListProxies 获取所有代理
 func (db *DB) ListProxies(ctx context.Context) ([]*ProxyRow, error) {
-	rows, err := db.conn.QueryContext(ctx, `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), COALESCE(test_timezone,''), COALESCE(timezone_override,'') FROM proxies ORDER BY id`)
+	rows, err := db.conn.QueryContext(ctx, `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), COALESCE(test_timezone,''), COALESCE(timezone_override,''), COALESCE(test_country_code,''), COALESCE(test_region,''), COALESCE(test_city,''), COALESCE(country_code_override,''), COALESCE(region_override,''), COALESCE(city_override,'') FROM proxies ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -3725,7 +3747,7 @@ func (db *DB) ListProxies(ctx context.Context) ([]*ProxyRow, error) {
 	for rows.Next() {
 		p := &ProxyRow{}
 		var createdAtRaw interface{}
-		if err := rows.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAtRaw, &p.TestIP, &p.TestLocation, &p.TestLatencyMs, &p.TestStatus, &p.TestTimezone, &p.TimezoneOverride); err != nil {
+		if err := rows.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAtRaw, &p.TestIP, &p.TestLocation, &p.TestLatencyMs, &p.TestStatus, &p.TestTimezone, &p.TimezoneOverride, &p.TestCountryCode, &p.TestRegion, &p.TestCity, &p.CountryCodeOverride, &p.RegionOverride, &p.CityOverride); err != nil {
 			return nil, err
 		}
 		p.CreatedAt, err = parseDBTimeValue(createdAtRaw)
@@ -3757,7 +3779,7 @@ func (db *DB) GetProxy(ctx context.Context, id int64) (*ProxyRow, error) {
 		SELECT id, url, label, enabled, created_at,
 		       COALESCE(test_ip,''), COALESCE(test_location,''),
 		       COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'),
-		       COALESCE(test_timezone,''), COALESCE(timezone_override,'')
+		       COALESCE(test_timezone,''), COALESCE(timezone_override,''), COALESCE(test_country_code,''), COALESCE(test_region,''), COALESCE(test_city,''), COALESCE(country_code_override,''), COALESCE(region_override,''), COALESCE(city_override,'')
 		FROM proxies
 		WHERE id = $1
 	`, id).Scan(
@@ -3772,6 +3794,12 @@ func (db *DB) GetProxy(ctx context.Context, id int64) (*ProxyRow, error) {
 		&p.TestStatus,
 		&p.TestTimezone,
 		&p.TimezoneOverride,
+		&p.TestCountryCode,
+		&p.TestRegion,
+		&p.TestCity,
+		&p.CountryCodeOverride,
+		&p.RegionOverride,
+		&p.CityOverride,
 	)
 	if err != nil {
 		return nil, err
@@ -3792,7 +3820,7 @@ func (db *DB) ListProxiesByIDs(ctx context.Context, ids []int64) ([]*ProxyRow, e
 		SELECT id, url, label, enabled, created_at,
 		       COALESCE(test_ip,''), COALESCE(test_location,''),
 		       COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'),
-		       COALESCE(test_timezone,''), COALESCE(timezone_override,'')
+		       COALESCE(test_timezone,''), COALESCE(timezone_override,''), COALESCE(test_country_code,''), COALESCE(test_region,''), COALESCE(test_city,''), COALESCE(country_code_override,''), COALESCE(region_override,''), COALESCE(city_override,'')
 		FROM proxies
 		WHERE id IN (%s)
 		ORDER BY id
@@ -3819,6 +3847,12 @@ func (db *DB) ListProxiesByIDs(ctx context.Context, ids []int64) ([]*ProxyRow, e
 			&p.TestStatus,
 			&p.TestTimezone,
 			&p.TimezoneOverride,
+			&p.TestCountryCode,
+			&p.TestRegion,
+			&p.TestCity,
+			&p.CountryCodeOverride,
+			&p.RegionOverride,
+			&p.CityOverride,
 		); err != nil {
 			return nil, err
 		}
@@ -3833,9 +3867,9 @@ func (db *DB) ListProxiesByIDs(ctx context.Context, ids []int64) ([]*ProxyRow, e
 
 // ListEnabledProxies 获取已启用的代理
 func (db *DB) ListEnabledProxies(ctx context.Context) ([]*ProxyRow, error) {
-	query := `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), COALESCE(test_timezone,''), COALESCE(timezone_override,'') FROM proxies WHERE enabled = true AND COALESCE(test_status,'untested') <> 'error' ORDER BY id`
+	query := `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), COALESCE(test_timezone,''), COALESCE(timezone_override,''), COALESCE(test_country_code,''), COALESCE(test_region,''), COALESCE(test_city,''), COALESCE(country_code_override,''), COALESCE(region_override,''), COALESCE(city_override,'') FROM proxies WHERE enabled = true AND COALESCE(test_status,'untested') <> 'error' ORDER BY id`
 	if db.isSQLite() {
-		query = `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), COALESCE(test_timezone,''), COALESCE(timezone_override,'') FROM proxies WHERE enabled = 1 AND COALESCE(test_status,'untested') <> 'error' ORDER BY id`
+		query = `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), COALESCE(test_timezone,''), COALESCE(timezone_override,''), COALESCE(test_country_code,''), COALESCE(test_region,''), COALESCE(test_city,''), COALESCE(country_code_override,''), COALESCE(region_override,''), COALESCE(city_override,'') FROM proxies WHERE enabled = 1 AND COALESCE(test_status,'untested') <> 'error' ORDER BY id`
 	}
 	rows, err := db.conn.QueryContext(ctx, query)
 	if err != nil {
@@ -3847,7 +3881,7 @@ func (db *DB) ListEnabledProxies(ctx context.Context) ([]*ProxyRow, error) {
 	for rows.Next() {
 		p := &ProxyRow{}
 		var createdAtRaw interface{}
-		if err := rows.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAtRaw, &p.TestIP, &p.TestLocation, &p.TestLatencyMs, &p.TestStatus, &p.TestTimezone, &p.TimezoneOverride); err != nil {
+		if err := rows.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAtRaw, &p.TestIP, &p.TestLocation, &p.TestLatencyMs, &p.TestStatus, &p.TestTimezone, &p.TimezoneOverride, &p.TestCountryCode, &p.TestRegion, &p.TestCity, &p.CountryCodeOverride, &p.RegionOverride, &p.CityOverride); err != nil {
 			return nil, err
 		}
 		p.CreatedAt, err = parseDBTimeValue(createdAtRaw)
@@ -3943,6 +3977,13 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 	if len(timezoneOverrides) > 0 {
 		timezoneOverride = timezoneOverrides[0]
 	}
+	return db.updateProxyWithLocation(ctx, id, urlValue, label, enabled, timezoneOverride, ProxyLocationOverrides{})
+}
+
+func (db *DB) updateProxyWithLocation(ctx context.Context, id int64, urlValue, label *string, enabled *bool, timezoneOverride *string, geo ProxyLocationOverrides) error {
+	if err := ValidateProxyLocationOverrides(geo); err != nil {
+		return err
+	}
 	if timezoneOverride != nil {
 		normalized, err := normalizeProxyTimezoneOverride(*timezoneOverride)
 		if err != nil {
@@ -3950,7 +3991,7 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 		}
 		timezoneOverride = &normalized
 	}
-	if urlValue == nil && label == nil && enabled == nil && timezoneOverride == nil {
+	if urlValue == nil && label == nil && enabled == nil && timezoneOverride == nil && geo.CountryCode == nil && geo.Region == nil && geo.City == nil {
 		var exists int
 		if err := db.conn.QueryRowContext(ctx, `SELECT 1 FROM proxies WHERE id = $1`, id).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -3971,6 +4012,9 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 			fmt.Sprintf("test_ip = CASE WHEN url <> %s THEN '' ELSE test_ip END", urlPlaceholder),
 			fmt.Sprintf("test_location = CASE WHEN url <> %s THEN '' ELSE test_location END", urlPlaceholder),
 			fmt.Sprintf("test_timezone = CASE WHEN url <> %s THEN '' ELSE test_timezone END", urlPlaceholder),
+			fmt.Sprintf("test_country_code = CASE WHEN url <> %s THEN '' ELSE test_country_code END", urlPlaceholder),
+			fmt.Sprintf("test_region = CASE WHEN url <> %s THEN '' ELSE test_region END", urlPlaceholder),
+			fmt.Sprintf("test_city = CASE WHEN url <> %s THEN '' ELSE test_city END", urlPlaceholder),
 			fmt.Sprintf("test_latency_ms = CASE WHEN url <> %s THEN 0 ELSE test_latency_ms END", urlPlaceholder),
 			fmt.Sprintf("url = %s", urlPlaceholder),
 		)
@@ -3986,6 +4030,22 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 	if timezoneOverride != nil {
 		args = append(args, *timezoneOverride)
 		assignments = append(assignments, fmt.Sprintf("timezone_override = $%d", len(args)))
+	}
+	for _, field := range []struct {
+		column string
+		value  *string
+	}{
+		{"country_code_override", geo.CountryCode}, {"region_override", geo.Region}, {"city_override", geo.City},
+	} {
+		if field.value == nil {
+			continue
+		}
+		value := NormalizeProxyLocationText(*field.value)
+		if field.column == "country_code_override" {
+			value = NormalizeProxyCountryCode(*field.value)
+		}
+		args = append(args, value)
+		assignments = append(assignments, fmt.Sprintf("%s = $%d", field.column, len(args)))
 	}
 	args = append(args, id)
 	query := fmt.Sprintf("UPDATE proxies SET %s WHERE id = $%d", strings.Join(assignments, ", "), len(args))
@@ -4005,6 +4065,14 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 
 // UpdateProxyTestResult 仅在代理 URL 与测试目标仍一致时更新测试结果。
 func (db *DB) UpdateProxyTestResult(ctx context.Context, id int64, expectedURL, status, ip, location string, latencyMs int, timezones ...string) error {
+	geo := ProxyLocation{}
+	if len(timezones) > 0 {
+		geo.Timezone = timezones[0]
+	}
+	return db.UpdateProxyTestLocationResult(ctx, id, expectedURL, status, ip, location, latencyMs, geo)
+}
+
+func (db *DB) UpdateProxyTestLocationResult(ctx context.Context, id int64, expectedURL, status, ip, location string, latencyMs int, geo ProxyLocation) error {
 	switch status {
 	case ProxyTestStatusUntested, ProxyTestStatusSuccess, ProxyTestStatusError:
 	default:
@@ -4016,15 +4084,18 @@ func (db *DB) UpdateProxyTestResult(ctx context.Context, id int64, expectedURL, 
 		latencyMs = 0
 	}
 	testTimezone := ""
-	if status == ProxyTestStatusSuccess && len(timezones) > 0 {
-		testTimezone = normalizeProxyTestTimezone(timezones[0])
+	if status == ProxyTestStatusSuccess {
+		testTimezone = normalizeProxyTestTimezone(geo.Timezone)
 	}
 	res, err := db.conn.ExecContext(ctx,
 		`UPDATE proxies SET test_status = CAST($1 AS TEXT), test_ip = CAST($2 AS TEXT), test_location = $3, test_latency_ms = $4,
 		 test_timezone = CASE WHEN CAST($1 AS TEXT) <> 'success' THEN test_timezone
-		 WHEN CAST($7 AS TEXT) <> '' OR test_ip <> CAST($2 AS TEXT) THEN CAST($7 AS TEXT) ELSE test_timezone END
+		 WHEN CAST($7 AS TEXT) <> '' OR test_ip <> CAST($2 AS TEXT) THEN CAST($7 AS TEXT) ELSE test_timezone END,
+		 test_country_code = CASE WHEN CAST($1 AS TEXT) <> 'success' THEN test_country_code WHEN CAST($8 AS TEXT) <> '' OR test_ip <> CAST($2 AS TEXT) THEN CAST($8 AS TEXT) ELSE test_country_code END,
+		 test_region = CASE WHEN CAST($1 AS TEXT) <> 'success' THEN test_region WHEN CAST($9 AS TEXT) <> '' OR test_ip <> CAST($2 AS TEXT) THEN CAST($9 AS TEXT) ELSE test_region END,
+		 test_city = CASE WHEN CAST($1 AS TEXT) <> 'success' THEN test_city WHEN CAST($10 AS TEXT) <> '' OR test_ip <> CAST($2 AS TEXT) THEN CAST($10 AS TEXT) ELSE test_city END
 		 WHERE id = $5 AND url = $6`,
-		status, ip, location, latencyMs, id, expectedURL, testTimezone)
+		status, ip, location, latencyMs, id, expectedURL, testTimezone, NormalizeProxyCountryCode(geo.Country), NormalizeProxyLocationText(geo.Region), NormalizeProxyLocationText(geo.City))
 	if err != nil {
 		return err
 	}

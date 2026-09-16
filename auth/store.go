@@ -3332,6 +3332,7 @@ type Store struct {
 	proxyPoolSet         map[string]struct{}
 	managedProxySet      map[string]struct{} // proxies 表中的全部 URL（含禁用/测挂）
 	proxyTimezones       map[string]*time.Location
+	proxyLocations       map[string]database.ProxyLocation
 	proxyPoolEnabled     bool   // 代理池是否开启
 	proxyRoundRobin      uint64 // 轮询计数器
 
@@ -4857,11 +4858,13 @@ func (s *Store) ReloadProxyPool() error {
 		auditRows = allProxies
 	}
 	proxyTimezones := buildProxyTimezones(timezoneRows)
+	proxyLocations := buildProxyLocations(timezoneRows)
 	s.mu.Lock()
 	s.proxyPool = enabledURLs
 	s.proxyPoolSet = buildProxyPoolSet(enabledURLs)
 	s.managedProxySet = buildProxyPoolSet(managedURLs)
 	s.proxyTimezones = proxyTimezones
+	s.proxyLocations = proxyLocations
 	s.proxyAuditLabels = make(map[string]ProxyAuditLabel, len(auditRows))
 	for _, row := range auditRows {
 		if row != nil {
@@ -4932,6 +4935,7 @@ func (s *Store) RemoveProxyURLs(proxyURLs []string) {
 	s.proxyPoolSet = buildProxyPoolSet(filtered)
 	for proxyURL := range removeSet {
 		delete(s.proxyTimezones, proxyURL)
+		delete(s.proxyLocations, proxyURL)
 	}
 	s.mu.Unlock()
 	s.proxyPoolReloadMu.Unlock()

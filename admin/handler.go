@@ -9246,6 +9246,7 @@ type settingsResponse struct {
 	CodexCapacityRetryEnabled           bool   `json:"codex_capacity_retry_enabled"`
 	CodexSessionFailoverEnabled         bool   `json:"codex_session_failover_enabled"`
 	CodexSessionFailoverPreserveInput   bool   `json:"codex_session_failover_preserve_input"`
+	CodexWebSearchProxyLocation         bool   `json:"codex_web_search_proxy_location"`
 	CodexOverloadThresholdPercent       int    `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           int    `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          int    `json:"codex_overload_window_minutes"`
@@ -9437,6 +9438,7 @@ type updateSettingsReq struct {
 	CodexCapacityRetryEnabled           *bool                            `json:"codex_capacity_retry_enabled"`
 	CodexSessionFailoverEnabled         *bool                            `json:"codex_session_failover_enabled"`
 	CodexSessionFailoverPreserveInput   *bool                            `json:"codex_session_failover_preserve_input"`
+	CodexWebSearchProxyLocation         *bool                            `json:"codex_web_search_proxy_location"`
 	CodexOverloadThresholdPercent       *int                             `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           *int                             `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          *int                             `json:"codex_overload_window_minutes"`
@@ -10275,6 +10277,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
+		CodexWebSearchProxyLocation:         runtimeCfg.CodexWebSearchProxyLocation,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -10773,6 +10776,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if existingSettings != nil {
 		runtimeCfg.CodexSessionFailoverEnabled = existingSettings.CodexSessionFailoverEnabled
 		runtimeCfg.CodexSessionFailoverPreserveInput = existingSettings.CodexSessionFailoverPreserveInput
+		runtimeCfg.CodexWebSearchProxyLocation = existingSettings.CodexWebSearchProxyLocation
 		runtimeCfg.CodexWSContextTakeover = existingSettings.CodexWSContextTakeover
 		runtimeCfg.CodexWSCompressionLevel = database.NormalizeCodexWSCompressionLevel(existingSettings.CodexWSCompressionLevel)
 		runtimeCfg.CodexWSDisableFragmentation = existingSettings.CodexWSDisableFragmentation
@@ -11111,6 +11115,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if req.CodexSessionFailoverPreserveInput != nil {
 		runtimeCfg.CodexSessionFailoverPreserveInput = *req.CodexSessionFailoverPreserveInput
+	}
+	if req.CodexWebSearchProxyLocation != nil {
+		runtimeCfg.CodexWebSearchProxyLocation = *req.CodexWebSearchProxyLocation
 	}
 	if req.CodexSessionFailoverEnabled != nil {
 		runtimeCfg.CodexSessionFailoverEnabled = *req.CodexSessionFailoverEnabled
@@ -11841,6 +11848,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
+		CodexWebSearchProxyLocation:         runtimeCfg.CodexWebSearchProxyLocation,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -12174,6 +12182,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
 		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
+		CodexWebSearchProxyLocation:         runtimeCfg.CodexWebSearchProxyLocation,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -13222,10 +13231,13 @@ func (h *Handler) UpdateProxy(c *gin.Context) {
 	}
 
 	var req struct {
-		URL              *string `json:"url"`
-		Label            *string `json:"label"`
-		Enabled          *bool   `json:"enabled"`
-		TimezoneOverride *string `json:"timezone_override"`
+		URL                 *string `json:"url"`
+		Label               *string `json:"label"`
+		Enabled             *bool   `json:"enabled"`
+		TimezoneOverride    *string `json:"timezone_override"`
+		CountryCodeOverride *string `json:"country_code_override"`
+		RegionOverride      *string `json:"region_override"`
+		CityOverride        *string `json:"city_override"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, "请求格式错误")
@@ -13240,6 +13252,11 @@ func (h *Handler) UpdateProxy(c *gin.Context) {
 		req.URL = &normalizedURL
 	}
 
+	geo := database.ProxyLocationOverrides{CountryCode: req.CountryCodeOverride, Region: req.RegionOverride, City: req.CityOverride}
+	if err := database.ValidateProxyLocationOverrides(geo); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.TimezoneOverride != nil && strings.TrimSpace(*req.TimezoneOverride) != "" && !validProxyTimezoneOverride(*req.TimezoneOverride) {
 		writeError(c, http.StatusBadRequest, "无效的 IANA 时区，请填写例如 America/Los_Angeles；留空恢复自动推测")
 		return
@@ -13258,7 +13275,7 @@ func (h *Handler) UpdateProxy(c *gin.Context) {
 	}
 	oldURL := strings.TrimSpace(existing.URL)
 
-	if err := h.db.UpdateProxy(ctx, id, req.URL, req.Label, req.Enabled, req.TimezoneOverride); err != nil {
+	if err := h.db.UpdateProxyLocationSettings(ctx, id, req.URL, req.Label, req.Enabled, req.TimezoneOverride, geo); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "代理不存在")
 			return
@@ -13439,21 +13456,12 @@ func (h *Handler) TestProxy(c *gin.Context) {
 	}
 
 	result := h.runProxyProbe(c.Request.Context(), proxyURL, req.Lang)
-	if result.Conclusive {
-		status := database.ProxyTestStatusError
-		if result.Success {
-			status = database.ProxyTestStatusSuccess
+	if result.Conclusive && req.ID > 0 {
+		err := h.saveProxyTestResult(c.Request.Context(), req.ID, expectedURL, result)
+		if err == nil {
+			err = h.reloadProxyPool()
 		}
-		if err := h.persistProxyTestResult(
-			c.Request.Context(),
-			req.ID,
-			expectedURL,
-			status,
-			result.IP,
-			result.Location,
-			result.LatencyMs,
-			result.Timezone,
-		); err != nil {
+		if err != nil {
 			respondProxyTestSaveError(c, err, result.Error)
 			return
 		}

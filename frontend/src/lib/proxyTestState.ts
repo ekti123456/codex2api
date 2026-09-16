@@ -7,6 +7,9 @@ export interface ProxyTestState {
   test_ip: string
   test_location: string
   test_timezone?: string
+  test_country_code?: string
+  test_region?: string
+  test_city?: string
   test_latency_ms: number
 }
 
@@ -16,6 +19,9 @@ export interface ProxyTestResultState {
   ip?: string
   location?: string
   timezone?: string
+  country_code?: string
+  region?: string
+  city?: string
   latency_ms?: number
   error?: string
 }
@@ -73,6 +79,9 @@ export function applyProxyTestResult<T extends ProxyTestState>(
     test_ip: result.ip || '',
     test_location: result.location || '',
     test_timezone: result.timezone || (proxy.test_ip === result.ip ? proxy.test_timezone || '' : ''),
+    test_country_code: result.country_code || (proxy.test_ip === result.ip ? proxy.test_country_code || '' : ''),
+    test_region: result.region || (proxy.test_ip === result.ip ? proxy.test_region || '' : ''),
+    test_city: result.city || (proxy.test_ip === result.ip ? proxy.test_city || '' : ''),
     test_latency_ms: result.latency_ms || 0,
   }
 }

@@ -795,6 +795,12 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"proxies", "test_location", "TEXT DEFAULT ''"},
 		{"proxies", "test_timezone", "TEXT DEFAULT ''"},
 		{"proxies", "timezone_override", "TEXT DEFAULT ''"},
+		{"proxies", "test_country_code", "TEXT DEFAULT ''"},
+		{"proxies", "test_region", "TEXT DEFAULT ''"},
+		{"proxies", "test_city", "TEXT DEFAULT ''"},
+		{"proxies", "country_code_override", "TEXT DEFAULT ''"},
+		{"proxies", "region_override", "TEXT DEFAULT ''"},
+		{"proxies", "city_override", "TEXT DEFAULT ''"},
 		{"proxies", "test_latency_ms", "INTEGER DEFAULT 0"},
 		{"proxies", "test_status", "TEXT NOT NULL DEFAULT 'untested'"},
 	}

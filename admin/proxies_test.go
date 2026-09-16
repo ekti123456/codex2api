@@ -511,11 +511,11 @@ func TestProbeProxyFallsBackToIPv6Echo(t *testing.T) {
 	oldEcho := proxyProbeIPv6EchoURLsFn
 	oldGeo := proxyProbeLookupGeoFn
 	proxyProbeIPv6EchoURLsFn = func() []string { return []string{echoURL} }
-	proxyProbeLookupGeoFn = func(_ context.Context, ip, lang string) (string, string, string, string, string) {
-		if ip != "2605:1234:5678::1" || lang != "zh-CN" {
+	proxyProbeLookupGeoFn = func(_ context.Context, ip, lang string) (string, string, string, string, string, string) {
+		if ip != "2605:1234:5678::1" || lang != "en" {
 			t.Fatalf("geo lookup ip=%q lang=%q", ip, lang)
 		}
-		return "美国", "新泽西", "纽瓦克", "Example ISP", "America/New_York"
+		return "美国", "新泽西", "纽瓦克", "Example ISP", "America/New_York", "US"
 	}
 	t.Cleanup(func() {
 		proxyProbeIPv6EchoURLsFn = oldEcho
@@ -586,11 +586,11 @@ func TestParseProxyProbeExitIP(t *testing.T) {
 }
 
 func TestParseProxyProbeGeoFields(t *testing.T) {
-	country, region, city, isp, zone := parseIPAPIGeoFields(gjson.Parse(`{"country":"美国","regionName":"加州","city":"洛杉矶","isp":"Example","timezone":"America/Los_Angeles"}`))
+	country, region, city, isp, zone, _ := parseIPAPIGeoFields(gjson.Parse(`{"country":"美国","regionName":"加州","city":"洛杉矶","isp":"Example","timezone":"America/Los_Angeles"}`))
 	if country != "美国" || region != "加州" || city != "洛杉矶" || isp != "Example" || zone != "America/Los_Angeles" {
 		t.Fatalf("ip-api geo = %q %q %q %q", country, region, city, isp)
 	}
-	country, region, city, isp, zone = parseIPWhoisGeoFields(gjson.Parse(`{"country":"United States","region":"New Jersey","city":"Newark","connection":{"isp":"Example ISP"},"timezone":{"id":"America/New_York"}}`))
+	country, region, city, isp, zone, _ = parseIPWhoisGeoFields(gjson.Parse(`{"country":"United States","region":"New Jersey","city":"Newark","connection":{"isp":"Example ISP"},"timezone":{"id":"America/New_York"}}`))
 	if country != "United States" || region != "New Jersey" || city != "Newark" || isp != "Example ISP" || zone != "America/New_York" {
 		t.Fatalf("ipwhois geo = %q %q %q %q", country, region, city, isp)
 	}

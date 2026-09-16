@@ -1656,7 +1656,7 @@ export const api = {
     request<{ message: string; inserted: number; total: number }>('/proxies', { method: 'POST', body: JSON.stringify(data) }),
   deleteProxy: (id: number) =>
     request<MessageResponse>(`/proxies/${id}`, { method: 'DELETE' }),
-  updateProxy: (id: number, data: { url?: string; label?: string; enabled?: boolean; timezone_override?: string }) =>
+  updateProxy: (id: number, data: { url?: string; label?: string; enabled?: boolean; timezone_override?: string; country_code_override?: string; region_override?: string; city_override?: string }) =>
     request<MessageResponse>(`/proxies/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   batchDeleteProxies: (ids: number[]) =>
     request<{ message: string; deleted: number }>('/proxies/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
@@ -1705,6 +1705,12 @@ export interface ProxyRow {
   test_location: string
   test_timezone: string
   timezone_override: string
+  test_country_code: string
+  test_region: string
+  test_city: string
+  country_code_override: string
+  region_override: string
+  city_override: string
   test_latency_ms: number
   test_status: 'untested' | 'success' | 'error'
   risk_score?: ProxyRiskScoreSnapshot | null
@@ -1725,6 +1731,7 @@ export interface ProxyTestResult {
   success: boolean
   conclusive?: boolean
   ip?: string
+  country_code?: string
   country?: string
   region?: string
   city?: string

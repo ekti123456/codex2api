@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/database"
 	"github.com/codex2api/internal/timezone"
 	"github.com/codex2api/proxy"
 	"github.com/gorilla/websocket"
@@ -75,11 +76,18 @@ func TestWebsocketEnvironmentUsesCurrentFrameAndActualConnectionProxy(test *test
 			}
 			return location
 		}, reference)
+		ctx = proxy.WithCodexWebSearchLocation(ctx, true, func(actualProxy string) database.ProxyLocation {
+			if actualProxy != wrapped.proxyURL {
+				test.Errorf("search location used wrong proxy: %s", actualProxy)
+			}
+			return database.ProxyLocation{Country: "US", City: fmt.Sprintf("city-%d", turn), Timezone: zone}
+		})
 		text := "<environment_context><current_date>2026-09-06</current_date><timezone>Asia/Shanghai</timezone></environment_context>"
 		if turn == 2 {
 			text = "follow-up without environment"
 		}
 		payload := map[string]any{"model": "gpt-6-astra", "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": text}}}}}
+		payload["tools"] = []any{map[string]any{"type": "web_search"}}
 		selectedProxy := account.ProxyURL
 		if turn > 0 {
 			payload["previous_response_id"] = fmt.Sprintf("resp_env_%d", turn-1)
@@ -98,6 +106,9 @@ func TestWebsocketEnvironmentUsesCurrentFrameAndActualConnectionProxy(test *test
 		response.Close()
 		select {
 		case actual := <-received:
+			if gjson.GetBytes(actual, "tools.0.user_location.city").String() != fmt.Sprintf("city-%d", turn) || gjson.GetBytes(actual, "tools.0.user_location.timezone").String() != zone {
+				test.Fatalf("search location not updated on frame %d: %s", turn, actual)
+			}
 			expected := text
 			if turn < 2 {
 				expected = strings.ReplaceAll(strings.ReplaceAll(text, "Asia/Shanghai", zone), "2026-09-06", reference.In(location).Format(time.DateOnly))

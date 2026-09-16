@@ -284,7 +284,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 			observeTelemetry(nil, resultErr)
 		}
 	}()
-	sendErr := e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
+	sendErr := e.sendRequest(wc, proxy.ApplyCodexOutboundLocation(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
 	for retries := 0; !connectionLocal && shouldRetryWebsocketSendError(sendErr) && retries < 2; retries++ {
 		wc.session.RemovePendingRequest(pr.RequestID)
 		e.manager.DiscardConnection(wc)
@@ -315,7 +315,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 			wc.session.RemovePendingRequest(pr.RequestID)
 			return nil, err
 		}
-		sendErr = e.sendRequest(wc, proxy.ApplyCodexEnvironment(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
+		sendErr = e.sendRequest(wc, proxy.ApplyCodexOutboundLocation(ctx, wsBody, wc.proxyURL), pr.RequestID, observer)
 	}
 	if sendErr != nil {
 		observer.Failure("transport", "ws_write", 0)

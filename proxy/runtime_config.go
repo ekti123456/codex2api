@@ -111,6 +111,7 @@ type RuntimeSettings struct {
 	CodexCapacityRetryEnabled         bool
 	CodexSessionFailoverEnabled       bool
 	CodexSessionFailoverPreserveInput bool
+	CodexWebSearchProxyLocation       bool
 	CodexOverloadThresholdPercent     int // 触发比例（%），默认 20
 	CodexOverloadPauseMinutes         int // 暂停时长（分钟），默认 30
 	CodexOverloadWindowMinutes        int // 统计窗口（分钟），默认 5
@@ -182,6 +183,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		CodexTelemetryEnabled:             false,
 		CodexSessionFailoverEnabled:       false,
 		CodexSessionFailoverPreserveInput: false,
+		CodexWebSearchProxyLocation:       false,
 		StreamFlushPolicy:                 defaultStreamFlushPolicy,
 		StreamFlushIntervalMS:             defaultStreamFlushIntervalMS,
 		FirstTokenMode:                    defaultFirstTokenMode,
@@ -387,6 +389,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexCapacityRetryEnabled = settings.CodexCapacityRetryEnabled
 		next.CodexSessionFailoverEnabled = settings.CodexSessionFailoverEnabled
 		next.CodexSessionFailoverPreserveInput = settings.CodexSessionFailoverPreserveInput
+		next.CodexWebSearchProxyLocation = settings.CodexWebSearchProxyLocation
 		next.CodexOverloadThresholdPercent = settings.CodexOverloadThresholdPercent
 		next.CodexOverloadPauseMinutes = settings.CodexOverloadPauseMinutes
 		next.CodexOverloadWindowMinutes = settings.CodexOverloadWindowMinutes

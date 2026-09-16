@@ -463,6 +463,9 @@ export default function Proxies() {
   const [editUrl, setEditUrl] = useState("");
   const [editLabel, setEditLabel] = useState("");
   const [editTimezone, setEditTimezone] = useState("");
+  const [editCountryCode, setEditCountryCode] = useState("");
+  const [editRegion, setEditRegion] = useState("");
+  const [editCity, setEditCity] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
 
@@ -967,6 +970,9 @@ export default function Proxies() {
     setEditUrl(p.url);
     setEditLabel(p.label || "");
     setEditTimezone(p.timezone_override || "");
+    setEditCountryCode(p.country_code_override || "");
+    setEditRegion(p.region_override || "");
+    setEditCity(p.city_override || "");
     setEditError("");
   };
 
@@ -984,6 +990,9 @@ export default function Proxies() {
         url: trimmedUrl,
         label: editLabel.trim(),
         timezone_override: editTimezone.trim(),
+        country_code_override: editCountryCode.trim(),
+        region_override: editRegion.trim(),
+        city_override: editCity.trim(),
       });
       setEditingProxy(null);
       await reload();
@@ -2141,6 +2150,27 @@ export default function Proxies() {
               placeholder={t("proxies.labelPlaceholder")}
             />
           </label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold text-muted-foreground">{t("proxies.locationCountryCode")}</span>
+              <Input value={editCountryCode} onChange={(event) => setEditCountryCode(event.target.value)}
+                placeholder={editingProxy?.test_country_code || t("proxies.locationUnknown")} maxLength={2} />
+              <p className="text-[11px] text-muted-foreground">{t("proxies.locationDetected")}: {editingProxy?.test_country_code || t("proxies.locationUnknown")}</p>
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold text-muted-foreground">{t("proxies.locationRegion")}</span>
+              <Input value={editRegion} onChange={(event) => setEditRegion(event.target.value)}
+                placeholder={editingProxy?.test_region || t("proxies.locationUnknown")} maxLength={128} />
+              <p className="text-[11px] text-muted-foreground">{t("proxies.locationDetected")}: {editingProxy?.test_region || t("proxies.locationUnknown")}</p>
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold text-muted-foreground">{t("proxies.locationCity")}</span>
+              <Input value={editCity} onChange={(event) => setEditCity(event.target.value)}
+                placeholder={editingProxy?.test_city || t("proxies.locationUnknown")} maxLength={128} />
+              <p className="text-[11px] text-muted-foreground">{t("proxies.locationDetected")}: {editingProxy?.test_city || t("proxies.locationUnknown")}</p>
+            </label>
+          </div>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">{t("proxies.locationHint")}</p>
           <label className="block space-y-1.5">
             <span className="text-xs font-semibold text-muted-foreground">
               {t("proxies.timezoneOverride")}

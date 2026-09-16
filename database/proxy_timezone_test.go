@@ -21,7 +21,7 @@ func TestSQLiteProxyTimezoneMigration(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	for _, column := range []string{"test_timezone", "timezone_override"} {
+	for _, column := range []string{"test_timezone", "timezone_override", "test_country_code", "test_region", "test_city", "country_code_override", "region_override", "city_override"} {
 		if _, err := db.conn.ExecContext(ctx, "ALTER TABLE proxies DROP COLUMN "+column); err != nil {
 			test.Fatal(err)
 		}
@@ -59,7 +59,9 @@ func TestProxyTimezonePersistencePostgres(test *testing.T) {
 		label VARCHAR(255) DEFAULT '', enabled BOOLEAN DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT NOW(),
 		test_ip VARCHAR(100) DEFAULT '', test_location VARCHAR(255) DEFAULT '', test_latency_ms INT DEFAULT 0,
 		test_status VARCHAR(20) NOT NULL DEFAULT 'untested', test_timezone VARCHAR(100) DEFAULT '',
-		timezone_override VARCHAR(100) DEFAULT ''
+		timezone_override VARCHAR(100) DEFAULT '',
+        test_country_code VARCHAR(128) DEFAULT '', test_region VARCHAR(128) DEFAULT '', test_city VARCHAR(128) DEFAULT '',
+        country_code_override VARCHAR(128) DEFAULT '', region_override VARCHAR(128) DEFAULT '', city_override VARCHAR(128) DEFAULT ''
 	)`); err != nil {
 		test.Fatal(err)
 	}

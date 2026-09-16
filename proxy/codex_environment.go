@@ -36,7 +36,9 @@ func WithCodexEnvironment(ctx context.Context, resolve func(string) *time.Locati
 func (handler *Handler) bindCodexEnvironment(request *gin.Context, body []byte, received time.Time) {
 	headers := CodexRequestMetadataHeaders(request.Request.Header, body)
 	reference := codexEnvironmentReference(headers, received)
-	request.Request = request.Request.WithContext(WithCodexEnvironment(request.Request.Context(), handler.store.ProxyTimezone, reference))
+	ctx := WithCodexEnvironment(request.Request.Context(), handler.store.ProxyTimezone, reference)
+	ctx = WithCodexWebSearchLocation(ctx, CurrentRuntimeSettings().CodexWebSearchProxyLocation, handler.store.ProxyLocation)
+	request.Request = request.Request.WithContext(ctx)
 }
 
 func codexEnvironmentReference(headers http.Header, received time.Time) time.Time {

@@ -86,6 +86,20 @@ test("proxy batch SSE lines decode progress events", () => {
   assert.equal(parseProxyBatchTestSSELine("data: not-json"), null);
 });
 
+test("proxy geography keeps manual edits and tracks changed exits", () => {
+  const proxy = { ...healthyProxy, test_country_code: 'US', test_region: 'Ohio', test_city: 'Piketon', city_override: 'Columbus' };
+  for (const [result, expected] of [
+    [{ success: true, ip: '1.2.3.4', city: 'Dayton' }, 'Dayton'],
+    [{ success: true, ip: '1.2.3.4' }, 'Piketon'],
+    [{ success: false, conclusive: true }, 'Piketon'],
+    [{ success: true, ip: '5.6.7.8', country_code: 'JP' }, ''],
+  ]) {
+    const updated = applyProxyTestResult(proxy, result);
+    assert.equal(updated.test_city, expected);
+    assert.equal(updated.city_override, 'Columbus');
+  }
+});
+
 test("proxy batch SSE reader preserves events split across chunks", async () => {
   const encoder = new TextEncoder();
   const response = new Response(
