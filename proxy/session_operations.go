@@ -130,7 +130,7 @@ func (handler *Handler) sessionBlacklistError(ctx *gin.Context) *api.APIError {
 		return nil
 	}
 	ctx.Header("X-Should-Retry", "false")
-	result := api.NewAPIError("session_blacklisted", "当前会话或其父会话已被管理员加入黑名单，长期禁止继续请求及派生会话调用，请联系管理员解锁。", api.ErrorTypeInvalidRequest)
+	result := api.NewAPIError("session_blacklisted", "会话因为持续过载临时暂停调用，请联系管理员恢复。", api.ErrorTypeInvalidRequest)
 	result.Details = gin.H{"retry": "stop", "inherited": lockedBy != identity.Key}
 	return result
 }
