@@ -7,6 +7,7 @@ import (
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 type sessionOutboundEpochContextKey struct{}
@@ -19,6 +20,7 @@ type sessionOutboundEpoch struct {
 	owner           string
 	upstreamAccount string
 	diagnostic      *sessionAccountFailoverDiagnostic
+	preservedInput  []byte
 }
 
 func outboundEpochFromContext(ctx context.Context) *sessionOutboundEpoch {
@@ -51,6 +53,16 @@ func (handler *Handler) attachSessionOutboundEpoch(request *gin.Context, key str
 				state.AccountFailover = &sessionAccountFailoverDiagnostic{Result: "restored", Phase: "after_switch", Reason: record.LastFailoverReason, PreviousAccountID: record.PreviousAccountID, AccountID: record.AccountID, Generation: record.FailoverCount}
 			}
 			epoch.diagnostic = state.AccountFailover
+		}
+	}
+	if record.PreserveRestartInput {
+		if raw, exists := request.Get(preservedInputSnapshotKey); exists {
+			if body, ok := raw.([]byte); ok {
+				epoch.preservedInput = []byte(gjson.GetBytes(body, "input").Raw)
+			}
+		}
+		if plan, _ := request.Request.Context().Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan); len(epoch.preservedInput) == 0 && plan != nil && plan.PreserveInput {
+			epoch.preservedInput = []byte(gjson.GetBytes(plan.Body, "input").Raw)
 		}
 	}
 	request.Request = request.Request.WithContext(context.WithValue(request.Request.Context(), sessionOutboundEpochContextKey{}, epoch))

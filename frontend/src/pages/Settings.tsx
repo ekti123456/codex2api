@@ -2154,6 +2154,7 @@ export default function Settings() {
       codex_images_main_model: cacheNormalized.codex_images_main_model ?? '',
       codex_telemetry_enabled: cacheNormalized.codex_telemetry_enabled ?? false,
       codex_session_failover_enabled: cacheNormalized.codex_session_failover_enabled ?? false,
+      codex_session_failover_preserve_input: cacheNormalized.codex_session_failover_preserve_input ?? false,
       codex_ws_context_takeover: cacheNormalized.codex_ws_context_takeover ?? false,
       codex_ws_compression_level: cacheNormalized.codex_ws_compression_level ?? 1,
       codex_ws_disable_fragmentation: cacheNormalized.codex_ws_disable_fragmentation ?? false,
@@ -2228,6 +2229,7 @@ export default function Settings() {
     codex_overload_pause_enabled: false,
     codex_capacity_retry_enabled: false,
     codex_session_failover_enabled: false,
+    codex_session_failover_preserve_input: false,
     codex_overload_threshold_percent: 20,
     codex_overload_pause_minutes: 30,
     codex_overload_window_minutes: 5,
@@ -3471,6 +3473,17 @@ export default function Settings() {
                     <Switch
                       checked={settingsForm.codex_session_failover_enabled}
                       onCheckedChange={(checked) => autoSaveBooleanField('codex_session_failover_enabled', checked)}
+                    />
+                  </SettingField>
+                  <SettingField
+                    label={t('settings.codexSessionFailoverPreserveInput')}
+                    description={t('settings.codexSessionFailoverPreserveInputHint')}
+                    layout="switch"
+                    channels={CHANNELS_CODEX_ONLY}
+                  >
+                    <Switch
+                      checked={settingsForm.codex_session_failover_preserve_input}
+                      onCheckedChange={(checked) => autoSaveBooleanField('codex_session_failover_preserve_input', checked)}
                     />
                   </SettingField>
                   <div className={SETTINGS_FIELD_GRID_3}>

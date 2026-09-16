@@ -29,7 +29,8 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 	}
 }
 
-func runWebsocketToolFailover(test *testing.T, native bool) {
+func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
+	keepInput := len(preserve) > 0 && preserve[0]
 	oldRuntime, oldResin, oldExecutor := proxy.CurrentRuntimeSettings(), proxy.GetResinConfig(), proxy.WebsocketExecuteFunc
 	test.Cleanup(func() {
 		proxy.ApplyRuntimeSettings(oldRuntime)
@@ -39,6 +40,7 @@ func runWebsocketToolFailover(test *testing.T, native bool) {
 	test.Setenv("CODEX_REQUEST_COMPRESSION", "off")
 	settings := proxy.DefaultRuntimeSettings()
 	settings.CodexSessionFailoverEnabled, settings.CodexForceWebsocket = true, true
+	settings.CodexSessionFailoverPreserveInput = keepInput
 	proxy.ApplyRuntimeSettings(settings)
 	dbPath := filepath.Join(test.TempDir(), "epoch.db")
 	db, err := database.New("sqlite", dbPath)
@@ -170,7 +172,10 @@ func runWebsocketToolFailover(test *testing.T, native bool) {
 		case sent := <-seen:
 			captures = append(captures, sent)
 			assertSessionWireTools(test, sent.body)
-			if number == 2 || number == 4 {
+			if keepInput && number >= 2 {
+				require.JSONEq(test, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(sent.body, "input").Raw)
+			}
+			if !keepInput && (number == 2 || number == 4) {
 				require.NotContains(test, string(sent.body), "gAAAAepoch-state-")
 				require.NotContains(test, string(sent.body), "gAAAAold-compaction")
 				require.NotContains(test, string(sent.body), "old-file")
@@ -205,4 +210,10 @@ func runWebsocketToolFailover(test *testing.T, native bool) {
 	require.Equal(test, mappedTurns[2], mappedTurns[3])
 	require.NotEqual(test, mappedTurns[0], mappedTurns[2])
 	require.NotEqual(test, mappedTurns[0], mappedTurns[4])
+}
+
+func TestSessionPreserveInputWebsocketIngress(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native=%v", native), func(t *testing.T) { runWebsocketToolFailover(t, native, true) })
+	}
 }

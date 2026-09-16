@@ -27,6 +27,7 @@ type SessionAccountFailover struct {
 	WindowNumber            uint64
 	WindowContextID         string
 	LossyContextRestart     bool
+	PreserveRestartInput    bool
 }
 
 func (db *DB) SwitchSessionContinuityAccount(ctx context.Context, input SessionAccountFailover) (SessionContinuityRecord, *UserWindowGrant, error) {
@@ -102,6 +103,7 @@ func (db *DB) SwitchSessionContinuityAccount(ctx context.Context, input SessionA
 		record.OutboundWindows = nil
 		record.OutboundWindowMode = ""
 		record.LossyContextRestart = input.LossyContextRestart
+		record.PreserveRestartInput = input.PreserveRestartInput
 		if input.ResetOutboundWindow {
 			record.OutboundWindowBases = map[string]uint64{input.WindowThreadID: input.WindowNumber}
 			record.OutboundWindowMode = "context-v1"

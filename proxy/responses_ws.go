@@ -337,6 +337,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	defer func() { c.Request = quotaParentRequest }()
 	c.Set(promptGuardPolicyEventIDContextKey, policyEventID)
 	rawBody, model, apiErr := normalizeResponsesWebSocketClientPayload(rawPayload)
+	c.Set(preservedInputSnapshotKey, rawBody)
 	if apiErr != nil {
 		_ = writeAuditedResponsesWSError(c, conn, apiErr)
 		return newResponsesWSCloseError(websocket.ClosePolicyViolation, apiErr.Message, apiErr)
@@ -612,7 +613,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	// 钉死只约束「别换号」，不该把 previous_response_not_found 原样甩给
 	// Codex CLI（它几乎每轮都带回 x-codex-turn-state，#541）。
 	canDegradeContinuation := func() bool {
-		return hasPreviousResponse && !continuationDegraded
+		return !PreserveSessionInput(c.Request.Context()) && hasPreviousResponse && !continuationDegraded
 	}
 	var wsHTTPFallback websocketHTTPFallbackState
 	var lastUpstreamCancel context.CancelFunc
@@ -925,7 +926,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 				return errResponsesWSClientGone
 			}
 
-			if !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
+			if !PreserveSessionInput(c.Request.Context()) && !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
 				strippedRawBody, rawChanged := stripInvalidEncryptedContentFromResponsesBody(rawBody)
 				strippedCodexBody, codexChanged := stripInvalidEncryptedContentFromResponsesBody(codexBody)
 				if rawChanged || codexChanged {

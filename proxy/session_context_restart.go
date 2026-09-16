@@ -14,8 +14,12 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func cleanSessionRestartContext(headers http.Header, body []byte, known sessionContextTokenVerifier) ([]byte, http.Header, *database.SessionContextCleanup, error) {
+func cleanSessionRestartContext(headers http.Header, body []byte, known sessionContextTokenVerifier, preserveInput ...bool) ([]byte, http.Header, *database.SessionContextCleanup, error) {
 	report := &database.SessionContextCleanup{Mode: "lossy_restart", Phase: "prepared", Removed: make(map[string]int)}
+	preserve := len(preserveInput) > 0 && preserveInput[0]
+	if preserve {
+		report.Mode = "preserve_input"
+	}
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
 		return nil, nil, report, codexAccountIdentityError("换号重开无法解析请求正文。")
@@ -34,6 +38,9 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 		currentPath, currentType = field, ""
 		value := gjson.ParseBytes(payload[field])
 		if value.Exists() && value.Type != gjson.Null && value.String() != "" && !allowed(field, value.String()) {
+			if preserve {
+				return nil, nil, report, &Error{Code: "codex_session_failover_context_required", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: "完整保留 input 模式无法跨账号复用 " + field + "，请让客户端提供完整历史并移除此续写引用后重试。"}
+			}
 			delete(payload, field)
 			remove(field)
 		}
@@ -52,6 +59,9 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 			currentPath, currentType = "client_metadata.x-codex-turn-state", ""
 			remove("turn_state")
 		}
+	}
+	if preserve {
+		return preserveSessionRestartInput(payload, headers, body, report)
 	}
 	var scrub func(gjson.Result, int, string) (json.RawMessage, bool)
 	scrub = func(value gjson.Result, depth int, path string) (json.RawMessage, bool) {
@@ -199,7 +209,7 @@ func PrepareSessionRestartOutbound(ctx context.Context, account *auth.Account, b
 	}
 	known, cancel := epoch.restartContextVerifier(ctx)
 	defer cancel()
-	cleaned, outgoingHeaders, report, err := cleanSessionRestartContext(headers, body, known)
+	cleaned, outgoingHeaders, report, err := cleanSessionRestartContext(headers, body, known, epoch.record.PreserveRestartInput)
 	if epoch.diagnostic != nil {
 		report.Phase = "outbound"
 		report.Pass, report.DetailsPass = 1, 1
@@ -234,7 +244,7 @@ func sessionRestartRoutingContext(request *gin.Context, body []byte) ([]byte, ht
 		known, cancel = epoch.restartContextVerifier(request.Request.Context())
 		defer cancel()
 	}
-	cleaned, headers, _, err := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, known)
+	cleaned, headers, _, err := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, known, PreserveSessionInput(request.Request.Context()))
 	if err != nil {
 		return body, sessionFailoverRequestHeaders(request)
 	}

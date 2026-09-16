@@ -117,6 +117,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	}
 	observer := proxy.UpstreamTransportObserver(ctx)
 	observer.Continuation("new_chain", "not_required")
+	ctx, requestBody = proxy.PreparePreservedInputTransport(ctx, requestBody)
 	requestBody, ginHeaders, resultErr = proxy.PrepareSessionRestartOutbound(ctx, account, requestBody, ginHeaders)
 	if resultErr != nil {
 		return nil, resultErr
@@ -261,7 +262,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// 发送请求，失败时最多重试 2 次（重建连接）。
 	// 用 DiscardConnection 按连接指针精确清理：续链亲和取回的连接其 PoolKey
 	// 可能与当前请求的 proxy 组合不同，按参数重算 key 会漏删。
-	if err := proxy.ValidateBackgroundAccountMatch(ctx, account); err != nil {
+	if err := proxy.ValidateSessionOutboundRequest(ctx, account, wsBody); err != nil {
 		observer.Failure("gateway", "identity_validation", 0)
 		if !wc.cancelUnsentReadLease(pr.RequestID) {
 			e.manager.DiscardConnection(wc)
@@ -306,7 +307,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		if wc.upstreamUserAgentKnown {
 			proxy.RecordUpstreamUserAgent(ctx, wc.upstreamUserAgent)
 		}
-		if err := proxy.ValidateBackgroundAccountMatch(ctx, account); err != nil {
+		if err := proxy.ValidateSessionOutboundRequest(ctx, account, wsBody); err != nil {
 			observer.Failure("gateway", "identity_validation", 0)
 			if !wc.cancelUnsentReadLease(pr.RequestID) {
 				e.manager.DiscardConnection(wc)

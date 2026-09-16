@@ -2053,6 +2053,7 @@ export interface SystemSettings {
   codex_overload_pause_enabled: boolean
   codex_capacity_retry_enabled: boolean
   codex_session_failover_enabled: boolean
+  codex_session_failover_preserve_input: boolean
   codex_overload_threshold_percent: number
   codex_overload_pause_minutes: number
   codex_overload_window_minutes: number

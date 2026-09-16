@@ -51,7 +51,7 @@ func codexEnvironmentReference(headers http.Header, received time.Time) time.Tim
 }
 
 func ApplyCodexEnvironment(ctx context.Context, body []byte, proxyURL string) []byte {
-	if ctx == nil || IsResinEnabled() {
+	if ctx == nil || IsResinEnabled() || PreserveSessionInput(ctx) {
 		return body
 	}
 	state, _ := ctx.Value(codexEnvironmentContextKey{}).(*codexEnvironmentContext)

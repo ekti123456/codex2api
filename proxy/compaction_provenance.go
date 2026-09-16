@@ -235,6 +235,11 @@ func (h *Handler) recordCompactionProvenanceFromPayload(ctx context.Context, acc
 }
 
 func (h *Handler) resolveCompactionAffinity(ctx context.Context, body []byte) (compactionAffinityResolution, error) {
+	// The committed root/segment still owns dispatch. In full-input replay,
+	// old ciphertext must not steer a migrated request back to its old account.
+	if PreserveSessionInput(ctx) {
+		return compactionAffinityResolution{}, nil
+	}
 	if h == nil || h.cache == nil {
 		return compactionAffinityResolution{}, nil
 	}

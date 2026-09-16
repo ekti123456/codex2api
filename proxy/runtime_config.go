@@ -107,12 +107,13 @@ type RuntimeSettings struct {
 	GithubProxyURL string
 	// Codex 过载熔断：单账号滑动窗口内 server_is_overloaded 错误占比达到阈值且样本数
 	// 足够时，自动暂停该账号调度一段时间（默认关闭）。
-	CodexOverloadPauseEnabled     bool
-	CodexCapacityRetryEnabled     bool
-	CodexSessionFailoverEnabled   bool
-	CodexOverloadThresholdPercent int // 触发比例（%），默认 20
-	CodexOverloadPauseMinutes     int // 暂停时长（分钟），默认 30
-	CodexOverloadWindowMinutes    int // 统计窗口（分钟），默认 5
+	CodexOverloadPauseEnabled         bool
+	CodexCapacityRetryEnabled         bool
+	CodexSessionFailoverEnabled       bool
+	CodexSessionFailoverPreserveInput bool
+	CodexOverloadThresholdPercent     int // 触发比例（%），默认 20
+	CodexOverloadPauseMinutes         int // 暂停时长（分钟），默认 30
+	CodexOverloadWindowMinutes        int // 统计窗口（分钟），默认 5
 	// OverflowAutoCompact 上下文超窗时自动摘要旧轮次并重试一次（实验性，默认 false，issue #415）。
 	// 全局开关与 per-key limits.auto_compact_overflow 为「或」关系。
 	OverflowAutoCompact bool
@@ -175,38 +176,39 @@ func init() {
 
 func DefaultRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{
-		ClientCompatMode:                 defaultClientCompatMode,
-		CodexMinCLIVersion:               defaultCodexMinCLIVersion,
-		CodexUserAgentConfig:             DefaultCodexUserAgentConfigJSON(),
-		CodexTelemetryEnabled:            false,
-		CodexSessionFailoverEnabled:      false,
-		StreamFlushPolicy:                defaultStreamFlushPolicy,
-		StreamFlushIntervalMS:            defaultStreamFlushIntervalMS,
-		FirstTokenMode:                   defaultFirstTokenMode,
-		FirstTokenTimeoutSec:             defaultFirstTokenTimeoutSec,
-		BillingTierPolicy:                defaultBillingTierPolicy,
-		ModelsListReadMaxBytes:           database.DefaultModelsListReadMaxBytes,
-		CodexRequestCompression:          defaultCodexRequestCompression,
-		CodexWSContextTakeover:           false,
-		CodexWSCompressionLevel:          1,
-		CodexWSDisableFragmentation:      false,
-		CodexWSHideErrors:                defaultCodexWSHideErrors,
-		CodexWSSilentRetry:               defaultCodexWSSilentRetry,
-		CodexWSSilentRetries:             defaultCodexWSSilentRetries,
-		ContinuousRetryPolicy:            database.DefaultContinuousRetryPolicy(),
-		CodexWSSizeRouter:                defaultCodexWSSizeRouter,
-		CodexWSBusyMaxWaitSec:            defaultCodexWSBusyMaxWaitSec,
-		CodexWSBusyPatienceSec:           defaultCodexWSBusyPatienceSec,
-		CodexWSStatelessSlots:            defaultCodexWSStatelessSlots,
-		CodexOverloadThresholdPercent:    database.NormalizeCodexOverloadThresholdPercent(0),
-		CodexOverloadPauseMinutes:        database.NormalizeCodexOverloadPauseMinutes(0),
-		CodexOverloadWindowMinutes:       database.NormalizeCodexOverloadWindowMinutes(0),
-		CodexContinueMaxRounds:           defaultCodexContinueMaxRounds,
-		RequestIsolationMode:             defaultRequestIsolationMode(),
-		CodexCLIVersionSyncEnabled:       true,
-		CodexCLIVersionSyncIntervalHours: 12,
-		AutoResetCreditsBeforeExpiryMin:  60,
-		UTLSShutdownTimeoutMin:           database.NormalizeUTLSShutdownTimeoutMinutes(0),
+		ClientCompatMode:                  defaultClientCompatMode,
+		CodexMinCLIVersion:                defaultCodexMinCLIVersion,
+		CodexUserAgentConfig:              DefaultCodexUserAgentConfigJSON(),
+		CodexTelemetryEnabled:             false,
+		CodexSessionFailoverEnabled:       false,
+		CodexSessionFailoverPreserveInput: false,
+		StreamFlushPolicy:                 defaultStreamFlushPolicy,
+		StreamFlushIntervalMS:             defaultStreamFlushIntervalMS,
+		FirstTokenMode:                    defaultFirstTokenMode,
+		FirstTokenTimeoutSec:              defaultFirstTokenTimeoutSec,
+		BillingTierPolicy:                 defaultBillingTierPolicy,
+		ModelsListReadMaxBytes:            database.DefaultModelsListReadMaxBytes,
+		CodexRequestCompression:           defaultCodexRequestCompression,
+		CodexWSContextTakeover:            false,
+		CodexWSCompressionLevel:           1,
+		CodexWSDisableFragmentation:       false,
+		CodexWSHideErrors:                 defaultCodexWSHideErrors,
+		CodexWSSilentRetry:                defaultCodexWSSilentRetry,
+		CodexWSSilentRetries:              defaultCodexWSSilentRetries,
+		ContinuousRetryPolicy:             database.DefaultContinuousRetryPolicy(),
+		CodexWSSizeRouter:                 defaultCodexWSSizeRouter,
+		CodexWSBusyMaxWaitSec:             defaultCodexWSBusyMaxWaitSec,
+		CodexWSBusyPatienceSec:            defaultCodexWSBusyPatienceSec,
+		CodexWSStatelessSlots:             defaultCodexWSStatelessSlots,
+		CodexOverloadThresholdPercent:     database.NormalizeCodexOverloadThresholdPercent(0),
+		CodexOverloadPauseMinutes:         database.NormalizeCodexOverloadPauseMinutes(0),
+		CodexOverloadWindowMinutes:        database.NormalizeCodexOverloadWindowMinutes(0),
+		CodexContinueMaxRounds:            defaultCodexContinueMaxRounds,
+		RequestIsolationMode:              defaultRequestIsolationMode(),
+		CodexCLIVersionSyncEnabled:        true,
+		CodexCLIVersionSyncIntervalHours:  12,
+		AutoResetCreditsBeforeExpiryMin:   60,
+		UTLSShutdownTimeoutMin:            database.NormalizeUTLSShutdownTimeoutMinutes(0),
 	}
 }
 
@@ -384,6 +386,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexOverloadPauseEnabled = settings.CodexOverloadPauseEnabled
 		next.CodexCapacityRetryEnabled = settings.CodexCapacityRetryEnabled
 		next.CodexSessionFailoverEnabled = settings.CodexSessionFailoverEnabled
+		next.CodexSessionFailoverPreserveInput = settings.CodexSessionFailoverPreserveInput
 		next.CodexOverloadThresholdPercent = settings.CodexOverloadThresholdPercent
 		next.CodexOverloadPauseMinutes = settings.CodexOverloadPauseMinutes
 		next.CodexOverloadWindowMinutes = settings.CodexOverloadWindowMinutes

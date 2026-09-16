@@ -535,6 +535,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	resetUpstreamUserAgentAudit(ctx)
 	ctx = ensureTransportTrace(ctx)
 	resetWsAcquireAudit(ctx)
+	ctx, requestBody = PreparePreservedInputTransport(ctx, requestBody)
 	var encryptedAttempt *encryptedContentAttempt
 	requestBody, encryptedAttempt = prepareEncryptedContentAttempt(ctx, account, requestBody, sessionID, headers)
 	defer func() { encryptedAttempt.observeResponse(upstreamResponse, requestBody) }()
@@ -731,7 +732,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		}
 		logCodexFingerprintDebug("http", account, proxyURL, req.Header)
 
-		if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
+		if err := ValidateSessionOutboundRequest(ctx, account, requestBody); err != nil {
 			UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
 			return nil, err
 		}
@@ -989,6 +990,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	}
 	resetUpstreamUserAgentAudit(ctx)
 	resetWsAcquireAudit(ctx)
+	ctx, requestBody = PreparePreservedInputTransport(ctx, requestBody)
 	var encryptedAttempt *encryptedContentAttempt
 	requestBody, encryptedAttempt = prepareEncryptedContentAttempt(ctx, account, requestBody, sessionID, headers)
 	defer func() { encryptedAttempt.observeResponse(upstreamResponse, requestBody) }()
@@ -1075,7 +1077,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	}
 	logCodexFingerprintDebug("compact", account, proxyURL, req.Header)
 
-	if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
+	if err := ValidateSessionOutboundRequest(ctx, account, requestBody); err != nil {
 		UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
 		return nil, err
 	}

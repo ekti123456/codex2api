@@ -76,11 +76,12 @@ func sessionFailoverContextError(request *gin.Context, diagnostic *sessionAccoun
 }
 
 type sessionAccountFailoverPlan struct {
-	Request    *gin.Context
-	Key        string
-	Body       []byte
-	Checked    bool
-	Diagnostic *sessionAccountFailoverDiagnostic
+	PreserveInput bool
+	Request       *gin.Context
+	Key           string
+	Body          []byte
+	Checked       bool
+	Diagnostic    *sessionAccountFailoverDiagnostic
 }
 
 func (handler *Handler) validateMigratedSessionContext(request *gin.Context, body []byte, record database.SessionContinuityRecord, rootKeys ...string) *api.APIError {
@@ -91,7 +92,7 @@ func (handler *Handler) validateMigratedSessionContext(request *gin.Context, bod
 		}
 		known, cancel := epoch.restartContextVerifier(request.Request.Context())
 		defer cancel()
-		_, _, report, err := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, known)
+		_, _, report, err := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, known, record.PreserveRestartInput)
 		if err != nil {
 			if failure := sessionToolPreservationAPIError(err, report); failure != nil {
 				return failure
@@ -251,12 +252,18 @@ func (handler *Handler) prepareSessionAccountFailover(request *gin.Context, key 
 	diagnostic := &sessionAccountFailoverDiagnostic{Result: "blocked", Reason: reason, TriggerReason: reason, Phase: "before_switch", PreviousAccountID: owner.ID(), Generation: state.Record.FailoverCount}
 	state.Diagnostic.AccountFailover = diagnostic
 	usageRequestDiagnosticState(request).AccountFailover = diagnostic
-	cleaned, cleanedHeaders, cleanup, cleanupError := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, nil)
+	preserveInput := CurrentRuntimeSettings().CodexSessionFailoverPreserveInput || state.Record.PreserveRestartInput
+	cleaned, cleanedHeaders, cleanup, cleanupError := cleanSessionRestartContext(sessionFailoverRequestHeaders(request), body, nil, preserveInput)
 	diagnostic.ContextCleanup = cleanup
 	if failure := sessionToolPreservationAPIError(cleanupError, cleanup); failure != nil {
 		return false, failure
 	}
 	block, blockers := inspectSessionFailoverContext(cleanedHeaders, cleaned, nil)
+	if preserveInput && cleanupError == nil {
+		// Full replay intentionally retains opaque input; the preserving cleaner
+		// has already rejected unresolved continuation handles and broken tool pairs.
+		block, blockers = "", nil
+	}
 	if cleanupError != nil {
 		block, blockers = "missing_request_context", nil
 	}
@@ -286,7 +293,7 @@ func (handler *Handler) prepareSessionAccountFailover(request *gin.Context, key 
 		return false, requestWindowGrantAPIError(err)
 	}
 	diagnostic.Result = "pending"
-	plan := &sessionAccountFailoverPlan{Request: request, Key: key, Body: body, Diagnostic: diagnostic}
+	plan := &sessionAccountFailoverPlan{Request: request, Key: key, Body: body, Diagnostic: diagnostic, PreserveInput: preserveInput}
 	request.Request = request.Request.WithContext(context.WithValue(request.Request.Context(), sessionAccountFailoverContextKey{}, plan))
 	return true, nil
 }
@@ -388,6 +395,7 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 		input := database.SessionAccountFailover{RootKey: state.Key, AffinityKey: key, ExpectedAccountID: old.ID(), AccountID: candidate.ID(), ExpectedGeneration: entry.Record.FailoverCount, Reason: plan.Diagnostic.Reason, At: time.Now().UTC(), ResetOutboundWindow: true, WindowThreadID: state.ThreadID, WindowNumber: state.Number}
 		input.WindowContextID = fingerprint.accountWindowInputs[state.ThreadID].ContextID
 		input.LossyContextRestart = true
+		input.PreserveRestartInput = plan.PreserveInput
 		grant := windowGrantForRequest(request)
 		if grant != nil {
 			input.WindowSubject = cache.PromptSessionLimitSubject(grant.Platform, grant.UserID)

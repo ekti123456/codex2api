@@ -193,6 +193,9 @@ type encryptedContentAttempt struct {
 }
 
 func prepareEncryptedContentAttempt(ctx context.Context, account *auth.Account, body []byte, session string, headers http.Header) ([]byte, *encryptedContentAttempt) {
+	if PreserveSessionInput(ctx) {
+		return body, nil
+	}
 	if account == nil || !bytes.Contains(body, []byte(`"encrypted_content"`)) {
 		return body, nil
 	}

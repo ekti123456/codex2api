@@ -1916,6 +1916,7 @@ func rawRequestBodyFromContext(c *gin.Context) ([]byte, bool) {
 
 func readRawRequestBody(c *gin.Context) ([]byte, error) {
 	if body, ok := rawRequestBodyFromContext(c); ok {
+		c.Set(preservedInputSnapshotKey, body)
 		return body, nil
 	}
 	body, err := io.ReadAll(c.Request.Body)
@@ -1923,6 +1924,7 @@ func readRawRequestBody(c *gin.Context) ([]byte, error) {
 		return nil, err
 	}
 	setRawRequestBody(c, body)
+	c.Set(preservedInputSnapshotKey, body)
 	return body, nil
 }
 
@@ -4238,7 +4240,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	antigravityRefreshRetried := map[int64]bool{}
 	relayContinuationAttempted := false
 	overflowCompactRetried := false
-	overflowCompactEnabled := autoCompactOverflowEnabled(c)
+	overflowCompactEnabled := !PreserveSessionInput(c.Request.Context()) && autoCompactOverflowEnabled(c)
 
 	// 上游 ctx 生命周期：每次 attempt 开始前用新的 drainable ctx 替换，
 	// defer 兜底确保函数退出时上游被释放。
@@ -4588,7 +4590,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					}
 				}
 
-				if !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
+				if !PreserveSessionInput(c.Request.Context()) && !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
 					strippedRawBody, rawChanged := stripInvalidEncryptedContentFromResponsesBody(rawBody)
 					strippedCodexBody, codexChanged := stripInvalidEncryptedContentFromResponsesBody(codexBody)
 					if rawChanged || codexChanged {
@@ -5373,7 +5375,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 			accountReleasedForOverflow := false
 
-			if !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
+			if !PreserveSessionInput(c.Request.Context()) && !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
 				strippedRawBody, rawChanged := stripInvalidEncryptedContentFromResponsesBody(rawBody)
 				strippedCodexBody, codexChanged := stripInvalidEncryptedContentFromResponsesBody(codexBody)
 				if rawChanged || codexChanged {
@@ -5555,6 +5557,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			var downstreamMu sync.Mutex
 			var pendingFirstTokenEvents bytes.Buffer
 			contEnabled, contMaxRounds := codexContinueThinkingSettings()
+			contEnabled = contEnabled && !PreserveSessionInput(c.Request.Context())
 			// 前置元数据事件立即透传（旧版兼容，issue #425）：每个 attempt 取一次快照，
 			// 热更新对新请求生效，流转发中途不切换缓冲策略。
 			preflightSettings := CurrentRuntimeSettings()
@@ -6594,7 +6597,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 					return
 				}
 
-				if !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
+				if !PreserveSessionInput(c.Request.Context()) && !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
 					strippedRawBody, rawChanged := stripInvalidEncryptedContentFromResponsesBody(rawBody)
 					strippedCodexBody, codexChanged := stripInvalidEncryptedContentFromResponsesBody(codexBody)
 					if rawChanged || codexChanged {
@@ -6862,7 +6865,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				return
 			}
 
-			if !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
+			if !PreserveSessionInput(c.Request.Context()) && !invalidEncryptedContentRetried && isInvalidEncryptedContentError(resp.StatusCode, errBody) {
 				strippedRawBody, rawChanged := stripInvalidEncryptedContentFromResponsesBody(rawBody)
 				strippedCodexBody, codexChanged := stripInvalidEncryptedContentFromResponsesBody(codexBody)
 				if rawChanged || codexChanged {
@@ -7015,7 +7018,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			failStatus := failureOutcome.logStatusCode
 			errBody := responseFailedErrorBody(compactFailedPayload)
 
-			if !invalidEncryptedContentRetried && isInvalidEncryptedContentError(failStatus, errBody) {
+			if !PreserveSessionInput(c.Request.Context()) && !invalidEncryptedContentRetried && isInvalidEncryptedContentError(failStatus, errBody) {
 				strippedRawBody, rawChanged := stripInvalidEncryptedContentFromResponsesBody(rawBody)
 				strippedCodexBody, codexChanged := stripInvalidEncryptedContentFromResponsesBody(codexBody)
 				if rawChanged || codexChanged {

@@ -25,6 +25,9 @@ func sessionModelErrorForRequest(requestContext *gin.Context) *api.APIError {
 }
 
 func (handler *Handler) configureSessionModelAffinity(requestContext *gin.Context, identity requestSessionIdentity, key, originalModel, effectiveModel string, compact bool, bodies ...[]byte) (apiError *api.APIError) {
+	if _, exists := requestContext.Get(preservedInputSnapshotKey); !exists && len(bodies) > 0 {
+		requestContext.Set(preservedInputSnapshotKey, bodies[0])
+	}
 	if apiRelaySessionExempt(requestContext) {
 		handler.seedAPIRelayAffinity(requestContext, identity, key)
 		requestContext.Set(sessionContinuityContextKey, nil)

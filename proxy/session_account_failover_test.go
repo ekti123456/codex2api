@@ -207,8 +207,12 @@ func TestSessionAccountFailoverCompactIngress(test *testing.T) {
 	runSessionAccountFailoverIngress(test, true)
 }
 
-func runSessionAccountFailoverIngress(test *testing.T, compact bool) {
+func runSessionAccountFailoverIngress(test *testing.T, compact bool, preserve ...bool) {
+	keepInput := len(preserve) > 0 && preserve[0]
+	rejectCipher := len(preserve) > 1 && preserve[1]
+	var rejected atomic.Int32
 	handler, owner, target, _ := failoverTestSetup(test, true)
+	UpdateRuntimeSettings(func(s RuntimeSettings) RuntimeSettings { s.CodexSessionFailoverPreserveInput = keepInput; return s })
 	previousResin := GetResinConfig()
 	test.Cleanup(func() { SetResinConfig(previousResin) })
 	test.Setenv("CODEX_REQUEST_COMPRESSION", "off")
@@ -221,12 +225,23 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool) {
 		body, _ := io.ReadAll(request.Body)
 		headers := request.Header.Clone()
 		if request.Header.Get("Chatgpt-Account-Id") == target.AccountID {
-			require.NotContains(test, string(body), "old-restart-")
+			if keepInput {
+				require.Contains(test, string(body), "gAAAAold-restart-compaction")
+			} else {
+				require.NotContains(test, string(body), "old-restart-")
+			}
 			require.Contains(test, string(body), "current plaintext")
 			require.Empty(test, request.Header.Get("X-Codex-Turn-State"))
 		}
 		headers.Set("test-body-session", gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata.session_id").String())
 		seen <- headers
+		if rejectCipher && request.Header.Get("Chatgpt-Account-Id") == target.AccountID {
+			rejected.Add(1)
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":{"code":"invalid_encrypted_content","type":"invalid_request_error","message":"test ciphertext rejected"}}`)
+			return
+		}
 		if strings.HasSuffix(request.URL.Path, "/responses/compact") {
 			writer.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(writer, `{"id":"compact-response","object":"response.compaction","output":[{"type":"compaction","id":"new-compaction","encrypted_content":"new-test-encrypted"}]}`)
@@ -247,7 +262,9 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool) {
 		body, _ = sjson.SetBytes(body, "stream", true)
 		if expected == target {
 			body, _ = sjson.SetRawBytes(body, "input", []byte(`[{"type":"reasoning","encrypted_content":"gAAAAold-restart-reasoning"},{"type":"compaction","encrypted_content":"gAAAAold-restart-compaction"},{"role":"user","content":[{"type":"input_file","file_id":"old-restart-file"},{"type":"input_text","text":"current plaintext"}]}]`))
-			body, _ = sjson.SetBytes(body, "previous_response_id", "old-restart-response")
+			if !keepInput {
+				body, _ = sjson.SetBytes(body, "previous_response_id", "old-restart-response")
+			}
 			body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", "old-restart-turn-state")
 		}
 		path := "/v1/responses"
@@ -269,6 +286,12 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool) {
 			handler.Responses(request)
 		}
 		cancel()
+		if rejectCipher && expected == target {
+			require.Equal(test, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			require.Contains(test, recorder.Body.String(), "invalid_encrypted_content")
+			require.EqualValues(test, 1, rejected.Load())
+			return
+		}
 		require.Equal(test, http.StatusOK, recorder.Code, recorder.Body.String())
 		if expected == target && compact {
 			require.Contains(test, recorder.Body.String(), "new-compaction")
@@ -425,4 +448,16 @@ func TestSessionAccountFailoverFlatWSMetadataNeverInheritsUpgradeSnapshot(test *
 	require.Equal(test, continuityTestThread+":1", metadata.Get("window_id").String())
 	body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", "current-state")
 	require.Equal(test, "current-state", codexWebsocketCurrentFrameHeaders(upgraded, body).Get("X-Codex-Turn-State"))
+}
+
+func TestSessionPreserveInputHTTPAndCompactIngress(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		t.Run(map[bool]string{false: "responses", true: "compact"}[compact], func(t *testing.T) { runSessionAccountFailoverIngress(t, compact, true) })
+	}
+}
+
+func TestSessionPreserveInputDoesNotRetryRejectedCiphertext(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		t.Run(map[bool]string{false: "responses", true: "compact"}[compact], func(t *testing.T) { runSessionAccountFailoverIngress(t, compact, true, true) })
+	}
 }

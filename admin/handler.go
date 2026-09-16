@@ -9245,6 +9245,7 @@ type settingsResponse struct {
 	CodexOverloadPauseEnabled           bool   `json:"codex_overload_pause_enabled"`
 	CodexCapacityRetryEnabled           bool   `json:"codex_capacity_retry_enabled"`
 	CodexSessionFailoverEnabled         bool   `json:"codex_session_failover_enabled"`
+	CodexSessionFailoverPreserveInput   bool   `json:"codex_session_failover_preserve_input"`
 	CodexOverloadThresholdPercent       int    `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           int    `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          int    `json:"codex_overload_window_minutes"`
@@ -9435,6 +9436,7 @@ type updateSettingsReq struct {
 	CodexOverloadPauseEnabled           *bool                            `json:"codex_overload_pause_enabled"`
 	CodexCapacityRetryEnabled           *bool                            `json:"codex_capacity_retry_enabled"`
 	CodexSessionFailoverEnabled         *bool                            `json:"codex_session_failover_enabled"`
+	CodexSessionFailoverPreserveInput   *bool                            `json:"codex_session_failover_preserve_input"`
 	CodexOverloadThresholdPercent       *int                             `json:"codex_overload_threshold_percent"`
 	CodexOverloadPauseMinutes           *int                             `json:"codex_overload_pause_minutes"`
 	CodexOverloadWindowMinutes          *int                             `json:"codex_overload_window_minutes"`
@@ -10272,6 +10274,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		CodexOverloadPauseEnabled:           runtimeCfg.CodexOverloadPauseEnabled,
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
+		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -10769,6 +10772,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	previousAutoResetCreditsEnabled := runtimeCfg.AutoResetCreditsEnabled
 	if existingSettings != nil {
 		runtimeCfg.CodexSessionFailoverEnabled = existingSettings.CodexSessionFailoverEnabled
+		runtimeCfg.CodexSessionFailoverPreserveInput = existingSettings.CodexSessionFailoverPreserveInput
 		runtimeCfg.CodexWSContextTakeover = existingSettings.CodexWSContextTakeover
 		runtimeCfg.CodexWSCompressionLevel = database.NormalizeCodexWSCompressionLevel(existingSettings.CodexWSCompressionLevel)
 		runtimeCfg.CodexWSDisableFragmentation = existingSettings.CodexWSDisableFragmentation
@@ -11104,6 +11108,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if req.CodexCapacityRetryEnabled != nil {
 		runtimeCfg.CodexCapacityRetryEnabled = *req.CodexCapacityRetryEnabled
+	}
+	if req.CodexSessionFailoverPreserveInput != nil {
+		runtimeCfg.CodexSessionFailoverPreserveInput = *req.CodexSessionFailoverPreserveInput
 	}
 	if req.CodexSessionFailoverEnabled != nil {
 		runtimeCfg.CodexSessionFailoverEnabled = *req.CodexSessionFailoverEnabled
@@ -11833,6 +11840,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexOverloadPauseEnabled:           runtimeCfg.CodexOverloadPauseEnabled,
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
+		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
@@ -12165,6 +12173,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexOverloadPauseEnabled:           runtimeCfg.CodexOverloadPauseEnabled,
 		CodexCapacityRetryEnabled:           runtimeCfg.CodexCapacityRetryEnabled,
 		CodexSessionFailoverEnabled:         runtimeCfg.CodexSessionFailoverEnabled,
+		CodexSessionFailoverPreserveInput:   runtimeCfg.CodexSessionFailoverPreserveInput,
 		CodexOverloadThresholdPercent:       runtimeCfg.CodexOverloadThresholdPercent,
 		CodexOverloadPauseMinutes:           runtimeCfg.CodexOverloadPauseMinutes,
 		CodexOverloadWindowMinutes:          runtimeCfg.CodexOverloadWindowMinutes,
