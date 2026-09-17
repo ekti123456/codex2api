@@ -19,7 +19,18 @@ export interface SessionErrorRow {
   count: number
   first_at: string
   last_at: string
-  latest: { request_id: string; newapi_request_id?: string; code: string; message: string; model?: string; account_id?: number; transport: string; endpoint: string }
+  latest: {
+    request_id: string; newapi_request_id?: string; code: string; message: string; model?: string; account_id?: number; transport: string; endpoint: string
+    error_type?: string
+    diagnostics?: {
+      status_code: number; status_source: string; error_source: string; usage_captured: boolean
+      usage_status?: number; usage_request_id?: string; usage_error_message?: string
+      upstream_error_kind?: string; observed_status?: number; response_status?: number; usage_log_mode?: string
+      error_code_fallback?: boolean
+      observed_error?: { code?: string; message?: string; type?: string }
+      response_error?: { code?: string; message?: string; type?: string }
+    }
+  }
   locked: boolean
   locked_by?: string
   lineage_invalid?: boolean

@@ -8,6 +8,11 @@ by completion within the existing user/platform/root-session identity; any
 non-500 result resets the streak. Requests without a reliable session identity
 cannot be locked by this feature.
 
+Main requests and related background requests (including Guardian) share this
+counter when they resolve to the same root. Once a final usage result is recorded,
+later connection cancellation does not replace it. An actual final 499, or a
+cancellation without a final usage result, still resets the streak.
+
 API relay requests are excluded, including a relay selected from a mixed account
 pool. An API key used to call a Codex account does not itself grant this exemption.
 

@@ -334,6 +334,7 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 	}
 	excluded[old.ID()] = true
 	trace := &auth.SelectionTrace{}
+	trace.EnableCandidateDetails()
 	trace.SetExpandedWindow(selectionTraceForRequest(request).ExpandedWindow())
 	defer func() {
 		for _, reason := range trace.Snapshot().Reasons {
@@ -342,24 +343,54 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 	}()
 	ownerGroups := old.GroupIDSnapshot()
 	ownerTags := old.TagSnapshot()
+	selection := &database.SessionFailoverSelection{MatchMode: "exact_groups_and_tags"}
+	selection.RequiredGroupIDs, selection.RequiredTags, selection.Truncated = failoverSelectionLabels(request, ownerGroups, ownerTags)
+	plan.Diagnostic.Selection = selection
+	defer func() {
+		details := trace.CandidateDetails()
+		selection.RejectionCounts, selection.OmittedObservations = details.RejectionCounts, details.OmittedObservations
+		selection.SchedulerIncomplete = trace.Snapshot().Incomplete
+		for _, sample := range details.Samples {
+			item := database.SessionFailoverCandidate{AccountID: sample.AccountID, Reason: sample.Reason}
+			if account := handler.store.FindByID(sample.AccountID); account != nil {
+				var truncated bool
+				item.GroupIDs, item.Tags, truncated = failoverSelectionLabels(request, account.GroupIDSnapshot(), account.TagSnapshot())
+				selection.Truncated = selection.Truncated || truncated
+			}
+			selection.Candidates = append(selection.Candidates, item)
+		}
+	}()
 	eligible := func(account *auth.Account) bool {
 		if !account.HasExactGroupIDs(ownerGroups) {
-			trace.Reject("account_groups_mismatch")
+			trace.RejectAccount(account.ID(), "account_groups_mismatch")
 			return false
 		}
 		if !account.HasExactTags(ownerTags) {
-			trace.Reject("account_tags_mismatch")
+			trace.RejectAccount(account.ID(), "account_tags_mismatch")
 			return false
 		}
 		grant := windowGrantForRequest(request)
 		limits := account.SessionCapacityLimits()
 		if grant != nil && (grant.Grant.Expanded && !limits.Enabled || grant.Grant.NoWindow && limits.Enabled) {
-			trace.Reject("window_grant_capacity_mismatch")
+			trace.RejectAccount(account.ID(), "window_grant_capacity_mismatch")
 			return false
 		}
-		return !account.IsRelayStyle() && account.EffectiveAccountID() != "" && account.EffectiveAccountID() != old.EffectiveAccountID() && (filter == nil || filter(account)) && handler.store.CanAdmitAccountSession(account, key, time.Now(), trace)
+		if account.IsRelayStyle() || account.EffectiveAccountID() == "" || account.EffectiveAccountID() == old.EffectiveAccountID() {
+			trace.RejectAccount(account.ID(), "account_identity_ineligible")
+			return false
+		}
+		if filter != nil && !filter(account) {
+			trace.RejectAccount(account.ID(), "request_filter_mismatch")
+			return false
+		}
+		if !handler.store.CanAdmitAccountSession(account, key, time.Now(), trace) {
+			trace.RejectAccount(account.ID(), "session_capacity_exhausted")
+			return false
+		}
+		return true
 	}
 	for range 16 {
+		selection.Attempts++
 		candidate := handler.store.NextExcludingWithDispatch(apiKeyID, excluded, eligible, policy, trace)
 		if candidate == nil {
 			break
@@ -373,10 +404,12 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 		fingerprint := NewCodexTransportFingerprint(candidate, sessionFailoverRequestHeaders(request), plan.Body, "")
 		apiKey := strings.TrimSpace(strings.TrimPrefix(request.GetHeader("Authorization"), "Bearer "))
 		if err := fingerprint.ClaimSessionIdentity(previewContext, candidate, apiKey); err != nil || fingerprint.accountIdentity == nil {
+			trace.RejectAccount(candidate.ID(), "outbound_identity_unavailable")
 			handler.store.Release(candidate)
 			continue
 		}
 		if !handler.store.AdmitAccountSession(candidate, key, time.Now(), trace) {
+			trace.RejectAccount(candidate.ID(), "session_capacity_exhausted")
 			handler.store.Release(candidate)
 			continue
 		}

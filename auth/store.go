@@ -1349,11 +1349,11 @@ func (a *Account) schedulerSnapshot(baseLimit int64) (AccountHealthTier, float64
 func (a *Account) IsAvailable(traces ...*SelectionTrace) bool {
 	// 原子标志优先：401 时瞬间置位，无需等锁即可拦截并发请求
 	if atomic.LoadInt32(&a.Disabled) != 0 {
-		selectionTrace(traces).Reject("account_disabled")
+		selectionTrace(traces).RejectAccount(a.DBID, "account_disabled")
 		return false
 	}
 	if atomic.LoadInt32(&a.DispatchPaused) != 0 {
-		selectionTrace(traces).Reject("account_paused")
+		selectionTrace(traces).RejectAccount(a.DBID, "account_paused")
 		return false
 	}
 
@@ -1363,7 +1363,7 @@ func (a *Account) IsAvailable(traces ...*SelectionTrace) bool {
 	now := time.Now()
 	available := a.isAvailableLocked(now)
 	if !available {
-		selectionTrace(traces).Reject(a.selectionUnavailableReasonLocked(now))
+		selectionTrace(traces).RejectAccount(a.DBID, a.selectionUnavailableReasonLocked(now))
 	}
 	return available
 }
@@ -6318,7 +6318,7 @@ func (s *Store) NextExcludingWithDispatch(apiKeyID int64, exclude map[int64]bool
 				break
 			}
 			if s.accountHasBlockingCachedCooldown(acc, policy) {
-				selectionTrace(traces).Reject("account_cooldown")
+				selectionTrace(traces).RejectAccount(acc.DBID, "account_cooldown")
 				s.Release(acc)
 				continue
 			}
@@ -6359,14 +6359,14 @@ func (s *Store) NextExcludingWithDispatch(apiKeyID int64, exclude map[int64]bool
 		scanned += len(accounts)
 		for _, acc := range accounts {
 			if exclude != nil && exclude[acc.DBID] {
-				selectionTrace(traces).Reject("request_excluded")
+				selectionTrace(traces).RejectAccount(acc.DBID, "request_excluded")
 				continue
 			}
 			if !acc.dispatchableForPolicy(policy, traces...) {
 				continue
 			}
 			if !s.accountAllowedForAPIKey(acc, apiKeyID) {
-				selectionTrace(traces).Reject("api_key_scope_mismatch")
+				selectionTrace(traces).RejectAccount(acc.DBID, "api_key_scope_mismatch")
 				continue
 			}
 			if filter != nil && !filter(acc) {
@@ -6376,7 +6376,7 @@ func (s *Store) NextExcludingWithDispatch(apiKeyID int64, exclude map[int64]bool
 			load := accountOccupiedRequests(acc)
 			tier, _, dispatchScore, limit := acc.schedulerSnapshotForPolicy(maxConcurrency, policy)
 			if limit <= 0 || load >= limit {
-				selectionTrace(traces).Reject("concurrency_exhausted")
+				selectionTrace(traces).RejectAccount(acc.DBID, "concurrency_exhausted")
 				continue
 			}
 
@@ -6404,7 +6404,7 @@ func (s *Store) NextExcludingWithDispatch(apiKeyID int64, exclude map[int64]bool
 			return nil
 		}
 		if s.accountHasBlockingCachedCooldown(best, policy) {
-			selectionTrace(traces).Reject("account_cooldown")
+			selectionTrace(traces).RejectAccount(best.DBID, "account_cooldown")
 			continue
 		}
 		if s.tryAcquireAccount(best, bestLimit, true) {
@@ -6556,18 +6556,18 @@ func (s *Store) nextExcludingWithFilterLazy(apiKeyID int64, exclude map[int64]bo
 
 		for _, acc := range s.accountSnapshotAccounts() {
 			if exclude != nil && exclude[acc.DBID] {
-				selectionTrace(traces).Reject("request_excluded")
+				selectionTrace(traces).RejectAccount(acc.DBID, "request_excluded")
 				continue
 			}
 			if !acc.dispatchableForPolicy(policy, traces...) {
 				continue
 			}
 			if policy == DispatchPolicyStandard && !s.accountLazySelectable(acc) {
-				selectionTrace(traces).Reject("lazy_account_unavailable")
+				selectionTrace(traces).RejectAccount(acc.DBID, "lazy_account_unavailable")
 				continue
 			}
 			if !s.accountAllowedForAPIKey(acc, apiKeyID) {
-				selectionTrace(traces).Reject("api_key_scope_mismatch")
+				selectionTrace(traces).RejectAccount(acc.DBID, "api_key_scope_mismatch")
 				continue
 			}
 			if filter != nil && !filter(acc) {
@@ -6577,7 +6577,7 @@ func (s *Store) nextExcludingWithFilterLazy(apiKeyID int64, exclude map[int64]bo
 				continue
 			}
 			if s.lazyNeedsDispatchRefresh(acc) {
-				selectionTrace(traces).Reject("lazy_refresh_pending")
+				selectionTrace(traces).RejectAccount(acc.DBID, "lazy_refresh_pending")
 				s.triggerLazyRefreshAsync(acc)
 				continue
 			}
@@ -6585,7 +6585,7 @@ func (s *Store) nextExcludingWithFilterLazy(apiKeyID int64, exclude map[int64]bo
 			load := accountOccupiedRequests(acc)
 			tier, _, dispatchScore, limit := acc.schedulerSnapshotForPolicy(maxConcurrency, policy)
 			if limit <= 0 || load >= limit {
-				selectionTrace(traces).Reject("concurrency_exhausted")
+				selectionTrace(traces).RejectAccount(acc.DBID, "concurrency_exhausted")
 				continue
 			}
 
@@ -6609,18 +6609,18 @@ func (s *Store) nextExcludingWithFilterLazy(apiKeyID int64, exclude map[int64]bo
 				continue
 			}
 			if metadataRefreshCandidate != nil {
-				selectionTrace(traces).Reject("lazy_refresh_failed")
+				selectionTrace(traces).RejectAccount(metadataRefreshCandidate.DBID, "lazy_refresh_failed")
 			}
 			return nil
 		}
 		if s.accountHasBlockingCachedCooldown(best, policy) {
-			selectionTrace(traces).Reject("account_cooldown")
+			selectionTrace(traces).RejectAccount(best.DBID, "account_cooldown")
 			continue
 		}
 		if s.acquireLazyCandidate(best, maxConcurrency) {
 			return best
 		}
-		selectionTrace(traces).Reject("dispatch_state_changed")
+		selectionTrace(traces).RejectAccount(best.DBID, "dispatch_state_changed")
 	}
 	return nil
 }

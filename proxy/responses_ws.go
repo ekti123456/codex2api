@@ -677,7 +677,9 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			if c.Request.Context().Err() != nil {
 				return errResponsesWSClientGone
 			}
-			if modelError := sessionModelErrorForRequest(c); modelError != nil {
+			if sessionFailoverNoCandidate(c) {
+				apiErr = sessionFailoverUnavailableAPIError(c)
+			} else if modelError := sessionModelErrorForRequest(c); modelError != nil {
 				apiErr = modelError
 			} else if compactionAffinity.Known {
 				apiErr = compactionUpstreamUnavailableAPIError()
@@ -1932,6 +1934,9 @@ func responsesWSClientUpstreamAPIError(apiErr *api.APIError, hideUpstreamErrors 
 }
 
 func responsesWSTerminalCloseCode(apiErr *api.APIError, fallback int) int {
+	if apiErr != nil && apiErr.Code == api.ErrCodeNoAvailableAccount {
+		return websocket.ClosePolicyViolation
+	}
 	if apiErr != nil && apiErr.Code == api.ErrCodeSessionModelUnavailable {
 		return websocket.ClosePolicyViolation
 	}

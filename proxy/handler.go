@@ -1727,7 +1727,6 @@ func populateInternalUsageMetaFromContext(c *gin.Context, input *database.UsageL
 }
 
 func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInput) {
-	rememberSessionErrorUsage(c, input)
 	h.completeSessionContinuity(c, input)
 	populateAPIKeyMetaFromContext(c, input)
 	populateInternalUsageMetaFromContext(c, input)
@@ -1749,6 +1748,8 @@ func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInp
 		input.UpstreamErrorKind = "safety_policy"
 		input.StatusCode = http.StatusBadRequest
 	}
+	// Capture the same normalized result and request ID submitted to usage logs.
+	rememberSessionErrorUsage(c, input)
 	h.logUsage(input)
 }
 
@@ -4304,7 +4305,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) {
 				return
 			}
-			if selectionTraceForRequest(c).SessionModelDenied() {
+			if sessionFailoverNoCandidate(c) || selectionTraceForRequest(c).SessionModelDenied() {
 				h.sendDispatchUnavailable(c, isStream, false)
 				return
 			}
@@ -6479,7 +6480,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) {
 					return
 				}
-				if selectionTraceForRequest(c).SessionModelDenied() {
+				if sessionFailoverNoCandidate(c) || selectionTraceForRequest(c).SessionModelDenied() {
 					h.sendDispatchUnavailable(c, false, false)
 					return
 				}
@@ -7359,7 +7360,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolChat) {
 				return
 			}
-			if selectionTraceForRequest(c).SessionModelDenied() {
+			if sessionFailoverNoCandidate(c) || selectionTraceForRequest(c).SessionModelDenied() {
 				h.sendDispatchUnavailable(c, isStream, true)
 				return
 			}

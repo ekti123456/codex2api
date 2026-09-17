@@ -168,9 +168,15 @@ func (handler *Handler) recordSessionErrorResult(ctx *gin.Context, status int, a
 	if !known || !state.sessionRecorded.CompareAndSwap(false, true) {
 		return
 	}
+	apiError, diagnostics := sessionErrorDetails(ctx, state, status, apiError)
+	diagnostics.UsageLogMode = string(handler.db.GetUsageLogMode())
 	trace := snapshotUpstreamTrace(ctx.Request.Context())
 	event := database.SessionErrorEvent{Identity: identity, CreatedAt: time.Now().UTC(), RequestID: diagnosticRequestID(trace.RequestID), AccountID: trace.accountID,
-		Code: diagnosticLabel(string(apiError.Code)), Message: serviceErrorSafeText(ctx, apiError.Message, 2048), Endpoint: serviceErrorSafeText(ctx, ctx.Request.URL.Path, 256), Model: diagnosticLabel(ctx.GetString("x-model")), Transport: "http"}
+		Code: serviceErrorSafeText(ctx, string(apiError.Code), 128), Message: serviceErrorSafeText(ctx, apiError.Message, 2048), Endpoint: serviceErrorSafeText(ctx, ctx.Request.URL.Path, 256), Model: diagnosticLabel(ctx.GetString("x-model")), Transport: "http",
+		ErrorType: serviceErrorSafeText(ctx, string(apiError.Type), 128), Diagnostics: diagnostics}
+	if diagnostics.UsageRequestID != "" {
+		event.RequestID = diagnostics.UsageRequestID
+	}
 	if state.websocket {
 		event.Transport = "websocket"
 	} else if strings.Contains(ctx.Writer.Header().Get("Content-Type"), "text/event-stream") {
@@ -194,6 +200,9 @@ func rememberSessionErrorUsage(ctx *gin.Context, input *database.UsageLogInput) 
 		state.usageStatus = input.StatusCode
 		if !input.IsRetryAttempt {
 			state.finalUsageStatus = input.StatusCode
+			state.finalUsageMessage = serviceErrorSafeText(ctx, input.ErrorMessage, 2048)
+			state.finalUsageRequestID = diagnosticRequestID(input.RequestID)
+			state.finalUsageErrorKind = serviceErrorSafeText(ctx, input.UpstreamErrorKind, 128)
 		}
 		state.usageSucceeded = !input.IsRetryAttempt && input.StatusCode >= 200 && input.StatusCode < 300 && strings.TrimSpace(input.ErrorMessage) == ""
 		state.usageError = ""
@@ -238,6 +247,7 @@ func (handler *Handler) finishSessionAutoLock(ctx *gin.Context) {
 	}
 	state.usageMu.Lock()
 	settings, status, failure := state.autoLockSettings, state.finalUsageStatus, state.observedError
+	hasFinalUsage := status != 0
 	if status == 0 {
 		status = state.observedStatus
 	}
@@ -249,7 +259,10 @@ func (handler *Handler) finishSessionAutoLock(ctx *gin.Context) {
 	if !known {
 		return
 	}
-	if ctx.Request.Context().Err() != nil {
+	// A caller may close immediately after receiving a terminal failure. Once
+	// usage has recorded the final result, later cancellation must not rewrite
+	// that result to 499 and silently reset a genuine 500 streak.
+	if !hasFinalUsage && ctx.Request.Context().Err() != nil {
 		status = 499
 	}
 	if status == 0 && !state.websocket {

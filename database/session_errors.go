@@ -26,17 +26,44 @@ type SessionErrorIdentity struct {
 }
 
 type SessionErrorEvent struct {
-	Identity        SessionErrorIdentity `json:"identity"`
-	CreatedAt       time.Time            `json:"created_at"`
-	RequestID       string               `json:"request_id"`
-	NewAPIRequestID string               `json:"newapi_request_id,omitempty"`
-	Model           string               `json:"model,omitempty"`
-	Code            string               `json:"code"`
-	Message         string               `json:"message"`
-	Endpoint        string               `json:"endpoint"`
-	Transport       string               `json:"transport"`
-	AccountID       int64                `json:"account_id,omitempty"`
-	RequestType     string               `json:"request_type,omitempty"`
+	Identity        SessionErrorIdentity     `json:"identity"`
+	CreatedAt       time.Time                `json:"created_at"`
+	RequestID       string                   `json:"request_id"`
+	NewAPIRequestID string                   `json:"newapi_request_id,omitempty"`
+	Model           string                   `json:"model,omitempty"`
+	Code            string                   `json:"code"`
+	Message         string                   `json:"message"`
+	Endpoint        string                   `json:"endpoint"`
+	Transport       string                   `json:"transport"`
+	AccountID       int64                    `json:"account_id,omitempty"`
+	RequestType     string                   `json:"request_type,omitempty"`
+	ErrorType       string                   `json:"error_type,omitempty"`
+	Diagnostics     *SessionErrorDiagnostics `json:"diagnostics,omitempty"`
+}
+
+// UsageCaptured means the usage logging path ran, not that its asynchronous
+// database write succeeded. Older events have no diagnostics.
+type SessionErrorDiagnostics struct {
+	StatusCode        int                 `json:"status_code"`
+	StatusSource      string              `json:"status_source"`
+	ErrorSource       string              `json:"error_source"`
+	UsageCaptured     bool                `json:"usage_captured"`
+	UsageStatus       int                 `json:"usage_status,omitempty"`
+	UsageRequestID    string              `json:"usage_request_id,omitempty"`
+	UsageErrorMessage string              `json:"usage_error_message,omitempty"`
+	UpstreamErrorKind string              `json:"upstream_error_kind,omitempty"`
+	ObservedStatus    int                 `json:"observed_status,omitempty"`
+	ResponseStatus    int                 `json:"response_status,omitempty"`
+	UsageLogMode      string              `json:"usage_log_mode,omitempty"`
+	ErrorCodeFallback bool                `json:"error_code_fallback,omitempty"`
+	ObservedError     *SessionErrorDetail `json:"observed_error,omitempty"`
+	ResponseError     *SessionErrorDetail `json:"response_error,omitempty"`
+}
+
+type SessionErrorDetail struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+	Type    string `json:"type,omitempty"`
 }
 
 type SessionErrorRow struct {

@@ -35,6 +35,24 @@ NewAPI 根指纹本来就由 `平台 + 用户 ID + 主 session_id` 生成，不�
 
 ## 接口
 
+### 错误详情来源
+
+新增记录的 `latest` 尽量保留采集到的 `code`、`message` 和 `error_type`。
+普通 500 同样会读取最终使用日志的错误消息，以及 HTTP JSON 响应中的错误字段；支持
+`error`、`response.error`、`response.status_details.error` 和顶层错误（包括数字错误码）。
+最终使用日志的错误优先，避免将先前重试的错误码拼到本次最终失败上。
+
+`latest.diagnostics` 用于核对：
+
+- `status_code` / `status_source`：统计状态及来源，`final_usage`、`error_observer`、`http_response` 或 `reported_error`。
+- `error_source`：所展示错误的来源；`http_status_fallback` 表示没有具体错误，只能按 HTTP 状态兜底。
+- `error_code_fallback`：`true` 表示展示的是 `http_500` 一类状态码占位，不应认作上游业务错误码。
+- `usage_captured`：是否捕获了非重试的最终使用日志输入。**不代表使用日志已成功落库**；两套日志仍由各自队列异步保存。
+- `usage_status` / `usage_request_id` / `usage_error_message` / `upstream_error_kind`：与最终使用日志核对的状态、请求 ID、原消息及错误分类。统计取使用日志归一化后的状态，避免使用日志变成 400 而统计仍按先前 500 处理。
+- `usage_log_mode`：采集时的使用日志开关模式；`observed_status` / `response_status` 及 `observed_error` / `response_error` 保留错误回调和 HTTP 响应里的错误字段，便于区分中间错误与最终结果。
+
+详情弹窗会直接显示这些字段。仍按既有规则脱敏并限制长度（消息最多 2048 字节），不保存整个响应体、提示词或错误对象的任意 `details`。如果前面的链路已经截断了消息，采集器无法恢复未收到的部分；历史记录也无法补出当时未保存的原始错误。
+
 - `GET /api/admin/session-errors`：`user_id`、`session_id` 精确筛选，`lock_state=unlocked|locked|all`（默认 `unlocked`），`locked=true` 独立查看直接黑名单并忽略状态筛选，`cursor`、`limit`（1–100）。返回筛选后的分组、累计 500 数、最新错误与采集器状态。
 - `POST /api/admin/session-errors/blacklist`：`{"keys":["服务端返回的会话键"],"locked":true}`；`false` 表示手动解锁。使用既有管理员鉴权。继承锁定需要解锁其父黑名单，不能只解除子会话来绕过。
 

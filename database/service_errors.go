@@ -74,16 +74,36 @@ type PromptSafetyDiagnostic struct {
 }
 
 type SessionAccountFailoverDiagnostic struct {
-	Result            string                  `json:"result"`
-	Reason            string                  `json:"reason,omitempty"`
-	TriggerReason     string                  `json:"trigger_reason,omitempty"`
-	BlockReason       string                  `json:"block_reason,omitempty"`
-	Phase             string                  `json:"phase,omitempty"`
-	PreviousAccountID int64                   `json:"previous_account_id,omitempty"`
-	AccountID         int64                   `json:"account_id,omitempty"`
-	Generation        uint64                  `json:"generation"`
-	ContextBlockers   []SessionContextBlocker `json:"context_blockers,omitempty"`
-	ContextCleanup    *SessionContextCleanup  `json:"context_cleanup,omitempty"`
+	Result            string                    `json:"result"`
+	Reason            string                    `json:"reason,omitempty"`
+	TriggerReason     string                    `json:"trigger_reason,omitempty"`
+	BlockReason       string                    `json:"block_reason,omitempty"`
+	Phase             string                    `json:"phase,omitempty"`
+	PreviousAccountID int64                     `json:"previous_account_id,omitempty"`
+	AccountID         int64                     `json:"account_id,omitempty"`
+	Generation        uint64                    `json:"generation"`
+	ContextBlockers   []SessionContextBlocker   `json:"context_blockers,omitempty"`
+	ContextCleanup    *SessionContextCleanup    `json:"context_cleanup,omitempty"`
+	Selection         *SessionFailoverSelection `json:"selection,omitempty"`
+}
+
+type SessionFailoverSelection struct {
+	RequiredGroupIDs    []int64                    `json:"required_group_ids"`
+	RequiredTags        []string                   `json:"required_tags"`
+	MatchMode           string                     `json:"match_mode"`
+	Attempts            int                        `json:"attempts"`
+	RejectionCounts     map[string]int             `json:"rejection_counts"`
+	Candidates          []SessionFailoverCandidate `json:"candidates,omitempty"`
+	OmittedObservations int                        `json:"omitted_observations,omitempty"`
+	Truncated           bool                       `json:"truncated,omitempty"`
+	SchedulerIncomplete bool                       `json:"scheduler_incomplete,omitempty"`
+}
+
+type SessionFailoverCandidate struct {
+	AccountID int64    `json:"account_id"`
+	Reason    string   `json:"reason"`
+	GroupIDs  []int64  `json:"group_ids"`
+	Tags      []string `json:"tags"`
 }
 
 type SessionContextCleanup struct {
@@ -322,6 +342,7 @@ func normalizeServiceError(event ServiceErrorEvent) ServiceErrorEvent {
 	}
 	if event.AccountFailover != nil {
 		failover := *event.AccountFailover
+		failover.Selection = normalizeSessionFailoverSelection(failover.Selection)
 		for _, field := range []*string{&failover.Result, &failover.Reason, &failover.TriggerReason, &failover.BlockReason, &failover.Phase} {
 			*field = serviceErrorString(*field, 160)
 		}

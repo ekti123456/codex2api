@@ -42,6 +42,26 @@ func (db *DB) EnqueueSessionError(event SessionErrorEvent) bool {
 	event.Code, event.Model = serviceErrorString(event.Code, 128), serviceErrorString(event.Model, 128)
 	event.RequestID, event.NewAPIRequestID = serviceErrorString(event.RequestID, 160), serviceErrorString(event.NewAPIRequestID, 160)
 	event.Endpoint, event.Transport = serviceErrorString(event.Endpoint, 256), serviceErrorString(event.Transport, 24)
+	event.ErrorType = serviceErrorString(event.ErrorType, 128)
+	if event.Diagnostics != nil {
+		// Own the queued snapshot and apply the same bounds/redaction as errors.
+		d := *event.Diagnostics
+		d.UsageErrorMessage = serviceErrorString(d.UsageErrorMessage, 2048)
+		d.UsageRequestID = serviceErrorString(d.UsageRequestID, 160)
+		d.UpstreamErrorKind = serviceErrorString(d.UpstreamErrorKind, 128)
+		d.StatusSource, d.ErrorSource = serviceErrorString(d.StatusSource, 32), serviceErrorString(d.ErrorSource, 32)
+		d.UsageLogMode = serviceErrorString(d.UsageLogMode, 24)
+		for _, target := range []**SessionErrorDetail{&d.ObservedError, &d.ResponseError} {
+			if *target != nil {
+				detail := **target
+				detail.Code = serviceErrorString(detail.Code, 128)
+				detail.Message = serviceErrorString(detail.Message, 2048)
+				detail.Type = serviceErrorString(detail.Type, 128)
+				*target = &detail
+			}
+		}
+		event.Diagnostics = &d
+	}
 	queue := db.sessionErrors
 	queue.mu.RLock()
 	defer queue.mu.RUnlock()

@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"github.com/codex2api/api"
 	"github.com/codex2api/database"
 	"github.com/stretchr/testify/require"
@@ -9,6 +11,71 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSessionAutoLockGuardianTerminal500SurvivesLateCancellation(t *testing.T) {
+	h := newWindowAuthorizationHandler(t)
+	require.NoError(t, h.db.SetSessionAutoLockSettings(t.Context(), database.SessionAutoLockSettings{Enabled: true, Threshold: 3}))
+	for i := 1; i <= 3; i++ {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			_, body := continuityTestRequest(0, "turn")
+			meta := sessionOperationsTestMeta(continuityTestThread)
+			meta.ThreadSource, meta.SubagentKind = "guardian_review", "guardian"
+			meta.RootSessionRelation = newAPIPolicyRootSessionRelationRelated
+			body = bytes.ReplaceAll(body, []byte(`"thread_source":"user"`), []byte(`"thread_source":"guardian_review","subagent_kind":"guardian"`))
+			r, _ := signedRootlessPassiveModelContext(t, http.MethodPost, "/v1/responses", body, meta)
+			requestCtx, cancel := context.WithCancel(r.Request.Context())
+			r.Request = r.Request.WithContext(requestCtx)
+			finish := h.beginServiceErrorAudit(r)
+			captureUsageRequestIngress(r, body)
+			h.primeNewAPIPolicyContext(r, body)
+			h.resolveRequestSessionIdentityForContext(r, body)
+			identity, known := sessionOperationsIdentity(r)
+			require.True(t, known)
+			require.Equal(t, "guardian_review", usageRequestDiagnosticState(r).Resolved.ThreadSource)
+			require.True(t, serviceErrorAuditForRequest(r).autoLockSettings.Enabled)
+			require.False(t, apiRelaySessionExempt(r))
+			require.Equal(t, "42", identity.UserID)
+			// The terminal failure was already recorded before the caller closed.
+			rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: 500, ErrorMessage: "server_is_overloaded · final failure"})
+			cancel()
+			finish()
+			owner, err := h.db.SessionBlacklistStatus(t.Context(), identity.Key, "")
+			require.NoError(t, err)
+			if i == 3 {
+				require.Equal(t, identity.Key, owner)
+			} else {
+				require.Empty(t, owner)
+			}
+		})
+	}
+}
+
+func TestSessionAutoLockCancellationWithoutFinal500DoesNotLock(t *testing.T) {
+	for _, finalStatus := range []int{0, 499} {
+		h := newWindowAuthorizationHandler(t)
+		require.NoError(t, h.db.SetSessionAutoLockSettings(t.Context(), database.SessionAutoLockSettings{Enabled: true, Threshold: 1}))
+		_, body := continuityTestRequest(0, "turn")
+		r, _ := signedRootlessPassiveModelContext(t, http.MethodPost, "/v1/responses", body, sessionOperationsTestMeta(continuityTestThread))
+		requestCtx, cancel := context.WithCancel(r.Request.Context())
+		r.Request = r.Request.WithContext(requestCtx)
+		finish := h.beginServiceErrorAudit(r)
+		captureUsageRequestIngress(r, body)
+		h.primeNewAPIPolicyContext(r, body)
+		h.resolveRequestSessionIdentityForContext(r, body)
+		identity, known := sessionOperationsIdentity(r)
+		require.True(t, known)
+		h.recordObservedError(r, 500, api.NewAPIError("upstream_error", "earlier failure", api.ErrorTypeServer))
+		rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: 500, IsRetryAttempt: true})
+		if finalStatus != 0 {
+			rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: finalStatus})
+		}
+		cancel()
+		finish()
+		owner, err := h.db.SessionBlacklistStatus(t.Context(), identity.Key, "")
+		require.NoError(t, err)
+		require.Empty(t, owner)
+	}
+}
 
 func TestSessionAutoLockExcludesAPIRelay(t *testing.T) {
 	for _, selected := range []bool{false, true} {

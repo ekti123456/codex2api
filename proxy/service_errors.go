@@ -18,24 +18,29 @@ import (
 const serviceErrorContextKey = "service_error_audit"
 
 type serviceErrorAudit struct {
-	started          time.Time
-	recorded         atomic.Bool
-	sessionRecorded  atomic.Bool
-	autoLockFinished atomic.Bool
-	autoLockSettings database.SessionAutoLockSettings
-	finalUsageStatus int
-	observedStatus   int
-	observedError    *api.APIError
-	usageMu          sync.Mutex
-	usageStatus      int
-	usageError       string
-	usageSucceeded   bool
-	activityLease    *database.SessionActivityLease
-	activityStarted  bool
-	authenticated    bool
-	websocket        bool
-	apiKeyID         int64
-	apiKeyName       string
+	started             time.Time
+	recorded            atomic.Bool
+	sessionRecorded     atomic.Bool
+	autoLockFinished    atomic.Bool
+	autoLockSettings    database.SessionAutoLockSettings
+	finalUsageStatus    int
+	finalUsageMessage   string
+	finalUsageRequestID string
+	finalUsageErrorKind string
+	responseStatus      int
+	responseError       *api.APIError
+	observedStatus      int
+	observedError       *api.APIError
+	usageMu             sync.Mutex
+	usageStatus         int
+	usageError          string
+	usageSucceeded      bool
+	activityLease       *database.SessionActivityLease
+	activityStarted     bool
+	authenticated       bool
+	websocket           bool
+	apiKeyID            int64
+	apiKeyName          string
 }
 
 type serviceErrorResponseWriter struct {
@@ -146,7 +151,14 @@ func (handler *Handler) beginServiceErrorAudit(ctx *gin.Context) func() {
 			}
 		}
 		failure := api.NewAPIError(api.ErrorCode(code), message, api.ErrorType(errorType))
-		handler.recordSessionError(ctx, writer.Status(), failure)
+		sessionFailure := failure
+		if original := parseSessionErrorMessage(string(body), false); original != nil {
+			sessionFailure = original
+		}
+		state.usageMu.Lock()
+		state.responseStatus, state.responseError = writer.Status(), sessionFailure
+		state.usageMu.Unlock()
+		handler.recordSessionError(ctx, writer.Status(), sessionFailure)
 		if writer.Status() == http.StatusInternalServerError || code == overloadErrorCode {
 			handler.finishSessionErrorAudit(ctx)
 		}

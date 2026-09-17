@@ -26,6 +26,7 @@ type SelectionTrace struct {
 	pinnedAccount      int64
 	sessionModelFilter AccountFilter
 	sessionModelDenied bool
+	candidateDetails   *SelectionCandidateDetails
 }
 
 func (trace *SelectionTrace) PinAccount(accountID int64) {
@@ -90,8 +91,19 @@ func (trace *SelectionTrace) Reject(reason string) {
 	}
 	trace.mu.Lock()
 	defer trace.mu.Unlock()
+	trace.rejectLocked(reason)
+}
+
+func (trace *SelectionTrace) rejectLocked(reason string) bool {
 	if trace.frozen || trace.suspended > 0 {
-		return
+		return false
+	}
+	if trace.candidateDetails != nil {
+		key := reason
+		if _, exists := trace.candidateDetails.RejectionCounts[key]; !exists && len(trace.candidateDetails.RejectionCounts) >= 32 {
+			key = "other"
+		}
+		trace.candidateDetails.RejectionCounts[key]++
 	}
 	if trace.reasons == nil {
 		trace.reasons = make(map[string]struct{})
@@ -101,6 +113,7 @@ func (trace *SelectionTrace) Reject(reason string) {
 	} else if _, known := trace.reasons[reason]; !known {
 		trace.reasons["diagnosis_incomplete"] = struct{}{}
 	}
+	return true
 }
 
 func (trace *SelectionTrace) Bind(accountID int64) {
@@ -143,6 +156,7 @@ func (trace *SelectionTrace) Reset() {
 		trace.rootAccount = 0
 		trace.frozen = false
 		trace.sessionModelDenied = false
+		trace.candidateDetails = nil
 		trace.mu.Unlock()
 	}
 }

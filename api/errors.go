@@ -34,6 +34,7 @@ const (
 	ErrCodeRootAccountWaitTimeout     ErrorCode = "codex_root_account_wait_timeout"
 	ErrCodeBackgroundRootUnavailable  ErrorCode = "codex_background_root_unavailable"
 	ErrCodeSessionModelUnavailable    ErrorCode = "session_model_unavailable"
+	ErrCodeNoAvailableAccount         ErrorCode = "no_available_account"
 
 	// Server errors
 	ErrCodeServerError        ErrorCode = "server_error"
@@ -144,6 +145,8 @@ func HTTPStatusCode(code ErrorCode) int {
 		"session_blacklisted", "session_blacklist_unavailable", "session_lineage_invalid",
 		"codex_session_identity_invalid", "codex_session_identity_conflict", "codex_session_identity_unavailable", "codex_background_account_mismatch",
 		"codex_root_already_named", "window_billing_refresh_required", "window_expansion_invalid":
+		return http.StatusBadRequest
+	case ErrCodeNoAvailableAccount:
 		return http.StatusBadRequest
 	case ErrCodeServiceUnavailable:
 		return http.StatusServiceUnavailable
