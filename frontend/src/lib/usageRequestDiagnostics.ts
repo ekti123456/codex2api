@@ -15,6 +15,40 @@ export function diagnosticRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+export interface TurnStateDiagnosticRow {
+  kind: 'received' | 'upstream' | 'real' | 'alias' | 'hash'
+  value: string
+  carrier: string
+  action?: string
+}
+
+export function turnStateDiagnosticRows(value: unknown, outboundIdentity: unknown): TurnStateDiagnosticRow[] {
+  const rows: TurnStateDiagnosticRow[] = []
+  const seen = new Set<string>()
+  const add = (kind: TurnStateDiagnosticRow['kind'], value: unknown, carrier: string, action?: string) => {
+    if (typeof value !== 'string' || !value) return
+    const key = JSON.stringify([kind, value, carrier, action])
+    if (!seen.has(key)) { seen.add(key); rows.push({ kind, value, carrier, action }) }
+  }
+  const state = diagnosticRecord(value)
+  for (const item of Array.isArray(state.events) ? state.events : []) {
+    const event = diagnosticRecord(item)
+    const carrier = typeof event.carrier === 'string' ? event.carrier : ''
+    const action = typeof event.action === 'string' ? event.action : ''
+    add('received', event.received, carrier, action)
+    // These are mapped/returned real values, not proof they were sent upstream.
+    add('real', event.real, carrier, action)
+    if (action === 'issued') add('alias', event.alias, carrier, action)
+    if (!event.real && !event.received) add('hash', event.real_hash, carrier, action)
+  }
+  const outbound = diagnosticRecord(outboundIdentity)
+  for (const [name, value] of Object.entries(diagnosticRecord(diagnosticRecord(outbound.http).headers))) {
+    if (name.toLowerCase() === 'x-codex-turn-state') add('upstream', value, 'HTTP X-Codex-Turn-State')
+  }
+  add('upstream', diagnosticRecord(diagnosticRecord(outbound.body).client_metadata)['x-codex-turn-state'], 'client_metadata.x-codex-turn-state')
+  return rows
+}
+
 export function splitOutboundIdentityDiagnostic(value: unknown): { snapshot: Record<string, unknown>; local: Record<string, unknown> } {
   const snapshot: Record<string, unknown> = {}
   const local: Record<string, unknown> = {}

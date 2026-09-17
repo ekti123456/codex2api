@@ -39,11 +39,19 @@ func (s *turnStateSession) log(action, carrier, alias, real string, account int6
 		return
 	}
 	e := database.TurnStateEvent{Action: action, Carrier: carrier, AccountID: account, Generation: generation, At: time.Now().UTC(), ExpiresAt: expires}
-	if database.ValidCodexTurnStateAlias(alias) {
-		e.Alias = alias
-	}
+	e.Alias = turnStateDiagnosticValue(alias, &e.ValueTruncated)
 	if real != "" {
 		e.RealHash = codexIdentityDigest("turn-state-log-v1", real)
+		if action != "cleared_unmanaged" && action != "cleared_unverified_outbound" {
+			e.Real = turnStateDiagnosticValue(real, &e.ValueTruncated)
+		}
+	}
+	if strings.HasPrefix(carrier, "request_") {
+		value := alias
+		if value == "" {
+			value = real
+		}
+		e.Received = turnStateDiagnosticValue(value, &e.ValueTruncated)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -52,6 +60,17 @@ func (s *turnStateSession) log(action, carrier, alias, real string, account int6
 		return
 	}
 	s.events = append(s.events, e)
+}
+
+func turnStateDiagnosticValue(value string, truncated *bool) string {
+	const limit = 2048
+	if len(value) > limit {
+		if truncated != nil {
+			*truncated = true
+		}
+		return strings.ToValidUTF8(value[:limit], "") + "…[truncated]"
+	}
+	return strings.Clone(value)
 }
 
 func turnStateDiagnostic(ctx context.Context) *database.TurnStateDiagnostic {
@@ -101,7 +120,7 @@ func (h *Handler) bindTurnStateSession(c *gin.Context, body []byte, identity req
 		if value == "" {
 			continue
 		}
-		if !database.ValidCodexTurnStateAlias(value) {
+		if !h.db.IsManagedCodexTurnStateAlias(value) {
 			s.log("cleared_unmanaged", input.carrier, "", value, 0, 0, nil)
 			continue
 		}
@@ -205,7 +224,7 @@ func PrepareCodexTurnStateOutbound(ctx context.Context, account *auth.Account, b
 	s := turnStateSessionFrom(ctx)
 	return rewriteRequestTurnState(body, headers, func(value, carrier string) string {
 		if s == nil {
-			if strings.HasPrefix(value, database.CodexTurnStateAliasPrefix) {
+			if strings.HasPrefix(value, "c2ts_v1_") || database.ValidCodexTurnStateAlias(value) {
 				return ""
 			}
 			return value
@@ -221,10 +240,10 @@ func PrepareCodexTurnStateOutbound(ctx context.Context, account *auth.Account, b
 			if account != nil && !account.IsRelayStyle() && record.AccountID == account.ID() && record.Generation == generation && record.AccountHash == turnStateAccountHash(account) {
 				return record.Real
 			}
-			s.log("cleared_account_or_generation_changed", carrier, record.Alias, record.Real, record.AccountID, record.Generation, nil)
+			s.log("cleared_account_or_generation_changed", strings.Replace(carrier, "request_", "outbound_", 1), record.Alias, record.Real, record.AccountID, record.Generation, nil)
 			return ""
 		}
-		s.log("cleared_unverified_outbound", carrier, value, value, 0, generation, nil)
+		s.log("cleared_unverified_outbound", strings.Replace(carrier, "request_", "outbound_", 1), "", value, 0, generation, nil)
 		return ""
 	})
 }

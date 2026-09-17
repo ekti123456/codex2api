@@ -9,26 +9,28 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
-const CodexTurnStateAliasPrefix = "c2ts_v1_"
 const CodexTurnStateTTL = 7 * 24 * time.Hour
 
 type TurnStateEvent struct {
-	Action     string     `json:"action"`
-	Carrier    string     `json:"carrier"`
-	Alias      string     `json:"alias,omitempty"`
-	RealHash   string     `json:"real_hash,omitempty"`
-	AccountID  int64      `json:"account_id,omitempty"`
-	Generation uint64     `json:"generation"`
-	At         time.Time  `json:"at"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	Action         string     `json:"action"`
+	Carrier        string     `json:"carrier"`
+	Alias          string     `json:"alias,omitempty"`
+	RealHash       string     `json:"real_hash,omitempty"`
+	Received       string     `json:"received,omitempty"`
+	Real           string     `json:"real,omitempty"`
+	ValueTruncated bool       `json:"value_truncated,omitempty"`
+	AccountID      int64      `json:"account_id,omitempty"`
+	Generation     uint64     `json:"generation"`
+	At             time.Time  `json:"at"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
 type TurnStateDiagnostic struct {
@@ -37,7 +39,8 @@ type TurnStateDiagnostic struct {
 	Omitted   int              `json:"omitted,omitempty"`
 }
 
-// No plaintext upstream token is serialized in diagnostics or stored in a column.
+// The mapping stores the upstream token encrypted. Explicit admin diagnostics
+// separately retain the values needed to compare ingress, upstream and aliases.
 type CodexTurnStateBinding struct {
 	Scope       string `json:"scope"`
 	RootKey     string `json:"root_key"`
@@ -55,11 +58,52 @@ type CodexTurnStateRecord struct {
 }
 
 func ValidCodexTurnStateAlias(value string) bool {
-	if len(value) != len(CodexTurnStateAliasPrefix)+43 || !strings.HasPrefix(value, CodexTurnStateAliasPrefix) {
+	_, ok := codexTurnStateEnvelope(value)
+	return ok // Shape only; possession of this format never authorizes restoration.
+}
+
+func codexTurnStateEnvelope(value string) ([]byte, bool) {
+	if len(value) > 16384 {
+		return nil, false
+	}
+	b, err := base64.URLEncoding.DecodeString(value)
+	return b, err == nil && len(b) >= 73 && b[0] == 0x80 && (len(b)-57)%16 == 0 && base64.URLEncoding.EncodeToString(b) == value
+}
+
+func (db *DB) turnStateAliasSignature(payload []byte) []byte {
+	mac := hmac.New(sha256.New, db.turnStateKey)
+	mac.Write([]byte("codex-turn-state-alias-v2\x00"))
+	mac.Write(payload)
+	return mac.Sum(nil)
+}
+
+// Local authentication distinguishes our opaque handles from identically
+// shaped official values without relying on a visible custom prefix.
+func (db *DB) IsManagedCodexTurnStateAlias(value string) bool {
+	if db == nil || len(db.turnStateKey) != 32 {
 		return false
 	}
-	b, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, CodexTurnStateAliasPrefix))
-	return err == nil && len(b) == 32 && base64.RawURLEncoding.EncodeToString(b) == strings.TrimPrefix(value, CodexTurnStateAliasPrefix)
+	b, ok := codexTurnStateEnvelope(value)
+	return ok && hmac.Equal(b[len(b)-32:], db.turnStateAliasSignature(b[:len(b)-32]))
+}
+
+func (db *DB) newCodexTurnStateAlias(real string) (string, error) {
+	template, matches := codexTurnStateEnvelope(real)
+	size := 217 // Same layout and length as the observed 292-character token.
+	if matches {
+		size = len(template)
+	}
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	b[0] = 0x80
+	binary.BigEndian.PutUint64(b[1:9], uint64(time.Now().Unix()))
+	if matches {
+		copy(b[:9], template[:9])
+	} // Preserve the public version/time shape only.
+	copy(b[size-32:], db.turnStateAliasSignature(b[:size-32]))
+	return base64.URLEncoding.EncodeToString(b), nil
 }
 
 func (db *DB) ensureCodexTurnStateTable(ctx context.Context) error {
@@ -119,15 +163,15 @@ func (db *DB) IssueCodexTurnState(ctx context.Context, binding CodexTurnStateBin
 		return result, err
 	}
 	mac := hmac.New(sha256.New, db.turnStateKey)
+	mac.Write([]byte("codex-turn-state-source-v2\x00"))
 	mac.Write(encoded)
 	mac.Write([]byte{0})
 	mac.Write([]byte(real))
 	source := hex.EncodeToString(mac.Sum(nil))
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
+	alias, err := db.newCodexTurnStateAlias(real)
+	if err != nil {
 		return result, err
 	}
-	alias := CodexTurnStateAliasPrefix + base64.RawURLEncoding.EncodeToString(random)
 	nonce := make([]byte, db.turnStateCipher.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return result, err
@@ -161,7 +205,7 @@ func (db *DB) IssueCodexTurnState(ctx context.Context, binding CodexTurnStateBin
 
 func (db *DB) ReadCodexTurnState(ctx context.Context, alias string) (CodexTurnStateRecord, bool, error) {
 	var result CodexTurnStateRecord
-	if !ValidCodexTurnStateAlias(alias) {
+	if !db.IsManagedCodexTurnStateAlias(alias) {
 		return result, false, nil
 	}
 	var binding, ciphertext string

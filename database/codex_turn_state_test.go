@@ -2,14 +2,73 @@ package database
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestTurnStateAliasEnvelopeAuthenticationAndLegacyRejection(t *testing.T) {
+	db, err := New("sqlite", filepath.Join(t.TempDir(), "aliases.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	binding := CodexTurnStateBinding{Scope: "scope", RootKey: "root", AccountID: 7}
+	for _, size := range []int{73, 217, 249} {
+		original := []byte(strings.Repeat("x", size))
+		original[0] = 0x80
+		binary.BigEndian.PutUint64(original[1:9], 1789660000)
+		real := base64.URLEncoding.EncodeToString(original)
+		record, err := db.IssueCodexTurnState(t.Context(), binding, real)
+		require.NoError(t, err)
+		require.Len(t, record.Alias, len(real))
+		require.NotEqual(t, real, record.Alias)
+		decoded, err := base64.URLEncoding.DecodeString(record.Alias)
+		require.NoError(t, err)
+		require.Equal(t, original[:9], decoded[:9])
+		require.NotEqual(t, original[9:25], decoded[9:25])
+		require.NotEqual(t, original[25:size-32], decoded[25:size-32])
+		require.True(t, db.IsManagedCodexTurnStateAlias(record.Alias))
+		require.False(t, db.IsManagedCodexTurnStateAlias(real))
+		for _, offset := range []int{8, 9, 25, size - 1} {
+			modified := append([]byte(nil), decoded...)
+			modified[offset] ^= 1
+			tampered := base64.URLEncoding.EncodeToString(modified)
+			require.True(t, ValidCodexTurnStateAlias(tampered))
+			require.False(t, db.IsManagedCodexTurnStateAlias(tampered))
+			_, found, err := db.ReadCodexTurnState(t.Context(), tampered)
+			require.NoError(t, err)
+			require.False(t, found)
+		}
+		foreign := &DB{turnStateKey: []byte(strings.Repeat("z", 32))}
+		require.False(t, foreign.IsManagedCodexTurnStateAlias(record.Alias))
+	}
+	// Even an unexpired row produced by the old source-key scheme is not reused.
+	encoded, err := json.Marshal(binding)
+	require.NoError(t, err)
+	mac := hmac.New(sha256.New, db.turnStateKey)
+	mac.Write(encoded)
+	mac.Write([]byte{0})
+	mac.Write([]byte("legacy-real"))
+	legacy := "c2ts_v1_" + strings.Repeat("A", 43)
+	_, err = db.conn.Exec(`INSERT INTO codex_turn_states(alias,source_key,binding,ciphertext,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6)`, legacy, hex.EncodeToString(mac.Sum(nil)), string(encoded), "unused", time.Now().Unix(), time.Now().Add(time.Hour).Unix())
+	require.NoError(t, err)
+	_, found, err := db.ReadCodexTurnState(t.Context(), legacy)
+	require.NoError(t, err)
+	require.False(t, found)
+	fresh, err := db.IssueCodexTurnState(t.Context(), binding, "legacy-real")
+	require.NoError(t, err)
+	require.True(t, db.IsManagedCodexTurnStateAlias(fresh.Alias))
+	require.Len(t, fresh.Alias, 292)
+}
 
 func TestTurnStateMappingPersistenceIsolationAndEncryption(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "turn-state.db")
@@ -92,7 +151,7 @@ func TestTurnStateMappingSharedInstancesConcurrentIssueAndExpiry(t *testing.T) {
 	fresh, err := second.IssueCodexTurnState(context.Background(), binding, "real")
 	require.NoError(t, err)
 	require.NotEqual(t, results[0].Alias, fresh.Alias)
-	for _, bad := range []string{"", "real", CodexTurnStateAliasPrefix + "bad"} {
+	for _, bad := range []string{"", "real", "c2ts_v1_" + strings.Repeat("A", 43)} {
 		_, found, err = first.ReadCodexTurnState(context.Background(), bad)
 		require.NoError(t, err)
 		require.False(t, found)

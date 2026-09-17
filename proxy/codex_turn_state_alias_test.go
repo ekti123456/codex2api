@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -147,8 +148,8 @@ func TestTurnStateAliasHTTPAndNativeWebsocketFailover(t *testing.T) {
 					require.Empty(t, got.header)
 					require.Empty(t, got.metadata)
 				}
-				require.NotContains(t, got.header, database.CodexTurnStateAliasPrefix)
-				require.NotContains(t, got.metadata, database.CodexTurnStateAliasPrefix)
+				require.False(t, h.db.IsManagedCodexTurnStateAlias(got.header))
+				require.False(t, h.db.IsManagedCodexTurnStateAlias(got.metadata))
 				if step == 0 {
 					aliasA = returned
 				}
@@ -219,12 +220,17 @@ func TestTurnStateAliasRestoresAndRejectsWrongOwnerTurnGeneration(t *testing.T) 
 	for _, tc := range []struct {
 		user        int64
 		turn, token string
-	}{{102, "turn-1", alias}, {101, "turn-2", alias}, {101, "turn-1", "old-real-state"}, {101, "turn-1", database.CodexTurnStateAliasPrefix + strings.Repeat("A", 43)}} {
+	}{{102, "turn-1", alias}, {101, "turn-2", alias}, {101, "turn-1", "old-real-state"}, {101, "turn-1", "c2ts_v1_" + strings.Repeat("A", 43)}} {
 		request, body, _ := aliasRequest(t, h, tc.user, tc.turn, tc.token, false)
 		body = normalizeTurnStateIngress(request, body)
 		require.Empty(t, request.Request.Header.Get(codexTurnStateHeader))
 		require.False(t, gjson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists())
 		require.Empty(t, codexTurnContinuationToken(request.Request.Header, body))
+		if tc.user != 101 || tc.turn != "turn-1" {
+			log, err := json.Marshal(turnStateDiagnostic(request.Request.Context()))
+			require.NoError(t, err)
+			require.NotContains(t, string(log), "real-state-a")
+		}
 	}
 	// Fresh owner lookup must discard the old alias before continuation pinning.
 	key := capacityAwareSessionAffinityKey(identity, 101)
@@ -240,7 +246,93 @@ func TestTurnStateAliasRestoresAndRejectsWrongOwnerTurnGeneration(t *testing.T) 
 	encoded, err := json.Marshal(turnStateDiagnostic(request.Request.Context()))
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), otherAlias)
-	require.NotContains(t, string(encoded), "old-state")
+	require.Contains(t, string(encoded), "old-state")
+}
+
+func TestTurnStateOfficialEnvelopeRestorationAndDiagnosticValues(t *testing.T) {
+	h := newWindowAuthorizationHandler(t)
+	a := &auth.Account{DBID: 71, AccountID: "a"}
+	h.store.AddAccount(a)
+	raw := bytes.Repeat([]byte{0x33}, 217)
+	copy(raw[:9], []byte{0x80, 0, 0, 0, 0, 0x6a, 0xab, 0xd3, 0x27})
+	real := base64.URLEncoding.EncodeToString(raw)
+	first, _, _ := aliasRequest(t, h, 101, "turn", "", false)
+	s := turnStateSessionFrom(first.Request.Context())
+	_, err := h.db.CommitSessionContinuity(t.Context(), s.rootKey, database.SessionContinuityRecord{AccountID: a.ID()})
+	require.NoError(t, err)
+	alias, err := s.issue(first.Request.Context(), a, real, "response_header")
+	require.NoError(t, err)
+	require.Len(t, alias, len(real))
+	require.NotEqual(t, real, alias)
+	for _, sent := range []string{alias, real, "c2ts_v1_" + strings.Repeat("A", 43)} {
+		request, body, _ := aliasRequest(t, h, 101, "turn", sent, false)
+		body = normalizeTurnStateIngress(request, body)
+		out, headers := PrepareCodexTurnStateOutbound(request.Request.Context(), a, body, request.Request.Header)
+		attachUpstreamTrace(request, h.store)
+		beginUpstreamTrace(request.Request.Context(), a, "", false)
+		observer := UpstreamTransportObserver(request.Request.Context())
+		observer.OutboundHTTPIdentity(headers)
+		observer.ResponsesInput(out, headers, "/responses")
+		usage := database.UsageLogInput{AccountID: a.ID()}
+		populateUpstreamTrace(request, &usage)
+		populateUsageRequestDiagnostics(request, &usage)
+		require.Equal(t, sent, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.received").String())
+		if sent == alias {
+			require.Equal(t, real, headers.Get(codexTurnStateHeader))
+			require.Equal(t, real, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.real").String())
+			require.Equal(t, real, gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.http.headers.X-Codex-Turn-State").String())
+			require.Equal(t, real, gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.body.client_metadata.x-codex-turn-state").String())
+		} else {
+			require.Empty(t, headers.Get(codexTurnStateHeader))
+			require.False(t, gjson.GetBytes(out, "client_metadata.x-codex-turn-state").Exists())
+			require.False(t, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.real").Exists())
+		}
+	}
+}
+
+func TestTurnStateProvenanceDistinguishesIdenticalEnvelopeShapes(t *testing.T) {
+	h, owner, target, key := failoverTestSetup(t, true)
+	record, _, err := h.db.SwitchSessionContinuityAccount(t.Context(), database.SessionAccountFailover{RootKey: hashRiskIdentity(key), ExpectedAccountID: owner.ID(), AccountID: target.ID(), ResetOutboundWindow: true, WindowThreadID: continuityTestThread})
+	require.NoError(t, err)
+	producer, _ := outboundEpochTestRequest(t, h, 0)
+	h.attachSessionOutboundEpoch(producer, hashRiskIdentity(key), record)
+	raw := bytes.Repeat([]byte{0x33}, 217)
+	raw[0] = 0x80
+	real := base64.URLEncoding.EncodeToString(raw)
+	alias, err := h.db.IssueCodexTurnState(t.Context(), database.CodexTurnStateBinding{Scope: "scope", AccountID: target.ID()}, real)
+	require.NoError(t, err)
+	// Epoch-only contexts and fully bound requests must both distinguish them.
+	for _, bound := range []bool{false, true} {
+		ctx := producer.Request.Context()
+		if bound {
+			ctx = context.WithValue(ctx, turnStateSessionKey{}, &turnStateSession{handler: h})
+		}
+		recordSessionTurnState(ctx, target, real)
+		recordSessionTurnState(ctx, target, alias.Alias)
+	}
+	epoch := outboundEpochFromContext(producer.Request.Context())
+	scope := sessionContextScope(epoch.owner, epoch.key, epoch.upstreamAccount, epoch.record)
+	known, cancel := h.sessionContextVerifierForScope(t.Context(), scope)
+	defer cancel()
+	require.True(t, known("turn_state", real))
+	require.False(t, known("turn_state", alias.Alias))
+}
+
+func TestTurnStateLargeDiagnosticRemainsBounded(t *testing.T) {
+	h := newWindowAuthorizationHandler(t)
+	c, _, _ := aliasRequest(t, h, 101, "turn", "", false)
+	s := turnStateSessionFrom(c.Request.Context())
+	for i := 0; i < 24; i++ {
+		s.log("restored", "request_header", strings.Repeat("alias", 1000), strings.Repeat("real", 1000), 71, 0, nil)
+	}
+	var usage database.UsageLogInput
+	populateUsageRequestDiagnostics(c, &usage)
+	require.NotEmpty(t, usage.RequestDiagnostics)
+	require.LessOrEqual(t, len(usage.RequestDiagnostics), database.MaxUsageRequestDiagnosticsBytes)
+	require.True(t, gjson.Get(usage.RequestDiagnostics, "truncated").Bool())
+	require.True(t, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.value_truncated").Bool())
+	require.Contains(t, usage.RequestDiagnostics, "[truncated]")
+	require.NotEmpty(t, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.real_hash").String())
 }
 
 func TestTurnStateAliasStreamMasksHeadersAndMultilineMetadata(t *testing.T) {
@@ -273,11 +365,11 @@ func TestTurnStateAliasStreamMasksHeadersAndMultilineMetadata(t *testing.T) {
 	logs, err := json.Marshal(turnStateDiagnostic(c.Request.Context()))
 	require.NoError(t, err)
 	require.Contains(t, string(logs), alias)
-	require.NotContains(t, string(logs), "secret-real")
+	require.Contains(t, string(logs), "secret-real")
 	var input database.UsageLogInput
 	populateUsageRequestDiagnostics(c, &input)
 	require.Contains(t, input.RequestDiagnostics, alias)
-	require.NotContains(t, input.RequestDiagnostics, "secret-real")
+	require.Contains(t, input.RequestDiagnostics, "secret-real")
 }
 
 func TestTurnStateAliasNoTokenAndFailedPersistence(t *testing.T) {
@@ -339,7 +431,7 @@ func TestTurnStateAliasSSEEscapesLongLinesAndUntouchedEvents(t *testing.T) {
 		masked, err := stream.maskFrame([]byte(frame))
 		require.NoError(t, err)
 		require.NotContains(t, string(masked), "secret")
-		require.Contains(t, string(masked), database.CodexTurnStateAliasPrefix)
+		require.Contains(t, string(masked), "gAAAA")
 	}
 	for _, frame := range []string{"data: {\"type\":\"response.metadata\",\"other\":1}\n\n", ": ping\n\n", "data: [DONE]\n\n"} {
 		actual, err := stream.maskFrame([]byte(frame))

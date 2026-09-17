@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { UsageLog } from '../types'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
 import { useToast } from '../hooks/useToast'
 import Modal from './Modal'
 import { Button } from './ui/button'
@@ -28,6 +28,31 @@ function DiagnosticFields({ value, includeMissing = false }: { value: unknown; i
       </div>
     })}
   </dl>
+}
+
+function TurnStateDiagnostics({ value, outbound }: { value: unknown; outbound: unknown }) {
+  const { t } = useTranslation()
+  const rows = turnStateDiagnosticRows(value, outbound)
+  if (!rows.length && !value) return null
+  return <section className="rounded-lg border p-3">
+    <h3 className="mb-3 text-sm font-semibold">X-Codex-Turn-State</h3>
+    <p className="mb-3 text-xs text-muted-foreground">{t('usage.diagnostics.turnStateHint')}</p>
+    {(['received', 'upstream', 'real', 'alias', 'hash'] as const).map((kind) => {
+      const entries = rows.filter((row) => row.kind === kind)
+      if (kind === 'hash' && !entries.length) return null
+      return <div key={kind} className="mt-3 space-y-2">
+        <h4 className="text-xs font-semibold">{t(`usage.diagnostics.turnStateValues.${kind}`)}</h4>
+        {entries.length ? entries.map((row, i) => <div key={i} className="rounded-md bg-muted/40 p-2">
+          <p className="mb-1 break-all font-mono text-[11px] text-muted-foreground">{[row.action, row.carrier].filter(Boolean).join(' · ')}</p>
+          <code className="block break-all whitespace-pre-wrap text-xs select-text">{row.value}</code>
+        </div>) : <p className="text-xs text-muted-foreground">{t('usage.diagnostics.missing')}</p>}
+      </div>
+    })}
+    {value != null && <details className="mt-3">
+      <summary className="cursor-pointer text-xs text-muted-foreground">{t('usage.diagnostics.turnStateEvents')}</summary>
+      <pre className="mt-2 max-h-80 overflow-auto rounded-md bg-muted/40 p-2 text-xs select-text" tabIndex={0}>{JSON.stringify(value, null, 2)}</pre>
+    </details>}
+  </section>
 }
 
 export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLog | null; onClose: () => void }) {
@@ -67,7 +92,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
     ['outbound', outbound.snapshot],
     ['outboundDiagnostics', outbound.local],
     ['resolved', data.resolved],
-    ['continuity', { ...diagnosticRecord(data.session_continuity), account_failover: data.account_failover ?? diagnosticRecord(data.session_continuity).account_failover, turn_state: data.turn_state }],
+    ['continuity', { ...diagnosticRecord(data.session_continuity), account_failover: data.account_failover ?? diagnosticRecord(data.session_continuity).account_failover }],
     ['audit', data.audit],
     ['dispatch', data.dispatch],
     ['windows', { user_window: data.user_window, account_window: data.account_window, user_window_key_hash: data.user_window_key_hash }],
@@ -96,6 +121,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
     </div> : !data ? <p className="text-sm text-muted-foreground">{t('usage.diagnostics.unavailable')}</p> : <div className="space-y-4">
       {data.classification_changed === true && <p role="alert" className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">{t('usage.diagnostics.changed')}</p>}
       {data.truncated === true && <p className="text-xs text-amber-600">{t('usage.diagnostics.truncated')}</p>}
+      <TurnStateDiagnostics value={data.turn_state} outbound={outboundIdentity} />
       {sections.map(([title, value]) => <section key={title} className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{title === 'continuity' ? t('sessionContinuity.title') : t(`usage.diagnostics.sections.${title}`)}</h3>
         {title === 'client' && <p className="mb-3 text-xs leading-5 text-muted-foreground">{t('usage.diagnostics.clientHint')}</p>}

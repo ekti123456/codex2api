@@ -260,7 +260,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 			} else {
 				require.Empty(test, state)
 			}
-			require.NotContains(test, string(sent.body), database.CodexTurnStateAliasPrefix)
+			require.False(test, db.IsManagedCodexTurnStateAlias(state))
 			if keepInput && number >= 2 {
 				require.JSONEq(test, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(sent.body, "input").Raw)
 			}

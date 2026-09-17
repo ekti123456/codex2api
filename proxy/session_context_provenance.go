@@ -108,7 +108,16 @@ func recordSessionContextTokens(ctx context.Context, account *auth.Account, coll
 }
 
 func recordSessionTurnState(ctx context.Context, account *auth.Account, token string) {
-	if token != "" && !strings.HasPrefix(token, database.CodexTurnStateAliasPrefix) {
+	var db *database.DB
+	if s := turnStateSessionFrom(ctx); s != nil && s.handler != nil {
+		db = s.handler.db
+	} else if epoch := outboundEpochFromContext(ctx); epoch != nil && epoch.handler != nil {
+		db = epoch.handler.db
+	}
+	if db.IsManagedCodexTurnStateAlias(token) {
+		return
+	}
+	if token != "" && !strings.HasPrefix(token, "c2ts_v1_") {
 		recordSessionContextTokens(ctx, account, func(record func(string, string)) { record("turn_state", token) })
 	}
 }

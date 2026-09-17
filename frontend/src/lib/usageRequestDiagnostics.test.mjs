@@ -1,6 +1,34 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
+import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
+
+test('turn-state comparison separates ingress, mapping, issued alias and actual wire values', () => {
+  const alias = 'gAAAA' + 'A'.repeat(285) + '=='
+  const real = 'gAAAA' + 'B'.repeat(285) + '=='
+  const state = { events: [
+    { action: 'restored', carrier: 'request_header', received: alias, alias, real, real_hash: 'hash:real' },
+    { action: 'issued', carrier: 'response_metadata', alias, real },
+  ] }
+  const outbound = { http: { headers: { 'X-Codex-Turn-State': real } }, body: { client_metadata: { 'x-codex-turn-state': real } }, ws_handshake: { headers: { 'X-Codex-Turn-State': 'stale-handshake' } } }
+  const rows = turnStateDiagnosticRows(state, outbound)
+  assert.equal(rows.filter(row => row.kind === 'received').length, 1)
+  assert.equal(rows.find(row => row.kind === 'received').value, alias)
+  assert.equal(rows.find(row => row.kind === 'alias').value, alias)
+  assert.equal(rows.filter(row => row.kind === 'upstream').length, 2)
+  assert.ok(rows.filter(row => row.kind === 'upstream').every(row => row.value === real))
+  assert.equal(rows.some(row => row.value === 'stale-handshake' || row.kind === 'hash'), false)
+  assert.equal(turnStateDiagnosticRows(state, undefined).some(row => row.kind === 'upstream'), false)
+  assert.equal(JSON.parse(JSON.stringify(rows)).find(row => row.kind === 'alias').value, alias)
+})
+
+test('turn-state historical and cleared values do not fabricate mapping or transmission', () => {
+  assert.deepEqual(turnStateDiagnosticRows(undefined, undefined), [])
+  assert.deepEqual(turnStateDiagnosticRows({ events: [{ action: 'cleared_unmanaged', carrier: 'request_header', real_hash: 'old-hash' }] }, null), [
+    { kind: 'hash', value: 'old-hash', carrier: 'request_header', action: 'cleared_unmanaged' },
+  ])
+  const rows = turnStateDiagnosticRows({ events: [{ action: 'cleared_unmanaged', carrier: 'request_header', received: 'unmanaged', real_hash: 'hash' }] }, {})
+  assert.deepEqual(rows.map(row => row.kind), ['received'])
+})
 
 test('outbound snapshots exclude gateway mapping and consistency diagnostics without mutating exports', () => {
   const mapping = Object.freeze({ changes: [{ original: 'original-turn', outbound: 'mapped-turn' }] })

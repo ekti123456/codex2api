@@ -108,7 +108,11 @@ func outboundMetadataJSON(raw gjson.Result) map[string]any {
 	for _, field := range []string{"x-codex-turn-state", "x-openai-memgen-request"} {
 		if value := raw.Get(field); value.Exists() {
 			if field == "x-codex-turn-state" {
-				values[field] = "hash:" + hashRiskIdentity(value.Raw)
+				if value.Type == gjson.String {
+					values[field] = turnStateDiagnosticValue(value.String(), nil)
+				} else {
+					values[field] = "[invalid_type]"
+				}
 			} else if value.Type == gjson.String {
 				values[field] = diagnosticLabel(value.String())
 			} else if value.Type == gjson.True || value.Type == gjson.False {
@@ -127,6 +131,7 @@ func CaptureOutboundIdentityHeaders(headers http.Header) *OutboundHeaderDiagnost
 		"Session-Id", "Session_id", "Thread-Id", "Conversation-Id", "Conversation_id",
 		"X-Client-Request-Id", "X-Request-Id", "X-Codex-Window-Id", "X-Codex-Parent-Thread-Id",
 		"X-Codex-Forked-From-Thread-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "Chatgpt-Account-Id",
+		"X-Codex-Turn-State",
 	} {
 		values := headers.Values(name)
 		if len(values) == 0 {
@@ -137,6 +142,8 @@ func CaptureOutboundIdentityHeaders(headers http.Header) *OutboundHeaderDiagnost
 			diagnostic.Headers[name] = diagnosticClientText(values[0])
 		case "X-OpenAI-Subagent":
 			diagnostic.Headers[name] = diagnosticLabel(values[0])
+		case "X-Codex-Turn-State":
+			diagnostic.Headers[name] = turnStateDiagnosticValue(values[0], nil)
 		default:
 			diagnostic.Headers[name] = diagnosticIdentifier(values[0])
 		}

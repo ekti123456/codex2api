@@ -520,6 +520,21 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		snapshot.Truncated = true
 		payload, err = json.Marshal(snapshot)
 	}
+	if len(payload) > database.MaxUsageRequestDiagnosticsBytes && snapshot.TurnState != nil {
+		// Retain normal tokens in full. Bound unusually large comparison values
+		// before they can cause the entire diagnostic to disappear.
+		for i := range snapshot.TurnState.Events {
+			event := &snapshot.TurnState.Events[i]
+			for _, value := range []*string{&event.Received, &event.Real, &event.Alias} {
+				if len(*value) > 512 {
+					*value = strings.ToValidUTF8((*value)[:512], "") + "…[truncated]"
+					event.ValueTruncated = true
+				}
+			}
+		}
+		snapshot.Truncated = true
+		payload, err = json.Marshal(snapshot)
+	}
 	if err == nil && len(payload) <= database.MaxUsageRequestDiagnosticsBytes {
 		input.RequestDiagnostics = string(payload)
 	}
