@@ -183,6 +183,13 @@ func normalizeTurnStateIngress(c *gin.Context, body []byte) []byte {
 		deleteTurnStateHeader(headers)
 	}
 	body, headers = rewriteRequestTurnState(body, headers, func(value, carrier string) string { return s.incoming[strings.TrimSpace(value)].Real })
+	// HTTP clients echo turn state in a request header. After restoring its
+	// scoped alias, project it into this request's metadata before identity
+	// rewriting changes the metadata snapshot and drops header-only values.
+	// Never copy a WebSocket upgrade header into later response.create frames.
+	if real := headers.Get(codexTurnStateHeader); real != "" && gjson.GetBytes(body, "client_metadata").IsObject() && !gjson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists() {
+		body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", real)
+	}
 	c.Request.Header = headers
 	return body
 }

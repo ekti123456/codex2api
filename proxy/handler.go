@@ -5586,6 +5586,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					clientGone = true
 				}
 				parsed := gjson.ParseBytes(data)
+				stageTurnStateMetadataHeader(c.Request.Context(), resp.Header, parsed)
 				eventType := normalizedUpstreamSSEEventType(sseEvent, data)
 				if eventType == "error" && isUpstreamPromptSafetyRefusal(data) {
 					h.recordUpstreamPromptSafety(c, c.Request.URL.Path, c.GetString("x-model"), data)
@@ -5697,6 +5698,11 @@ func (h *Handler) Responses(c *gin.Context) {
 					// 管理员显式接受上述代价；生命周期事件（created/in_progress）不受开关影响。
 					shouldDefer := shouldDeferPreContentSSEEvent(eventType, contentTokenSeen, gotTerminal, preflightPassthrough) ||
 						(!contentTokenSeen && !visibleBody && !gotTerminal && isRetryableUpstreamErrorFrame(eventType, data, continuousRetryPolicy))
+					if !shouldDefer && streamAttempt == nil && !c.Writer.Written() {
+						// Metadata was read after the initial headers were staged.
+						// Publish its alias before the first real downstream write.
+						relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
+					}
 					wrote, err := writeDeferredSSEData(streamWriter, &pendingFirstTokenEvents, data, shouldDefer)
 					if isResponsesTerminalEvent(eventType) || eventType == "error" {
 						disposition := "accepted"
@@ -5877,6 +5883,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					h.recordResponseContextProvenance(c, account, data)
 				}
 				parsed := gjson.ParseBytes(data)
+				stageTurnStateMetadataHeader(c.Request.Context(), resp.Header, parsed)
 				eventType := normalizedUpstreamSSEEventType(sseEvent, data)
 				if eventType == "error" && isUpstreamPromptSafetyRefusal(data) {
 					h.recordUpstreamPromptSafety(c, c.Request.URL.Path, c.GetString("x-model"), data)
@@ -6140,6 +6147,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			} else if len(terminalFailurePayload) > 0 {
 				writeResponseFailedHTTPError(c, logStatusCode, terminalFailurePayload, outcome.failureMessage)
 			} else if responseJSON != nil {
+				relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
 				c.Header("Content-Type", "application/json")
 				c.Status(http.StatusOK)
 				if err := writeAll(c.Writer, responseJSON); err == nil {

@@ -98,7 +98,7 @@ func autoCompactOverflowEnabled(c *gin.Context) bool {
 // response.metadata（HTTP 传输路径），均不携带模型产出。
 func isCodexPreflightSSEEvent(eventType string) bool {
 	eventType = strings.TrimSpace(eventType)
-	if eventType == "response.metadata" {
+	if eventType == "response.metadata" || eventType == "responsesapi.response.metadata" {
 		return true
 	}
 	return strings.HasPrefix(eventType, "codex.")

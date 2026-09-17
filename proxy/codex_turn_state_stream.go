@@ -62,6 +62,45 @@ func maskTurnStateResponse(ctx context.Context, account *auth.Account, response 
 	return nil
 }
 
+// stageTurnStateMetadataHeader promotes the first masked metadata token into
+// this attempt's response headers. Codex's HTTP client reads turn state from
+// HTTP headers, not from SSE metadata. Keep this on the handler goroutine:
+// body reads can run in a separate goroutine while retry heartbeats are sent.
+// The downstream header is published only when this attempt is actually used.
+func stageTurnStateMetadataHeader(ctx context.Context, headers http.Header, event gjson.Result) {
+	if headers == nil || headers.Get(codexTurnStateHeader) != "" {
+		return
+	}
+	switch strings.TrimSpace(event.Get("type").String()) {
+	case "response.metadata", "codex.response.metadata", "responsesapi.response.metadata":
+	default:
+		return
+	}
+	s := turnStateSessionFrom(ctx)
+	if s == nil || s.handler == nil || s.handler.db == nil {
+		return
+	}
+	event.Get("headers").ForEach(func(key, value gjson.Result) bool {
+		if !strings.EqualFold(key.String(), codexTurnStateHeader) {
+			return true
+		}
+		if value.IsArray() {
+			values := value.Array()
+			if len(values) != 1 {
+				return true
+			}
+			value = values[0]
+		}
+		// Only the alias already issued by the masking layer may be promoted.
+		// Never expose raw upstream state through this new response-header path.
+		if value.Type == gjson.String && s.handler.db.IsManagedCodexTurnStateAlias(value.String()) {
+			headers.Set(codexTurnStateHeader, value.String())
+			return false
+		}
+		return true
+	})
+}
+
 // Buffer one SSE event, not the response. Parse response.metadata and its
 // transport-prefixed variants; keep other events byte-for-byte, including
 // comments, ids and multiline data fields.

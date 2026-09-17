@@ -46,10 +46,12 @@ func TestWebsocketSessionQuotaRetry(t *testing.T) {
 }
 
 func TestTurnStatePrefixedMetadataWebsocketFailover(t *testing.T) {
-	for _, native := range []bool{false, true} {
-		t.Run(fmt.Sprintf("native=%v", native), func(t *testing.T) {
-			runWebsocketToolFailoverScenario(t, native, false, false, "codex.response.metadata")
-		})
+	for _, kind := range []string{"codex.response.metadata", "responsesapi.response.metadata"} {
+		for _, native := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/native=%v", kind, native), func(t *testing.T) {
+				runWebsocketToolFailoverScenario(t, native, false, false, kind)
+			})
+		}
 	}
 }
 
@@ -201,7 +203,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 			require.NoError(test, err)
 		}
 		body = addSessionWireTools(test, body)
-		if clientAlias != "" {
+		if clientAlias != "" && native {
 			body, err = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", clientAlias)
 			require.NoError(test, err)
 		}
@@ -231,6 +233,10 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 			request, _ := gin.CreateTestContext(recorder)
 			request.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 			request.Request.Header.Set("Authorization", "Bearer test-user-key")
+			request.Request.Header.Set("X-Codex-Turn-Metadata", gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").Raw)
+			if clientAlias != "" {
+				request.Request.Header.Set("X-Codex-Turn-State", clientAlias)
+			}
 			ctx, cancel := context.WithTimeout(request.Request.Context(), 5*time.Second)
 			request.Request = request.Request.WithContext(ctx)
 			handler.Responses(request)
@@ -239,12 +245,9 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 			require.Contains(test, recorder.Body.String(), "response.completed")
 			require.Contains(test, recorder.Body.String(), "exec_command")
 			require.NotContains(test, recorder.Body.String(), "real-turn-state-")
-			for _, line := range strings.Split(recorder.Body.String(), "\n") {
-				payload := strings.TrimPrefix(line, "data: ")
-				if gjson.Get(payload, "type").String() == metadataType {
-					clientAlias = gjson.Get(payload, "headers.x-codex-turn-state").String()
-				}
-			}
+			// The Codex HTTP client saves the actual response header, not SSE
+			// metadata. Result() snapshots headers at the first downstream write.
+			clientAlias = recorder.Result().Header.Get("X-Codex-Turn-State")
 		}
 		require.True(test, database.ValidCodexTurnStateAlias(clientAlias))
 		if number == 1 || number == 3 {
