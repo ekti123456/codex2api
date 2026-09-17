@@ -2577,11 +2577,11 @@
       "audit_asc": "Audit score: low to high"
     },
     "creationCooldown": {
-      "title": "Adaptive window creation interval",
+      "title": "Adaptive user window policy",
       "off": "Off",
       "observe": "Observe only",
       "enforce": "Enforce",
-      "description": "Independent of the window count limit. Applies only to verified NewAPI users on accounts with session capacity enabled. Frequent creation and short recent usage trigger a minimum interval for new root windows.",
+      "description": "Match average usage duration to a tier for creation spacing and ordinary user window limits. Requires a verified NewAPI identity; request admission also requires account session capacity. Off disables changes, observe only logs them, and enforce applies them.",
       "frequencyWindow": "Frequency lookback (minutes)",
       "freeCreations": "Initial creations allowed in lookback",
       "historyDays": "Usage history (days)",
@@ -2591,6 +2591,8 @@
       "tierHint": "Select the highest satisfied inclusive average-duration lower bound. Zero interval adds no cooldown. Keep a zero-bound tier and unique lower bounds.",
       "lowerBound": "Average duration ≥ (minutes)",
       "interval": "Minimum creation interval (minutes)",
+      "windowLimitDelta": "User window count adjustment",
+      "windowLimitHint": "Default 0 leaves the limit unchanged; 1 adds one and -1 subtracts one. Requires window count limits and enough samples, without a creation-frequency prerequisite. The effective limit stays within 1–100000. Custom user limits are the base; unlimited users are exempt. Existing windows and expansion allowances are unchanged.",
       "addTier": "Add tier",
       "removeTier": "Remove tier",
       "reset": "Restore default parameters",

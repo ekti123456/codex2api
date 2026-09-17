@@ -37,7 +37,7 @@ export default function SessionCreationCooldownControls({ value, onChange }: {
     </div>
     <p className="text-xs text-muted-foreground">{label('tierHint')}</p>
     <div className="space-y-2">
-      {value.tiers.map((tier, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+      {value.tiers.map((tier, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 rounded-md border border-border/60 p-2">
         <label className="space-y-1 text-xs text-muted-foreground"><span>{label('lowerBound')}</span>
           <DraftNumberInput aria-label={`${label('lowerBound')} ${index + 1}`} min={0} max={43200} value={tier.min_average_seconds / 60}
             onValueChange={(next) => update({ tiers: value.tiers.map((item, position) => position === index ? { ...item, min_average_seconds: next * 60 } : item) })} />
@@ -48,12 +48,17 @@ export default function SessionCreationCooldownControls({ value, onChange }: {
         </label>
         <Button type="button" variant="ghost" size="icon" aria-label={label('removeTier')} disabled={value.tiers.length <= 1}
           onClick={() => update({ tiers: value.tiers.filter((_, position) => position !== index) })}><Trash2 className="size-4" /></Button>
+        <label className="col-span-2 space-y-1 text-xs text-muted-foreground"><span>{label('windowLimitDelta')}</span>
+          <DraftNumberInput aria-label={`${label('windowLimitDelta')} ${index + 1}`} min={-100000} max={100000} step={1} value={tier.window_limit_delta ?? 0}
+            onValueChange={(next) => update({ tiers: value.tiers.map((item, position) => position === index ? { ...item, window_limit_delta: next } : item) })} />
+        </label>
       </div>)}
     </div>
+    <p className="text-xs leading-relaxed text-muted-foreground">{label('windowLimitHint')}</p>
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="outline" size="sm" disabled={value.tiers.length >= 12 || value.tiers.some((tier) => tier.min_average_seconds >= 2592000)} onClick={() => {
         const nextBound = value.tiers.length ? Math.max(...value.tiers.map((tier) => tier.min_average_seconds)) + 60 : 0
-        update({ tiers: [...value.tiers, { min_average_seconds: nextBound, interval_seconds: 0 }] })
+        update({ tiers: [...value.tiers, { min_average_seconds: nextBound, interval_seconds: 0, window_limit_delta: 0 }] })
       }}><Plus className="size-3.5" />{label('addTier')}</Button>
       <Button type="button" variant="outline" size="sm" onClick={() => onChange({ ...defaultSessionCreationCooldown(), mode: value.mode })}>
         <RotateCcw className="size-3.5" />{label('reset')}</Button>

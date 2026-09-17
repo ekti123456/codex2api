@@ -392,6 +392,11 @@ func (h *Handler) checkPromptSessionCreationLimitWithAccountAdmission(c *gin.Con
 	}
 	usageRequestDiagnosticState(c).UserWindowKeyHash = status.SessionHash
 	now := time.Now()
+	if status.Enabled && cooldownEnabled {
+		// Query outside the global window-count lock; the cooldown reservation
+		// reuses this request's sample snapshot instead of querying twice.
+		status.Limit = h.adjustedUserWindowLimit(c, policyContext, cooldown, status.Limit, now)
+	}
 	expiresAt := now.Add(time.Duration(status.WindowSeconds) * time.Second)
 	if grant != nil {
 		expiresAt = grant.Grant.ExpiresAt

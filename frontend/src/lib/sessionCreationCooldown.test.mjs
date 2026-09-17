@@ -23,8 +23,19 @@ test('creation cooldown controls stay separate from quantity switch and have tra
   assert.match(page, /SessionCreationCooldownControls value=\{config\.risk\.session_creation_cooldown\}/)
   for (const locale of ['zh', 'zh-TW', 'en']) {
     const content = JSON.parse(readFileSync(new URL(`../locales/${locale}.json`, import.meta.url), 'utf8'))
-    for (const label of ['title', 'off', 'observe', 'enforce', 'frequencyWindow', 'freeCreations', 'historyDays', 'minSamples', 'maxSamples', 'maxInterval', 'lowerBound', 'interval', 'addTier', 'reset']) {
+    for (const label of ['title', 'off', 'observe', 'enforce', 'frequencyWindow', 'freeCreations', 'historyDays', 'minSamples', 'maxSamples', 'maxInterval', 'lowerBound', 'interval', 'windowLimitDelta', 'windowLimitHint', 'addTier', 'reset']) {
       assert.ok(content.promptFilter.creationCooldown[label], `${locale}: ${label}`)
     }
+  }
+})
+
+test('window adjustments default to zero and retain signed values across editing and JSON round trips', () => {
+  assert.ok(defaultSessionCreationCooldown().tiers.every((tier) => tier.window_limit_delta === 0))
+  const legacy = parseSessionCreationCooldown({ tiers: [{ min_average_seconds: 0, interval_seconds: 300 }] })
+  assert.equal(legacy.tiers[0].window_limit_delta, 0)
+  for (const adjustment of [-1, 0, 1]) {
+    const config = parseSessionCreationCooldown({ tiers: [{ min_average_seconds: 0, interval_seconds: 300, window_limit_delta: adjustment }] })
+    assert.equal(parseSessionCreationCooldown(JSON.parse(JSON.stringify(config))).tiers[0].window_limit_delta, adjustment)
+    assert.equal(config.tiers[0].interval_seconds, 300)
   }
 })

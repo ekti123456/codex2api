@@ -114,7 +114,7 @@ func (handler *Handler) userWindowControlLimits(request *gin.Context, identity v
 			limit, seconds = override.Limit, override.WindowSeconds
 		}
 	}
-	return limit, seconds
+	return handler.adjustedUserWindowLimit(request, identity, risk.SessionCreationCooldown, limit, time.Now()), seconds
 }
 
 func (handler *Handler) userWindowControlSnapshot(subject string, now time.Time) map[string]personalWindow {

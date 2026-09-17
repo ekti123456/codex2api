@@ -2,12 +2,13 @@ package promptfilter
 
 import (
 	"fmt"
-	"sort"
+	"math"
 )
 
 type SessionCreationCooldownTier struct {
 	MinAverageSeconds int `json:"min_average_seconds"`
 	IntervalSeconds   int `json:"interval_seconds"`
+	WindowLimitDelta  int `json:"window_limit_delta"`
 }
 
 type SessionCreationCooldownConfig struct {
@@ -25,7 +26,7 @@ func DefaultSessionCreationCooldownConfig() SessionCreationCooldownConfig {
 	return SessionCreationCooldownConfig{
 		Mode: "off", FrequencyWindowSeconds: 1800, FreeCreations: 2,
 		HistoryDays: 7, MinSamples: 10, MaxSamples: 20, MaxIntervalSeconds: 900,
-		Tiers: []SessionCreationCooldownTier{{900, 0}, {600, 300}, {300, 600}, {0, 900}},
+		Tiers: []SessionCreationCooldownTier{{MinAverageSeconds: 900}, {MinAverageSeconds: 600, IntervalSeconds: 300}, {MinAverageSeconds: 300, IntervalSeconds: 600}, {IntervalSeconds: 900}},
 	}
 }
 
@@ -48,6 +49,9 @@ func (cfg SessionCreationCooldownConfig) Validate() error {
 			return fmt.Errorf("session_creation_cooldown: tier lower bounds must be unique (0..2592000 seconds), intervals 0..86400 seconds")
 		}
 		seen[tier.MinAverageSeconds] = true
+		if tier.WindowLimitDelta < -100000 || tier.WindowLimitDelta > 100000 {
+			return fmt.Errorf("session_creation_cooldown: window limit adjustment must be -100000..100000")
+		}
 	}
 	if !seen[0] {
 		return fmt.Errorf("session_creation_cooldown: a tier starting at zero is required")
@@ -56,15 +60,44 @@ func (cfg SessionCreationCooldownConfig) Validate() error {
 }
 
 func (cfg SessionCreationCooldownConfig) Interval(averageSeconds float64, samples int) int {
-	if cfg.Mode == "off" || samples < cfg.MinSamples || cfg.Validate() != nil {
+	tier, found := cfg.MatchTier(averageSeconds, samples)
+	if !found {
 		return 0
 	}
-	tiers := append([]SessionCreationCooldownTier(nil), cfg.Tiers...)
-	sort.Slice(tiers, func(left, right int) bool { return tiers[left].MinAverageSeconds > tiers[right].MinAverageSeconds })
-	for _, tier := range tiers {
-		if averageSeconds >= float64(tier.MinAverageSeconds) {
-			return min(tier.IntervalSeconds, cfg.MaxIntervalSeconds)
+	return min(tier.IntervalSeconds, cfg.MaxIntervalSeconds)
+}
+
+func (cfg SessionCreationCooldownConfig) MatchTier(averageSeconds float64, samples int) (SessionCreationCooldownTier, bool) {
+	if cfg.Mode == "off" || samples < cfg.MinSamples || math.IsNaN(averageSeconds) || math.IsInf(averageSeconds, 0) || cfg.Validate() != nil {
+		return SessionCreationCooldownTier{}, false
+	}
+	var selected SessionCreationCooldownTier
+	found := false
+	for _, tier := range cfg.Tiers {
+		if averageSeconds >= float64(tier.MinAverageSeconds) && (!found || tier.MinAverageSeconds > selected.MinAverageSeconds) {
+			selected, found = tier, true
 		}
 	}
-	return 0
+	return selected, found
+}
+
+func (cfg SessionCreationCooldownConfig) HasWindowLimitAdjustment() bool {
+	for _, tier := range cfg.Tiers {
+		if tier.WindowLimitDelta != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg SessionCreationCooldownConfig) AdjustedWindowLimit(base int, averageSeconds float64, samples int) int {
+	if base <= 0 || cfg.Mode != "enforce" {
+		return base
+	}
+	tier, found := cfg.MatchTier(averageSeconds, samples)
+	if !found || tier.WindowLimitDelta == 0 {
+		return base
+	}
+	// Zero means unlimited in admission code, never turn a reduction into an exemption.
+	return min(100000, max(1, base+tier.WindowLimitDelta))
 }

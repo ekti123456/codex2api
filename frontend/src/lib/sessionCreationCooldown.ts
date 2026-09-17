@@ -1,6 +1,7 @@
 export interface SessionCreationCooldownTier {
   min_average_seconds: number
   interval_seconds: number
+  window_limit_delta: number
 }
 
 export interface SessionCreationCooldownConfig {
@@ -19,10 +20,10 @@ export function defaultSessionCreationCooldown(): SessionCreationCooldownConfig 
     mode: 'off', frequency_window_seconds: 1800, free_creations: 2,
     history_days: 7, min_samples: 10, max_samples: 20, max_interval_seconds: 900,
     tiers: [
-      { min_average_seconds: 900, interval_seconds: 0 },
-      { min_average_seconds: 600, interval_seconds: 300 },
-      { min_average_seconds: 300, interval_seconds: 600 },
-      { min_average_seconds: 0, interval_seconds: 900 },
+      { min_average_seconds: 900, interval_seconds: 0, window_limit_delta: 0 },
+      { min_average_seconds: 600, interval_seconds: 300, window_limit_delta: 0 },
+      { min_average_seconds: 300, interval_seconds: 600, window_limit_delta: 0 },
+      { min_average_seconds: 0, interval_seconds: 900, window_limit_delta: 0 },
     ],
   }
 }
@@ -39,6 +40,7 @@ export function parseSessionCreationCooldown(value: unknown): SessionCreationCoo
   if (Array.isArray(raw.tiers)) {
     config.tiers = raw.tiers.filter((tier): tier is SessionCreationCooldownTier =>
       tier && typeof tier === 'object' && Number.isFinite(tier.min_average_seconds) && Number.isFinite(tier.interval_seconds))
+      .map((tier) => ({ ...tier, window_limit_delta: Number.isInteger(tier.window_limit_delta) ? tier.window_limit_delta : 0 }))
   }
   return config
 }

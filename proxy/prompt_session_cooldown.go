@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
 	"github.com/codex2api/security/promptfilter"
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,15 @@ import (
 )
 
 const sessionCooldownReceiptKey = "session_creation_cooldown_receipt"
+const sessionCooldownAverageKey = "session_creation_cooldown_average"
+
+type sessionCooldownAverageSnapshot struct {
+	Platform, UserID        string
+	HistoryDays, MaxSamples int
+	Average                 float64
+	Samples                 int
+	Err                     error
+}
 
 type sessionCooldownReceipt struct {
 	Subject      string
@@ -75,6 +85,36 @@ func sessionCooldownRecovery(state *database.SessionCooldownState, cfg promptfil
 }
 
 func (h *Handler) sessionCooldownAverage(c *gin.Context, identity verifiedNewAPIPolicyContext, cfg promptfilter.SessionCreationCooldownConfig, now time.Time) (float64, int, error) {
+	if value, found := c.Get(sessionCooldownAverageKey); found {
+		if cached, ok := value.(sessionCooldownAverageSnapshot); ok && cached.Platform == identity.Platform && cached.UserID == identity.Identity.UserID && cached.HistoryDays == cfg.HistoryDays && cached.MaxSamples == cfg.MaxSamples {
+			return cached.Average, cached.Samples, cached.Err
+		}
+	}
+	average, samples, err := h.querySessionCooldownAverage(c, identity, cfg, now)
+	c.Set(sessionCooldownAverageKey, sessionCooldownAverageSnapshot{identity.Platform, identity.Identity.UserID, cfg.HistoryDays, cfg.MaxSamples, average, samples, err})
+	return average, samples, err
+}
+
+func (h *Handler) adjustedUserWindowLimit(c *gin.Context, identity verifiedNewAPIPolicyContext, cfg promptfilter.SessionCreationCooldownConfig, limit int, now time.Time) int {
+	if limit <= 0 || cfg.Mode == "off" || !cfg.HasWindowLimitAdjustment() || cfg.Validate() != nil || h.db == nil || h.store == nil || !identity.MetaVerified || identity.Identity.UserID == "" {
+		return limit
+	}
+	average, samples, err := h.sessionCooldownAverage(c, identity, cfg, now)
+	if err != nil {
+		log.Printf("event=session_window_adjustment_unavailable subject=%s err=%v", cache.PromptSessionLimitSubject(identity.Platform, identity.Identity.UserID), err)
+		return limit
+	}
+	if cfg.Mode == "observe" {
+		preview := cfg
+		preview.Mode = "enforce"
+		if adjusted := preview.AdjustedWindowLimit(limit, average, samples); adjusted != limit {
+			log.Printf("event=session_window_adjustment mode=observe subject=%s average_seconds=%.2f samples=%d base_limit=%d proposed_limit=%d", cache.PromptSessionLimitSubject(identity.Platform, identity.Identity.UserID), average, samples, limit, adjusted)
+		}
+	}
+	return cfg.AdjustedWindowLimit(limit, average, samples)
+}
+
+func (h *Handler) querySessionCooldownAverage(c *gin.Context, identity verifiedNewAPIPolicyContext, cfg promptfilter.SessionCreationCooldownConfig, now time.Time) (float64, int, error) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
 	defer cancel()
 	samples, err := h.db.SessionCooldownSamples(ctx, identity.Platform, identity.Identity.UserID, now.Add(-time.Duration(cfg.HistoryDays)*24*time.Hour), now, cfg.MaxSamples+1000)
@@ -211,6 +251,10 @@ func (h *Handler) maintainSessionCooldownLease(receipt *sessionCooldownReceipt) 
 }
 
 func (h *Handler) finishSessionCooldown(c *gin.Context) {
+	// A native WebSocket reuses the Gin context across frames.
+	if c != nil {
+		c.Set(sessionCooldownAverageKey, nil)
+	}
 	receipt := cooldownReceipt(c)
 	if receipt == nil {
 		return
