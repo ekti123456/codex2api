@@ -1,9 +1,15 @@
 {
   "sessionErrors": {
+    "filterHint": "條件同時匹配最近一次已記錄錯誤，次數為累計次數，不是自動鎖定的連續次數。",
+    "autoLocked": "自動鎖定",
+    "autoLockTitle": "連續 500 自動鎖定會話",
+    "autoLockThreshold": "連續錯誤次數",
+    "autoLockSaved": "設定已儲存",
+    "autoLockHint": "預設關閉，預設連續 3 次。API 中轉請求不參與自動鎖定。依同一會話最終完成的請求結果計數，非 500 結果歸零，內部重試不重複計數。儲存設定會重設未觸發的計數；關閉開關不會解除既有鎖定。自動鎖定後可手動解鎖。",
     "lockedFilter": "已鎖定",
     "lineageInvalid": "衍生關係無效",
-    "title": "會話過載統計", "description": "僅統計最終 500 + server_is_overloaded，依使用者與主會話 ID 彙總。其他 500 不計入；手動鎖定後禁止該會話及已知衍生鏈路繼續呼叫。",
-    "views": "會話統計檢視", "statistics": "過載 500", "blacklist": "會話黑名單", "summary": "{{groups}} 個會話 · 累計 {{count}} 次過載 500",
+    "title": "會話過載統計", "description": "依使用者與主會話 ID 彙總最終過載 500；開啟自動鎖定後也記錄其他最終 500。鎖定會話及其已知衍生鏈路會停止後續呼叫。",
+    "views": "會話統計檢視", "statistics": "500 錯誤", "blacklist": "會話黑名單", "summary": "{{groups}} 個會話 · 累計 {{count}} 次 500 錯誤",
     "userSearch": "使用者 ID（精確比對）", "sessionSearch": "主會話 ID（精確比對）",
     "retention": "僅收集升級後的請求。每個會話累計計數，非時間視窗錯誤率；無新錯誤的紀錄保留 7 天、最多 10 萬筆。黑名單及已記錄的 fork 關係獨立保留，不隨統計清理。",
     "selected": "已選擇 {{count}} 個會話", "lockSelected": "一鍵鎖定所選會話", "unlockSelected": "解鎖所選會話", "selectPage": "選擇本頁可操作會話", "selectSession": "選擇使用者 {{user}} 的會話 {{session}}",
@@ -12,9 +18,9 @@
     "lockHint": "僅針對列出的使用者與會話，不停用整個使用者。後續主請求及可識別的父子 / fork 衍生呼叫均被拒絕，不切換帳號。正在執行的請求不會被強行中斷；只有管理員手動解鎖才能解除。",
     "unlockHint": "解除列出會話的直接黑名單。仍被其他父會話鎖定的衍生會話不會因此放行。",
     "lockedSuccess": "已長期鎖定 {{count}} 個會話", "unlockedSuccess": "已解鎖 {{count}} 個會話", "saving": "正在儲存…", "updateFailed": "更新失敗，請重新整理確認後重試",
-    "detailHint": "最近一次 server_is_overloaded（500）與經身分隔離的會話資訊。未知欄位不推測，不包含金鑰。",
-    "accountHint": "最近一次過載請求使用的上游帳號",
-    "columns": { "user": "使用者 / 平台", "session": "主會話 ID", "account": "過載帳號", "count": "過載次數", "last": "最近錯誤", "error": "錯誤 / 模型", "status": "會話狀態", "details": "詳情" }
+    "detailHint": "最近一次已記錄的 500 錯誤與經身分隔離的會話資訊。未知欄位不推測，不包含金鑰。",
+    "accountHint": "最近一次已記錄錯誤請求使用的上游帳號",
+    "columns": { "user": "使用者 / 平台", "session": "主會話 ID", "account": "錯誤帳號", "count": "錯誤次數", "last": "最近錯誤", "error": "錯誤 / 模型", "status": "會話狀態", "details": "詳情" }
   },
   "serviceErrors": {
     "timeRange": "時間範圍",

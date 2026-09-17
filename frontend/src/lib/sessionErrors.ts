@@ -12,6 +12,7 @@ export interface SessionErrorIdentity {
 }
 
 export interface SessionErrorRow {
+	lock_source?: 'manual' | 'automatic'
   identity: SessionErrorIdentity
   account_name?: string
   account_email?: string
@@ -38,7 +39,7 @@ export interface SessionErrorQuery {
   model?: string
   account?: string
   lockedOnly?: boolean
-  lockState?: 'unlocked' | 'locked'
+  lockState?: 'unlocked' | 'locked' | 'auto_locked'
   cursor?: string
 }
 

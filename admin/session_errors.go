@@ -21,7 +21,7 @@ func (handler *Handler) GetSessionErrors(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, "模型或账号查询条件过长")
 		return
 	}
-	if len(query.UserID) > 255 || len(query.SessionID) > 256 || !database.ValidateServiceErrorCursor(query.Cursor) || ctx.Query("locked") != "" && ctx.Query("locked") != "true" && ctx.Query("locked") != "false" || query.LockState != "unlocked" && query.LockState != "locked" && query.LockState != "all" {
+	if len(query.UserID) > 255 || len(query.SessionID) > 256 || !database.ValidateServiceErrorCursor(query.Cursor) || ctx.Query("locked") != "" && ctx.Query("locked") != "true" && ctx.Query("locked") != "false" || query.LockState != "unlocked" && query.LockState != "locked" && query.LockState != "all" && query.LockState != "auto_locked" {
 		writeError(ctx, http.StatusBadRequest, "查询条件无效")
 		return
 	}

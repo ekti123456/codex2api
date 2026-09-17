@@ -546,7 +546,7 @@ export function sessionErrorSearchParams(query: SessionErrorQuery): string {
   if (query.model?.trim()) params.set('model', query.model.trim())
   if (query.account?.trim()) params.set('account', query.account.trim())
   if (query.lockedOnly) params.set('locked', 'true')
-  else params.set('lock_state', query.lockState ?? 'unlocked')
+  if (!query.lockedOnly || query.lockState === 'auto_locked') params.set('lock_state', query.lockState ?? 'unlocked')
   if (query.cursor) params.set('cursor', query.cursor)
   return params.toString()
 }
@@ -1098,6 +1098,8 @@ export const api = {
   getRuntimeStatus: () => request<RuntimeStatusResponse>('/runtime-status'),
     getServiceErrors: (query: ServiceErrorQuery, signal?: AbortSignal) =>
       request<ServiceErrorPage>(`/ops/service-errors?${serviceErrorSearchParams(query)}`, { signal }),
+    getSessionAutoLockSettings: (signal?: AbortSignal) => request<{ enabled: boolean; threshold: number }>('/session-errors/auto-lock', { signal }),
+    setSessionAutoLockSettings: (value: { enabled: boolean; threshold: number }) => request<{ enabled: boolean; threshold: number }>('/session-errors/auto-lock', { method: 'PUT', body: JSON.stringify(value) }),
     getSessionErrors: (query: SessionErrorQuery, signal?: AbortSignal) =>
       request<SessionErrorPage>(`/session-errors?${sessionErrorSearchParams(query)}`, { signal }),
     getSessionActivities: (keys: string[], signal?: AbortSignal) =>

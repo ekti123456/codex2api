@@ -1209,6 +1209,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/ops/errors/summary", h.GetOpsErrorSummary)
 	api.GET("/ops/service-errors", h.GetServiceErrorLogs)
 	api.GET("/session-errors", h.GetSessionErrors)
+	api.GET("/session-errors/auto-lock", h.GetSessionAutoLockSettings)
+	api.PUT("/session-errors/auto-lock", h.SetSessionAutoLockSettings)
 	api.POST("/session-errors/activity", h.GetSessionActivities)
 	api.POST("/session-errors/blacklist", h.SetSessionBlacklist)
 	api.GET("/settings", h.GetSettings)

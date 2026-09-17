@@ -1,5 +1,10 @@
 {
   "sessionErrors": {
+    "autoLocked": "Automatically locked",
+    "autoLockTitle": "Auto-lock sessions after consecutive HTTP 500 errors",
+    "autoLockThreshold": "Consecutive errors",
+    "autoLockSaved": "Settings saved",
+    "autoLockHint": "Off by default; default threshold: 3. API relay requests are excluded. Counts final results per session in completion order. Non-500 results reset the streak; internal retries do not count separately. Saving resets pending streaks. Disabling does not remove existing locks; unlock them manually.",
     "activityHint": "Only current-page activity refreshes every 15 seconds; the list is not reloaded automatically. Main requests within 30 minutes count as recent. Auxiliary activity is separate. In-flight counts cover this instance only; client windows and local tool execution cannot be observed.",
     "activityLimited": "The activity cache is at capacity; some session states cannot be confirmed.",
     "activityUnknownTime": "No record",
@@ -10,11 +15,11 @@
     "modelSearch": "Model name (contains)",
     "accountSearch": "Account ID / name / email",
     "resetFilters": "Reset filters",
-    "filterHint": "All filters apply together. Model and account match the latest overloaded request; counts remain cumulative per session. Numeric accounts match the exact ID; names and emails use contains matching.",
+    "filterHint": "Filters match together against the latest recorded error. Counts are cumulative, not the consecutive auto-lock streak. Numeric accounts match exact IDs; names and emails use contains matching.",
     "lockedFilter": "Locked",
     "lineageInvalid": "Invalid lineage",
-    "title": "Session overload statistics", "description": "Only final 500 + server_is_overloaded, grouped by user and root session ID. Other 500 errors are excluded. Manual blacklisting blocks the session and identifiable descendants.",
-    "views": "Session views", "statistics": "Overload 500", "blacklist": "Session blacklist", "summary": "{{groups}} sessions · {{count}} total overload 500 errors",
+    "title": "Session overload statistics", "description": "Final overload 500 errors grouped by user and root session. When auto-lock is enabled, other final 500 errors are recorded too. Locked sessions and identifiable descendants cannot make further calls.",
+    "views": "Session views", "statistics": "500 errors", "blacklist": "Session blacklist", "summary": "{{groups}} sessions · {{count}} total 500 errors",
     "userSearch": "User ID (exact match)", "sessionSearch": "Root session ID (exact match)",
     "retention": "Collected after deployment only. Counts are cumulative per retained session, not a time-window error rate. Inactive error records expire after 7 days; up to 100,000 rows. Blacklists and recorded fork links are retained separately.",
     "selected": "{{count}} sessions selected", "lockSelected": "Blacklist selected sessions", "unlockSelected": "Unlock selected sessions", "selectPage": "Select actionable sessions on this page", "selectSession": "Select session {{session}} for user {{user}}",
@@ -23,8 +28,8 @@
     "lockHint": "Only the listed users and sessions are affected, not entire users. Subsequent root and identifiable child/fork calls are rejected without switching accounts. In-flight requests are not forcibly canceled. Only an administrator can unlock these sessions.",
     "unlockHint": "Remove the direct blacklist entries. Descendants still blocked by another ancestor remain blocked.",
     "lockedSuccess": "Permanently locked {{count}} sessions", "unlockedSuccess": "Unlocked {{count}} sessions", "saving": "Saving…", "updateFailed": "Update failed. Refresh and verify before retrying.",
-    "detailHint": "Latest server_is_overloaded (500) and subject-isolated session metadata. Unknown fields are not inferred; no API secrets are included.",
-    "accountHint": "Upstream account used by the latest overloaded request",
+    "detailHint": "Latest recorded 500 error and isolated session identity. Unknown fields are not inferred; credentials are excluded.",
+    "accountHint": "Upstream account used by the latest recorded error",
     "columns": { "user": "User / platform", "session": "Root session ID", "account": "Overloaded account", "count": "Overload count", "last": "Latest error", "error": "Error / model", "activity": "Request activity", "status": "Session status", "details": "Details" }
   },
   "serviceErrors": {

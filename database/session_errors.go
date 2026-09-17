@@ -40,6 +40,7 @@ type SessionErrorEvent struct {
 }
 
 type SessionErrorRow struct {
+	LockSource     string               `json:"lock_source,omitempty"`
 	Identity       SessionErrorIdentity `json:"identity"`
 	AccountName    string               `json:"account_name,omitempty"`
 	AccountEmail   string               `json:"account_email,omitempty"`
@@ -103,7 +104,7 @@ func (db *DB) ensureSessionErrorSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return db.ensureSessionAutoLockSchema(ctx)
 }
 
 func (db *DB) RecordSessionParent(ctx context.Context, key, parent string) error {
@@ -243,7 +244,10 @@ func (db *DB) SetSessionBlacklist(ctx context.Context, keys []string, locked boo
 			if queryErr != nil {
 				return queryErr
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO session_blacklist(session_key,user_id,session_id,identity_data,locked,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(session_key) DO UPDATE SET locked=excluded.locked, updated_at=excluded.updated_at`, key, userID, sessionID, payload, lockValue, time.Now().UnixMilli()); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO session_blacklist(session_key,user_id,session_id,identity_data,locked,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(session_key) DO UPDATE SET locked=excluded.locked, updated_at=excluded.updated_at, lock_source='manual'`, key, userID, sessionID, payload, lockValue, time.Now().UnixMilli()); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM session_500_streaks WHERE session_key=$1`, key); err != nil {
 				return err
 			}
 		}
@@ -260,7 +264,7 @@ func (db *DB) SetSessionBlacklist(ctx context.Context, keys []string, locked boo
 
 func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (SessionErrorPage, error) {
 	page := SessionErrorPage{Items: []SessionErrorRow{}, Collector: db.SessionErrorCollectorStats()}
-	if filter.LockState != "" && filter.LockState != "all" && filter.LockState != "locked" && filter.LockState != "unlocked" {
+	if filter.LockState != "" && filter.LockState != "all" && filter.LockState != "locked" && filter.LockState != "unlocked" && filter.LockState != "auto_locked" {
 		return page, fmt.Errorf("invalid session lock state")
 	}
 	cursor, err := decodeServiceErrorCursor(filter.Cursor)
@@ -315,6 +319,9 @@ func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (
 				WHERE account.id=CAST(%s AS BIGINT) AND (LOWER(account.name) LIKE $%d ESCAPE '!'
 				OR LOWER(%s) LIKE $%d ESCAPE '!'))`, accountExpr, len(args), emailExpr, len(args)))
 		}
+	}
+	if filter.LockState == "auto_locked" {
+		conditions = append(conditions, key+` IN (SELECT session_key FROM session_blacklist WHERE locked=1 AND lock_source='automatic')`)
 	}
 	where := strings.Join(conditions, " AND ")
 	prefix := ""
@@ -394,6 +401,9 @@ func (db *DB) ListSessionErrors(ctx context.Context, filter SessionErrorQuery) (
 			page.Items[index].LineageInvalid = true
 			page.Items[index].LockedBy = ""
 		}
+	}
+	if err := db.populateSessionLockSources(ctx, page.Items); err != nil {
+		return page, err
 	}
 	if err := db.populateSessionErrorAccounts(ctx, page.Items); err != nil {
 		return page, err

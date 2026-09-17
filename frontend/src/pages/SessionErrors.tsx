@@ -3,6 +3,7 @@ import { LockKeyhole, RefreshCw, Search, UnlockKeyhole } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import PageHeader from '../components/PageHeader'
+import SessionAutoLockSettings from '../components/SessionAutoLockSettings'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
 import { useSessionActivity } from '../hooks/useSessionActivity'
@@ -39,7 +40,7 @@ export default function SessionErrors() {
   const activity = useSessionActivity(data.items.map(row => row.identity.key), !loading && !error, JSON.stringify(filters))
   useEffect(() => () => controller.current?.abort(), [])
 
-  const unlockMode = filters.lockedOnly || filters.lockState === 'locked'
+  const unlockMode = filters.lockedOnly || filters.lockState === 'locked' || filters.lockState === 'auto_locked'
   const selection = validSessionSelection(selected, data.items, unlockMode)
   const eligible = selectableSessionKeys(data.items, unlockMode)
   const changeQuery = (next: typeof filters) => {
@@ -70,11 +71,12 @@ export default function SessionErrors() {
     <PageHeader title={t('sessionErrors.title')} description={t('sessionErrors.description')} actions={
       <Button variant="outline" disabled={loading || busy} onClick={() => { setSelected([]); void reload() }}><RefreshCw className="size-4" />{t('common.refresh')}</Button>
     } />
+    <SessionAutoLockSettings />
     <Card className="mb-4 space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex gap-1" aria-label={t('sessionErrors.views')}>
-          <Button variant={!filters.lockedOnly ? 'secondary' : 'ghost'} disabled={busy} aria-pressed={!filters.lockedOnly} onClick={() => changeQuery({ ...filters, lockedOnly: false, cursors: [''] })}>{t('sessionErrors.statistics')}</Button>
-          <Button variant={filters.lockedOnly ? 'secondary' : 'ghost'} disabled={busy} aria-pressed={filters.lockedOnly} onClick={() => changeQuery({ ...filters, lockedOnly: true, cursors: [''] })}>{t('sessionErrors.blacklist')}</Button>
+          <Button variant={!filters.lockedOnly ? 'secondary' : 'ghost'} disabled={busy} aria-pressed={!filters.lockedOnly} onClick={() => changeQuery({ ...filters, lockedOnly: false, lockState: 'unlocked', cursors: [''] })}>{t('sessionErrors.statistics')}</Button>
+          <Button variant={filters.lockedOnly ? 'secondary' : 'ghost'} disabled={busy} aria-pressed={filters.lockedOnly} onClick={() => changeQuery({ ...filters, lockedOnly: true, lockState: 'locked', cursors: [''] })}>{t('sessionErrors.blacklist')}</Button>
         </div>
         <p className="text-sm text-muted-foreground">{t('sessionErrors.summary', { groups: data.groups, count: data.errors })}</p>
       </div>
@@ -100,9 +102,9 @@ export default function SessionErrors() {
     {success && <p role="status" className="mb-3 text-sm text-emerald-600">{success}</p>}
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap items-center gap-3">
-        {!filters.lockedOnly && <Select value={filters.lockState} disabled={busy || confirming} className="w-32" onValueChange={value => {
-          if (value === 'unlocked' || value === 'locked') changeQuery({ ...filters, lockState: value, cursors: [''] })
-        }} options={[{ value: 'unlocked', label: t('sessionErrors.allowed') }, { value: 'locked', label: t('sessionErrors.lockedFilter') }]} />}
+        <Select value={filters.lockState} disabled={busy || confirming} className="w-32" onValueChange={value => {
+          if (value === 'unlocked' || value === 'locked' || value === 'auto_locked') changeQuery({ ...filters, lockState: value, cursors: [''] })
+        }} options={[...(!filters.lockedOnly ? [{ value: 'unlocked', label: t('sessionErrors.allowed') }] : []), { value: 'locked', label: t('sessionErrors.lockedFilter') }, { value: 'auto_locked', label: t('sessionErrors.autoLocked') }]} />
         <span className="text-sm text-muted-foreground">{t('sessionErrors.selected', { count: selection.length })}</span>
       </div>
       <Button disabled={busy || loading || !!error || selection.length === 0} onClick={() => { setActionError(''); setConfirming(true) }}>
@@ -130,7 +132,7 @@ export default function SessionErrors() {
             <TableCell className="whitespace-nowrap text-xs">{row.count ? formatBeijingTime(row.last_at) : '—'}</TableCell>
             <TableCell className="max-w-64"><p className="truncate text-xs" title={row.latest.message}>{row.latest.code || '—'}</p><span className="text-xs text-muted-foreground">{row.latest.model}</span></TableCell>
             <TableCell><SessionActivityBadge value={activity?.items[row.identity.key]} observedAt={activity?.observed_at} /></TableCell>
-            <TableCell><Badge variant="outline">{t(row.lineage_invalid ? 'sessionErrors.lineageInvalid' : !row.locked ? 'sessionErrors.allowed' : row.locked_by === row.identity.key ? 'sessionErrors.locked' : 'sessionErrors.inherited')}</Badge></TableCell>
+            <TableCell><Badge variant="outline">{t(row.lineage_invalid ? 'sessionErrors.lineageInvalid' : !row.locked ? 'sessionErrors.allowed' : row.lock_source === 'automatic' ? 'sessionErrors.autoLocked' : row.locked_by === row.identity.key ? 'sessionErrors.locked' : 'sessionErrors.inherited')}</Badge></TableCell>
             <TableCell><Button size="sm" variant="ghost" onClick={() => setDetail(row)}>{t('sessionErrors.columns.details')}</Button></TableCell>
           </TableRow>)}</TableBody>
         </Table></div>}

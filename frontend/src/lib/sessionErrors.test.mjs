@@ -43,3 +43,13 @@ test('model and account filters are combined, trimmed and safely encoded on ever
   assert.equal(cleared.has('model'), false)
   assert.equal(cleared.has('account'), false)
 })
+
+test('automatic locks can be filtered in statistics and blacklist views', () => {
+  for (const lockedOnly of [false, true]) {
+    const params = new URLSearchParams(sessionErrorSearchParams({ lockedOnly, lockState: 'auto_locked' }))
+    assert.equal(params.get('lock_state'), 'auto_locked')
+    assert.equal(params.get('locked'), lockedOnly ? 'true' : null)
+  }
+  const automatic = { identity: { key: 'auto' }, locked: true, locked_by: 'auto', lock_source: 'automatic' }
+  assert.deepEqual(selectableSessionKeys([automatic], true), ['auto'])
+})

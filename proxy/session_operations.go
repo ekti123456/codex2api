@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -79,6 +80,7 @@ func (handler *Handler) beginSessionActivity(ctx *gin.Context, identity database
 		return
 	}
 	state.activityStarted = true
+	state.autoLockSettings = handler.db.GetSessionAutoLockSettings()
 	auxiliary := false
 	if value, exists := ctx.Get(usageRequestDiagnosticsContextKey); exists {
 		if diagnostics, ok := value.(*usageRequestDiagnostics); ok && diagnostics != nil && diagnostics.Resolved != nil {
@@ -139,6 +141,8 @@ func (handler *Handler) recordObservedError(ctx *gin.Context, status int, apiErr
 	if state := serviceErrorAuditForRequest(ctx); state != nil && status >= 400 {
 		state.usageMu.Lock()
 		state.usageSucceeded = false
+		state.observedStatus = status
+		state.observedError = apiError
 		state.usageMu.Unlock()
 	}
 	handler.recordSessionError(ctx, status, apiError)
@@ -146,8 +150,12 @@ func (handler *Handler) recordObservedError(ctx *gin.Context, status int, apiErr
 }
 
 func (handler *Handler) recordSessionError(ctx *gin.Context, status int, apiError *api.APIError) {
+	handler.recordSessionErrorResult(ctx, status, apiError, false)
+}
+
+func (handler *Handler) recordSessionErrorResult(ctx *gin.Context, status int, apiError *api.APIError, includeOther500 bool) {
 	state := serviceErrorAuditForRequest(ctx)
-	if status != http.StatusInternalServerError || state == nil || handler.db == nil || apiError == nil || string(apiError.Code) != overloadErrorCode {
+	if status != http.StatusInternalServerError || state == nil || handler.db == nil || apiError == nil || !includeOther500 && string(apiError.Code) != overloadErrorCode {
 		return
 	}
 	state.usageMu.Lock()
@@ -184,6 +192,9 @@ func rememberSessionErrorUsage(ctx *gin.Context, input *database.UsageLogInput) 
 		state.usageMu.Lock()
 		defer state.usageMu.Unlock()
 		state.usageStatus = input.StatusCode
+		if !input.IsRetryAttempt {
+			state.finalUsageStatus = input.StatusCode
+		}
 		state.usageSucceeded = !input.IsRetryAttempt && input.StatusCode >= 200 && input.StatusCode < 300 && strings.TrimSpace(input.ErrorMessage) == ""
 		state.usageError = ""
 		if input.StatusCode == http.StatusInternalServerError && !input.IsRetryAttempt && isSessionOverloadUsageMessage(input.ErrorMessage) {
@@ -198,6 +209,7 @@ func isSessionOverloadUsageMessage(message string) bool {
 }
 
 func (handler *Handler) finishSessionErrorAudit(ctx *gin.Context) {
+	defer handler.finishSessionAutoLock(ctx)
 	state := serviceErrorAuditForRequest(ctx)
 	if state != nil {
 		state.usageMu.Lock()
@@ -206,5 +218,55 @@ func (handler *Handler) finishSessionErrorAudit(ctx *gin.Context) {
 		if status == http.StatusInternalServerError && isSessionOverloadUsageMessage(message) {
 			handler.recordSessionError(ctx, status, api.NewAPIError(api.ErrorCode(overloadErrorCode), message, api.ErrorTypeUpstream))
 		}
+	}
+}
+
+func (handler *Handler) finishSessionAutoLock(ctx *gin.Context) {
+	state := serviceErrorAuditForRequest(ctx)
+	if state == nil || handler.db == nil || !state.autoLockFinished.CompareAndSwap(false, true) {
+		return
+	}
+	if apiRelaySessionExempt(ctx) {
+		return
+	}
+	// A fresh mixed-pool request may select an API relay before its route has
+	// an affinity owner. Honor the actual selected account in that case too.
+	if handler.store != nil {
+		if account := handler.store.FindByID(snapshotUpstreamTrace(ctx.Request.Context()).accountID); account != nil && account.IsOpenAIResponsesAPI() {
+			return
+		}
+	}
+	state.usageMu.Lock()
+	settings, status, failure := state.autoLockSettings, state.finalUsageStatus, state.observedError
+	if status == 0 {
+		status = state.observedStatus
+	}
+	state.usageMu.Unlock()
+	if !settings.Enabled {
+		return
+	}
+	identity, known := sessionOperationsIdentity(ctx)
+	if !known {
+		return
+	}
+	if ctx.Request.Context().Err() != nil {
+		status = 499
+	}
+	if status == 0 && !state.websocket {
+		status = ctx.Writer.Status()
+	}
+	if status == 0 {
+		return
+	} // An upgraded connection alone is not a result.
+	if status == 500 {
+		if failure == nil {
+			failure = api.NewAPIError("http_500", "请求返回 HTTP 500", api.ErrorTypeServer)
+		}
+		handler.recordSessionErrorResult(ctx, status, failure, true)
+	}
+	operation, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := handler.db.ObserveSessionFinalStatus(operation, identity, status, state.started, settings); err != nil {
+		log.Printf("session_auto_lock persistence_failed: %v", err)
 	}
 }

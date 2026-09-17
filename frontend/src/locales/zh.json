@@ -1,5 +1,10 @@
 {
   "sessionErrors": {
+    "autoLocked": "自动锁定",
+    "autoLockTitle": "连续 500 自动锁定会话",
+    "autoLockThreshold": "连续错误次数",
+    "autoLockSaved": "设置已保存",
+    "autoLockHint": "默认关闭，默认连续 3 次。API 中转请求不参与自动锁定。按同一会话最终完成的请求结果计数，非 500 结果清零，内部重试不重复计数。保存设置会重置未触发的计数；关闭开关不会解除已有锁定。自动锁定后可手动解锁。",
     "activityHint": "请求状态每 15 秒仅刷新当前页，不自动重查列表。30 分钟内有主请求记为最近活跃；辅助请求单独显示。进行中数量仅代表当前实例，无法判断客户端是否打开或是否正在执行本地工具。",
     "activityLimited": "活跃记录达到容量上限，部分会话状态暂无法确认。",
     "activityUnknownTime": "暂无记录",
@@ -10,11 +15,11 @@
     "modelSearch": "模型名称（包含匹配）",
     "accountSearch": "账号 ID / 名称 / 邮箱",
     "resetFilters": "重置筛选",
-    "filterHint": "多个条件同时匹配。模型与账号按最近一次过载请求筛选，次数仍为该会话累计次数；账号纯数字按 ID 精确匹配，名称 / 邮箱按包含匹配。",
+    "filterHint": "多个条件同时匹配。模型与账号按最近一次已记录错误筛选，次数为累计次数，不是自动锁定的连续次数；账号纯数字按 ID 精确匹配，名称 / 邮箱按包含匹配。",
     "lockedFilter": "已锁定",
     "lineageInvalid": "派生关系无效",
-    "title": "会话过载统计", "description": "仅统计最终 500 + server_is_overloaded，按用户与主会话 ID 汇总。其他 500 不计入；手动锁定后禁止该会话及已知派生链路继续调用。",
-    "views": "会话统计视图", "statistics": "过载 500", "blacklist": "会话黑名单", "summary": "{{groups}} 个会话 · 累计 {{count}} 次过载 500",
+    "title": "会话过载统计", "description": "按用户与主会话 ID 汇总最终过载 500；开启自动锁定后也记录其他最终 500。锁定会话及其已知派生链路会停止后续调用。",
+    "views": "会话统计视图", "statistics": "500 错误", "blacklist": "会话黑名单", "summary": "{{groups}} 个会话 · 累计 {{count}} 次 500 错误",
     "userSearch": "用户 ID（精确匹配）", "sessionSearch": "主会话 ID（精确匹配）",
     "retention": "仅采集升级后的请求。每个会话累计计数，非时间窗口错误率；无新错误的记录保留 7 天、最多 10 万条。黑名单与已记录的 fork 关系独立保留，不随统计清理。",
     "selected": "已选择 {{count}} 个会话", "lockSelected": "一键锁定所选会话", "unlockSelected": "解锁所选会话", "selectPage": "选择本页可操作会话", "selectSession": "选择用户 {{user}} 的会话 {{session}}",
@@ -23,9 +28,9 @@
     "lockHint": "仅针对所列用户与会话，不禁用整个用户。后续主请求及可识别的父子 / fork 派生调用均被拒绝，不换账号。正在执行的请求不会被强行中断；只有管理员手动解锁才会解除。",
     "unlockHint": "解除所列会话的直接黑名单。仍被其他父会话锁定的派生会话不会因此放行。",
     "lockedSuccess": "已长期锁定 {{count}} 个会话", "unlockedSuccess": "已解锁 {{count}} 个会话", "saving": "正在保存…", "updateFailed": "更新失败，请刷新确认后重试",
-    "detailHint": "最近一次 server_is_overloaded（500）与经身份隔离的会话信息。未知字段不推测，不包含密钥。",
-    "accountHint": "最近一次过载请求使用的上游账号",
-    "columns": { "user": "用户 / 平台", "session": "主会话 ID", "account": "过载账号", "count": "过载次数", "last": "最近错误", "error": "错误 / 模型", "activity": "请求状态", "status": "会话状态", "details": "详情" }
+    "detailHint": "最近一次已记录的 500 错误与经身份隔离的会话信息。未知字段不推测，不包含密钥。",
+    "accountHint": "最近一次已记录错误请求使用的上游账号",
+    "columns": { "user": "用户 / 平台", "session": "主会话 ID", "account": "错误账号", "count": "错误次数", "last": "最近错误", "error": "错误 / 模型", "activity": "请求状态", "status": "会话状态", "details": "详情" }
   },
   "serviceErrors": {
     "timeRange": "时间范围",

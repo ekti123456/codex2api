@@ -18,19 +18,24 @@ import (
 const serviceErrorContextKey = "service_error_audit"
 
 type serviceErrorAudit struct {
-	started         time.Time
-	recorded        atomic.Bool
-	sessionRecorded atomic.Bool
-	usageMu         sync.Mutex
-	usageStatus     int
-	usageError      string
-	usageSucceeded  bool
-	activityLease   *database.SessionActivityLease
-	activityStarted bool
-	authenticated   bool
-	websocket       bool
-	apiKeyID        int64
-	apiKeyName      string
+	started          time.Time
+	recorded         atomic.Bool
+	sessionRecorded  atomic.Bool
+	autoLockFinished atomic.Bool
+	autoLockSettings database.SessionAutoLockSettings
+	finalUsageStatus int
+	observedStatus   int
+	observedError    *api.APIError
+	usageMu          sync.Mutex
+	usageStatus      int
+	usageError       string
+	usageSucceeded   bool
+	activityLease    *database.SessionActivityLease
+	activityStarted  bool
+	authenticated    bool
+	websocket        bool
+	apiKeyID         int64
+	apiKeyName       string
 }
 
 type serviceErrorResponseWriter struct {
@@ -99,6 +104,7 @@ func (handler *Handler) beginServiceErrorAudit(ctx *gin.Context) func() {
 	writer := &serviceErrorResponseWriter{ResponseWriter: ctx.Writer}
 	ctx.Writer = writer
 	return func() {
+		defer handler.finishSessionAutoLock(ctx)
 		defer handler.finishSessionActivity(ctx)
 		state := serviceErrorAuditForRequest(ctx)
 		if writer.Status() < 400 || writer.Status() > 599 || state.websocket {

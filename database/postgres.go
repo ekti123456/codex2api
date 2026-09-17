@@ -206,6 +206,8 @@ type DB struct {
 	sessionErrors     *sessionErrorQueue
 	sessionActivity   *sessionActivityTracker
 	sessionBlacklist  sessionBlacklistCache
+	sessionAutoLockMu sync.RWMutex
+	sessionAutoLock   SessionAutoLockSettings
 
 	backgroundTaskMu      sync.Mutex
 	backgroundTaskWg      sync.WaitGroup
