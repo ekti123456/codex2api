@@ -2266,6 +2266,8 @@
     "reason7dUrgency": "7d Reset Soon"
   },
   "usage": {
+    "responseModel": "Upstream reported",
+    "responseModelHint": "Model declared by the upstream response. Recorded for reference; not used for billing.",
     "exportFiltered": "Download filtered",
     "exportAll": "Download all",
     "exportFilteredTitle": "Download matching logs?",

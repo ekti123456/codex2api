@@ -54,6 +54,9 @@ func (s upstreamTraceSnapshot) apply(input *database.UsageLogInput) {
 		input.UpstreamProxyID = s.Proxy.ID
 		input.UpstreamProxyName = s.Proxy.Name
 		input.UpstreamDiagnostics = transportDiagnosticJSON(s.Transport)
+		if s.Transport != nil {
+			input.UpstreamResponseModel = s.Transport.ResponseModel
+		}
 	}
 }
 
@@ -202,5 +205,6 @@ func populateUpstreamTrace(c *gin.Context, input *database.UsageLogInput) {
 		input.UpstreamProxyID = current.proxy.ID
 		input.UpstreamProxyName = current.proxy.Name
 		input.UpstreamDiagnostics = transportDiagnosticJSON(&current.transport)
+		input.UpstreamResponseModel = current.transport.ResponseModel
 	}
 }

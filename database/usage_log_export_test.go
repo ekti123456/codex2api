@@ -15,7 +15,7 @@ func TestUsageLogExportAllRetainedAndFilteredWithoutPageLimit(test *testing.T) {
 	now := time.Now().UTC()
 	for index := 0; index < 503; index++ {
 		require.NoError(test, db.InsertUsageLog(test.Context(), &UsageLogInput{
-			Endpoint: "/v1/responses", Model: "export-model", RequestID: fmt.Sprintf("export-%d", index),
+			Endpoint: "/v1/responses", Model: "export-model", UpstreamResponseModel: "reported-model", RequestID: fmt.Sprintf("export-%d", index),
 			RequestType: "compaction", SessionIDPrefix: "01a09012", Channel: "codex", StatusCode: 500,
 			ViaWebsocket: true, NewAPIUserName: "export-user", RequestDiagnostics: `{"version":1,"upstream":{"send_phase":"after_payload"}}`,
 		}))
@@ -47,6 +47,7 @@ func TestUsageLogExportAllRetainedAndFilteredWithoutPageLimit(test *testing.T) {
 		previous = entry
 		seen[entry.ID] = true
 		require.Equal(test, "export-user", entry.NewAPIUserName)
+		require.Equal(test, "reported-model", entry.UpstreamResponseModel)
 		require.JSONEq(test, `{"version":1,"upstream":{"send_phase":"after_payload"}}`, string(entry.Diagnostics))
 		return nil
 	})

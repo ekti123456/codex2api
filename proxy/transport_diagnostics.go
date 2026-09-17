@@ -17,6 +17,8 @@ import (
 )
 
 type UpstreamTransportDiagnostic struct {
+	ResponseModel          string                             `json:"response_model,omitempty"`
+	ResponseModelConflict  bool                               `json:"response_model_conflict,omitempty"`
 	StreamDelivery         *ResponsesStreamDeliveryDiagnostic `json:"stream_delivery,omitempty"`
 	OutboundIdentity       *outboundIdentityDiagnostic        `json:"outbound_identity,omitempty"`
 	ResponsesInput         *responsesInputDiagnostic          `json:"responses_input,omitempty"`
@@ -253,6 +255,7 @@ func (observer *TransportObserver) event(name string, payload []byte) {
 		if eventType == "" {
 			eventType = name
 		}
+		observeUpstreamResponseModel(observer.attempt, payload, eventType)
 		if eventType == "error" || eventType == "response.failed" {
 			for _, path := range []string{"status_code", "status", "response.status_code", "error.status_code", "response.error.status_code"} {
 				if status := int(gjson.GetBytes(payload, path).Int()); status >= 400 && status <= 599 {

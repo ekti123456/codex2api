@@ -3490,6 +3490,7 @@ export interface APIKeyAccountStatsResponse {
 }
 
 export interface UsageLog {
+  upstream_response_model?: string
 	window_number_original?: string
 	window_number_outbound?: string
   session_id_prefix?: string

@@ -4977,7 +4977,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 			} else {
 				var respBody []byte
-				respBody, readErr = io.ReadAll(resp.Body)
+				respBody, readErr = readObservedUpstreamJSON(resp.Body)
 				if readErr == nil {
 					if isEmptyIncompleteResponseBody(respBody) {
 						respBody = synthesizeEmptyIncompleteFailureBody(respBody)
@@ -6675,7 +6675,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				return
 			}
 
-			respBody, readErr := io.ReadAll(resp.Body)
+			respBody, readErr := readObservedUpstreamJSON(resp.Body)
 			resp.Body.Close()
 			if readErr != nil {
 				totalDuration := int(time.Since(start).Milliseconds())
@@ -6948,7 +6948,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		if compactViaResponses {
 			respBody, compactFailedPayload, readErr = collectCompactResponsesSSE(resp.Body)
 		} else {
-			respBody, readErr = io.ReadAll(resp.Body)
+			respBody, readErr = readObservedUpstreamJSON(resp.Body)
 		}
 		resp.Body.Close()
 		if readErr != nil {

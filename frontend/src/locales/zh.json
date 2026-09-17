@@ -2267,6 +2267,8 @@
     "reason7dUrgency": "7d 快重置"
   },
   "usage": {
+    "responseModel": "上游自报",
+    "responseModelHint": "上游响应中声明的模型，仅供记录，不参与计费。",
     "exportFiltered": "按筛选下载",
     "exportAll": "全部下载",
     "exportFilteredTitle": "确认下载筛选日志？",

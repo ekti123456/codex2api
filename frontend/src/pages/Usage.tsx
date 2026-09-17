@@ -11,6 +11,7 @@ import ChannelLogo from '../components/ChannelLogo'
 import CompactionBadges from '../components/CompactionBadges'
 import UsageRequestDiagnostics, { UsageRequestTypeButton } from '../components/UsageRequestDiagnostics'
 import { UsageWindowNumberBadge } from '../components/UsageWindowNumberBadge'
+import UsageResponseModel from "@/components/UsageResponseModel"
 import { usageRequestTypes, usageRequestTypeLabelKey } from '../lib/usageRequestDiagnostics'
 import { confirmedUsageLogDownload, downloadUsageLogPages, saveUsageLogExport } from '../lib/usageLogExport'
 import ModelLogo from '../components/ModelLogo'
@@ -2745,6 +2746,7 @@ export default function Usage() {
                               {log.model || '-'}
                             </Badge>
                           )}
+                          {visibleColumns.model && <UsageResponseModel log={log} />}
                           <span className="inline-flex shrink-0 items-center gap-1.5 empty:hidden">
                             {log.reasoning_effort ? (
                               <ReasoningEffortBadge effort={log.reasoning_effort} />
@@ -2975,6 +2977,7 @@ export default function Usage() {
                                 → {log.effective_model}
                               </Badge>
                             )}
+                            <UsageResponseModel log={log} />
                             <div className="flex basis-full items-center gap-1.5 empty:hidden">
                               {log.reasoning_effort ? (
                                 <ReasoningEffortBadge effort={log.reasoning_effort} />

@@ -1457,6 +1457,8 @@
     "cyberRiskSubjectEvents": "{{count}} 筆事件"
   },
   "usage": {
+    "responseModel": "上游自報",
+    "responseModelHint": "上游回應中聲明的模型，僅供記錄，不參與計費。",
     "exportFiltered": "按篩選下載",
     "exportAll": "全部下載",
     "exportFilteredTitle": "確認下載篩選日誌？",

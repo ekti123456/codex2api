@@ -1872,6 +1872,12 @@ func ReadSSEStream(body io.Reader, callback func(data []byte) bool) error {
 // ReadSSEStream's data-only API compatible for existing callers.
 func ReadSSEStreamWithEvent(body io.Reader, callback func(event string, data []byte) bool) error {
 	observer, _ := body.(interface{ observeUpstreamEvent(string, []byte) })
+	var modelObserver *TransportObserver
+	if observer == nil {
+		if traced := responseModelTraceBody(body); traced != nil && !traced.captureError {
+			modelObserver = traced.observer
+		}
+	}
 	terminalObserved := false
 	// 使用 sync.Pool 复用缓冲区，减少 GC 压力
 	buf := sseBufferPool.Get().([]byte)
@@ -1911,6 +1917,8 @@ func ReadSSEStreamWithEvent(body io.Reader, callback func(event string, data []b
 		terminalObserved = terminalObserved || isDone || event == "error"
 		if !isDone && observer != nil {
 			observer.observeUpstreamEvent(event, data)
+		} else if !isDone && modelObserver != nil {
+			modelObserver.observeResponseModel(event, data)
 		}
 		keepReading := !isDone && callback(event, data)
 		// 清掉 backing array 中的切片引用，避免最后一个大事件一直被

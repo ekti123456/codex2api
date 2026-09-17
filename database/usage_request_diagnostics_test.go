@@ -20,7 +20,7 @@ func TestUsageRequestDiagnosticsPersistenceAndLightweightLists(test *testing.T) 
 	}
 	test.Cleanup(func() { _ = db.Close() })
 	const payload = `{"version":1,"selected_account_id":17,"incoming":{"client_metadata":{"thread_source":"guardian_review"}}}`
-	if err := db.InsertUsageLog(test.Context(), &UsageLogInput{Endpoint: "/v1/responses", Model: "gpt-5.6-sol", StatusCode: 200, RequestType: "related_internal", RequestDiagnostics: payload, SessionIDPrefix: "01a09012", WindowNumberOriginal: "47", WindowNumberOutbound: "0"}); err != nil {
+	if err := db.InsertUsageLog(test.Context(), &UsageLogInput{Endpoint: "/v1/responses", Model: "gpt-5.6-sol", StatusCode: 200, RequestType: "related_internal", RequestDiagnostics: payload, UpstreamResponseModel: "gpt-5.6-luna", SessionIDPrefix: "01a09012", WindowNumberOriginal: "47", WindowNumberOutbound: "0"}); err != nil {
 		test.Fatal(err)
 	}
 	db.FlushUsageLogs()
@@ -50,6 +50,9 @@ func TestUsageRequestDiagnosticsPersistenceAndLightweightLists(test *testing.T) 
 			}
 			if logs[0].RequestType != "related_internal" || logs[0].SessionIDPrefix != "01a09012" {
 				test.Fatalf("missing type: %+v", logs[0])
+			}
+			if logs[0].UpstreamResponseModel != "gpt-5.6-luna" {
+				test.Fatalf("missing response model: %+v", logs[0])
 			}
 			encoded, err := json.Marshal(logs)
 			if logs[0].WindowNumberOriginal != "47" || logs[0].WindowNumberOutbound != "0" {
@@ -94,6 +97,9 @@ func TestUsageRequestDiagnosticsSQLiteMigrationAndHistoricalRows(test *testing.T
 	if err == nil {
 		_, err = db.conn.ExecContext(test.Context(), `ALTER TABLE usage_logs DROP COLUMN window_number_outbound`)
 	}
+	if err == nil {
+		_, err = db.conn.ExecContext(test.Context(), `ALTER TABLE usage_logs DROP COLUMN upstream_response_model`)
+	}
 	_ = db.Close()
 	if err != nil {
 		test.Fatal(err)
@@ -104,7 +110,7 @@ func TestUsageRequestDiagnosticsSQLiteMigrationAndHistoricalRows(test *testing.T
 	}
 	test.Cleanup(func() { _ = db.Close() })
 	logs, err := db.ListRecentUsageLogs(test.Context(), 10)
-	if err != nil || len(logs) != 1 || logs[0].RequestType != "" || logs[0].SessionIDPrefix != "" || logs[0].WindowNumberOriginal != "" || logs[0].WindowNumberOutbound != "" {
+	if err != nil || len(logs) != 1 || logs[0].RequestType != "" || logs[0].SessionIDPrefix != "" || logs[0].WindowNumberOriginal != "" || logs[0].WindowNumberOutbound != "" || logs[0].UpstreamResponseModel != "" {
 		test.Fatalf("historical logs=%+v, err=%v", logs, err)
 	}
 	detail, err := db.GetUsageRequestDiagnostics(test.Context(), logs[0].ID)
