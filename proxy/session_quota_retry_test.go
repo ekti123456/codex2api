@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -62,6 +63,7 @@ func TestSessionQuotaRetryEndToEnd(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, owner, target, _ := failoverTestSetup(t, !tc.disabled)
 			settings := CurrentRuntimeSettings()
+			settings.CodexPreflightSSEPassthrough = true
 			settings.CodexSessionFailoverPreserveInput = tc.preserve
 			settings.CompactViaResponses = tc.compact && tc.streamFailure
 			settings.CodexWSSilentRetry, settings.CodexWSSilentRetries = tc.budget > 0, tc.budget
@@ -109,6 +111,7 @@ func TestSessionQuotaRetryEndToEnd(t *testing.T) {
 					}
 					if tc.streamFailure {
 						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = io.WriteString(w, "data: {\"type\":\"codex.rate_limits\"}\n\n")
 						if tc.visible {
 							_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"already visible\"}\n\n")
 							w.(http.Flusher).Flush()
@@ -200,6 +203,15 @@ func TestSessionQuotaRetryEndToEnd(t *testing.T) {
 					h.ResponsesCompact(c)
 				} else {
 					h.Responses(c)
+				}
+				if !compact && strings.Contains(r.Body.String(), `"type":"response.completed"`) {
+					headers := r.Result().Header
+					require.Equal(t, "v1-loose", headers.Get(upstreamTimingHeader))
+					ms, err := strconv.ParseInt(headers.Get(upstreamFirstResponseHeader), 10, 64)
+					require.NoError(t, err)
+					attemptMS, err := strconv.ParseInt(headers.Get(upstreamAttemptFirstResponseHeader), 10, 64)
+					require.NoError(t, err)
+					require.GreaterOrEqual(t, ms, attemptMS)
 				}
 				if token := r.Header().Get(codexTurnStateHeader); token != "" {
 					currentAlias = token

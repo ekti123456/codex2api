@@ -5489,6 +5489,11 @@ func (h *Handler) Responses(c *gin.Context) {
 			return
 		}
 
+		clearUpstreamFirstResponseHeaders(resp.Header)
+		upstreamTiming := upstreamFirstResponseTiming{
+			enabled:      CurrentRuntimeSettings().CodexPreflightSSEPassthrough,
+			requestStart: handlerStart, attemptStart: start,
+		}
 		if !isStream || !continuousRetryBuffersAttempts(continuousRetryPolicy) {
 			relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
 		}
@@ -5587,6 +5592,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 				parsed := gjson.ParseBytes(data)
 				stageTurnStateMetadataHeader(c.Request.Context(), resp.Header, parsed)
+				upstreamTiming.observe(resp.Header, parsed, time.Now())
 				eventType := normalizedUpstreamSSEEventType(sseEvent, data)
 				if eventType == "error" && isUpstreamPromptSafetyRefusal(data) {
 					h.recordUpstreamPromptSafety(c, c.Request.URL.Path, c.GetString("x-model"), data)
@@ -5884,6 +5890,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 				parsed := gjson.ParseBytes(data)
 				stageTurnStateMetadataHeader(c.Request.Context(), resp.Header, parsed)
+				upstreamTiming.observe(resp.Header, parsed, time.Now())
 				eventType := normalizedUpstreamSSEEventType(sseEvent, data)
 				if eventType == "error" && isUpstreamPromptSafetyRefusal(data) {
 					h.recordUpstreamPromptSafety(c, c.Request.URL.Path, c.GetString("x-model"), data)

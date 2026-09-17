@@ -32,6 +32,7 @@ func TestTurnStateMetadataHTTPClientKeepsFirstToken(t *testing.T) {
 			t.Setenv("CODEX_REQUEST_COMPRESSION", "off")
 			settings := CurrentRuntimeSettings()
 			settings.CodexForceWebsocket = false
+			settings.CodexPreflightSSEPassthrough = true // Now reports timing without committing early.
 			settings.ContinuousRetryPolicy = database.ContinuousRetryPolicy{Enabled: mode.buffered, CatchAll: mode.buffered}
 			ApplyRuntimeSettings(settings)
 			oldResin := GetResinConfig()
@@ -50,6 +51,7 @@ func TestTurnStateMetadataHTTPClientKeepsFirstToken(t *testing.T) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				// No HTTP turn-state header: it exists only inside upstream SSE.
 				_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.created\"}\n\n"+
+					"data: {\"type\":\"codex.rate_limits\"}\n\n"+
 					"data: {\"type\":\"codex.response.metadata\",\"headers\":{\"X-Codex-Turn-State\":\"real-metadata-%d\"}}\n\n"+
 					"data: {\"type\":\"response.metadata\",\"headers\":{\"x-codex-turn-state\":\"later-metadata-%d\"}}\n\n"+
 					"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"+
@@ -89,6 +91,8 @@ func TestTurnStateMetadataHTTPClientKeepsFirstToken(t *testing.T) {
 				}
 				h.Responses(c)
 				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+				require.Equal(t, "v1-loose", recorder.Result().Header.Get("X-Codex2API-Response-Timing"))
+				require.NotEmpty(t, recorder.Result().Header.Get("X-Codex2API-First-Response-Ms"))
 				alias := recorder.Result().Header.Get(codexTurnStateHeader)
 				require.True(t, h.db.IsManagedCodexTurnStateAlias(alias), "actual response header missing; step=%d", step)
 				record, found, err := h.db.ReadCodexTurnState(t.Context(), alias)
