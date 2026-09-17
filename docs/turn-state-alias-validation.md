@@ -35,6 +35,10 @@ node --experimental-strip-types --test src/lib/usageRequestDiagnostics.test.mjs
 
 此次外观和完整日志变更通过数据库、代理及 WebSocket 专项回归和 `go vet`；新增验证覆盖封装长度、局部篡改、外来签名、旧记录拒绝、真实值/代号溯源区分、完整值展示及日志预算。前端诊断展示 13 项测试、类型检查和生产构建通过。以下微基准及全量失败记录来自原始代号版本，本次未重新运行全量测试。
 
+后续响应通道复查发现，原先仅识别裸 `response.metadata`，带前缀的 `codex.response.metadata` 会绕过替换。新增回归已在修改前通过模拟 WebSocket 上游复现 HTTP/SSE 和原生 WebSocket 客户端都能收到真值；修复后统一处理裸事件及 `codex.`、`responsesapi.` 前缀的 metadata 事件。保持事件类型和其他头不变，并校验持久化失败时不回退原值。
+
+单账号“小闪电”测试使用独立的 `codexTestRecorder`，本来就同时识别裸事件和 `codex.response.metadata`，将流内 `headers` 合并进管理员测试面板的 `response_headers`。它在 WS 模式下不把握手头冒充本次响应头。该测试与普通请求原先存在事件识别差异，与是否新建会话/连接无关。修复回归还验证了代号签发后通过 `InsertUsageLog` 写入、刷新缓冲，再由 `GetUsageRequestDiagnostics` 读回的 `real` 和 `alias` 均与预期相同；管理员采集、普通请求和 WebSocket 专项测试通过。
+
 普通文本 SSE 事件判别微基准约 171 ns/事件、112 B/事件、2 次分配。该数字不包含网络、数据库或完整读流；数据库查询只发生在代号恢复和必要签发阶段，不按文本片段查询。
 
 当前 Windows 环境 `CGO_ENABLED=0` 且未找到 GCC，未运行 Go race detector。未连接真实 PostgreSQL 或 OpenAI 上游，SQLite 共享连接测试不能替代生产多节点实测。

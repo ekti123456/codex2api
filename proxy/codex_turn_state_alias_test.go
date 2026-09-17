@@ -446,6 +446,62 @@ func TestTurnStateAliasSSEEscapesLongLinesAndUntouchedEvents(t *testing.T) {
 	require.Equal(t, long, string(data))
 }
 
+func TestTurnStateAliasPrefixedMetadataAndPersistenceFailure(t *testing.T) {
+	h := newWindowAuthorizationHandler(t)
+	account := &auth.Account{DBID: 71, AccountID: "a"}
+	for _, kind := range []string{"response.metadata", "codex.response.metadata", "responsesapi.response.metadata"} {
+		t.Run(kind, func(t *testing.T) {
+			c, _, _ := aliasRequest(t, h, 101, "turn", "", false)
+			frame, err := json.Marshal(map[string]any{"type": kind, "headers": map[string]any{"X-CODEX-TURN-STATE": []string{"upstream-secret"}, "other": "unchanged"}})
+			require.NoError(t, err)
+			wire := "data: " + string(frame) + "\n\n"
+			response := &http.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}
+			require.NoError(t, maskTurnStateResponse(c.Request.Context(), account, response))
+			masked, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			require.NotContains(t, string(masked), "upstream-secret")
+			payload := strings.TrimSpace(strings.TrimPrefix(string(masked), "data: "))
+			require.Equal(t, kind, gjson.Get(payload, "type").String())
+			require.Equal(t, "unchanged", gjson.Get(payload, "headers.other").String())
+			alias := gjson.Get(payload, "headers.X-CODEX-TURN-STATE.0").String()
+			require.True(t, h.db.IsManagedCodexTurnStateAlias(alias))
+			record, found, err := h.db.ReadCodexTurnState(t.Context(), alias)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, "upstream-secret", record.Real)
+			// Exercise the same diagnostic persistence/read path as usage-log details.
+			usage := database.UsageLogInput{StatusCode: http.StatusOK, Endpoint: "/v1/responses", RequestID: "state-log-" + kind}
+			populateUsageRequestDiagnostics(c, &usage)
+			require.NoError(t, h.db.InsertUsageLog(t.Context(), &usage))
+			h.db.FlushUsageLogs()
+			logs, err := h.db.ListRecentUsageLogs(t.Context(), 10)
+			require.NoError(t, err)
+			var persisted string
+			for _, log := range logs {
+				if log.RequestID == usage.RequestID {
+					detail, err := h.db.GetUsageRequestDiagnostics(t.Context(), log.ID)
+					require.NoError(t, err)
+					persisted = string(detail.Diagnostics)
+				}
+			}
+			require.NotEmpty(t, persisted)
+			require.Equal(t, "issued", gjson.Get(persisted, "turn_state.events.0.action").String())
+			require.Equal(t, "upstream-secret", gjson.Get(persisted, "turn_state.events.0.real").String())
+			require.Equal(t, alias, gjson.Get(persisted, "turn_state.events.0.alias").String())
+
+			// A new request cannot fall back to plaintext when persistence fails.
+			fresh, _, _ := aliasRequest(t, h, 101, "another-turn", "", false)
+			ctx, cancel := context.WithCancel(fresh.Request.Context())
+			cancel()
+			response = &http.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}
+			require.NoError(t, maskTurnStateResponse(ctx, account, response))
+			masked, err = io.ReadAll(response.Body)
+			require.Error(t, err)
+			require.NotContains(t, string(masked), "upstream-secret")
+		})
+	}
+}
+
 func BenchmarkTurnStateSSETextDelta(b *testing.B) {
 	frame := []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"some ordinary text\"}\n\n")
 	r := &turnStateStream{}

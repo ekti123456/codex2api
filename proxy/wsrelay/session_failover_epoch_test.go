@@ -45,7 +45,19 @@ func TestWebsocketSessionQuotaRetry(t *testing.T) {
 	}
 }
 
-func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota bool) {
+func TestTurnStatePrefixedMetadataWebsocketFailover(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native=%v", native), func(t *testing.T) {
+			runWebsocketToolFailoverScenario(t, native, false, false, "codex.response.metadata")
+		})
+	}
+}
+
+func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota bool, metadataTypes ...string) {
+	metadataType := "response.metadata"
+	if len(metadataTypes) > 0 {
+		metadataType = metadataTypes[0]
+	}
 	oldRuntime, oldResin, oldExecutor := proxy.CurrentRuntimeSettings(), proxy.GetResinConfig(), proxy.WebsocketExecuteFunc
 	test.Cleanup(func() {
 		proxy.ApplyRuntimeSettings(oldRuntime)
@@ -103,7 +115,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 				if err := connection.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"quota-failed-attempt"}}`)); err != nil {
 					return
 				}
-				if err := connection.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"real-turn-state-1"}}`)); err != nil {
+				if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":%q,"headers":{"x-codex-turn-state":"real-turn-state-1"}}`, metadataType))); err != nil {
 					return
 				}
 				failure := fmt.Sprintf(`{"type":"response.failed","response":{"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"quota exhausted","resets_at":%d,"plan_type":"plus"}}}`, time.Now().Add(time.Hour).Unix())
@@ -112,7 +124,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 				}
 				continue
 			}
-			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.metadata","headers":{"x-codex-turn-state":"real-turn-state-%d"}}`, index))); err != nil {
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":%q,"headers":{"x-codex-turn-state":"real-turn-state-%d"}}`, metadataType, index))); err != nil {
 				return
 			}
 			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"epoch-response","status":"completed","output":[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"gAAAAepoch-state-%d"},{"type":"function_call","call_id":"tool-call","name":"exec_command","arguments":"{}"}],"usage":{"input_tokens":1,"output_tokens":1}}}`, index))); err != nil {
@@ -206,7 +218,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 				require.NotEqual(test, "error", kind, string(event))
 				require.NotEqual(test, "response.failed", kind, string(event))
 				require.NotContains(test, string(event), "real-turn-state-")
-				if kind == "response.metadata" {
+				if kind == metadataType {
 					clientAlias = gjson.GetBytes(event, "headers.x-codex-turn-state").String()
 				}
 				if kind == "response.completed" {
@@ -229,7 +241,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 			require.NotContains(test, recorder.Body.String(), "real-turn-state-")
 			for _, line := range strings.Split(recorder.Body.String(), "\n") {
 				payload := strings.TrimPrefix(line, "data: ")
-				if gjson.Get(payload, "type").String() == "response.metadata" {
+				if gjson.Get(payload, "type").String() == metadataType {
 					clientAlias = gjson.Get(payload, "headers.x-codex-turn-state").String()
 				}
 			}

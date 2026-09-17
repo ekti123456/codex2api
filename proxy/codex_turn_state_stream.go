@@ -62,8 +62,9 @@ func maskTurnStateResponse(ctx context.Context, account *auth.Account, response 
 	return nil
 }
 
-// Buffer one SSE event, not the response. Parse only response.metadata and keep
-// other events byte-for-byte, including comments, ids and multiline data fields.
+// Buffer one SSE event, not the response. Parse response.metadata and its
+// transport-prefixed variants; keep other events byte-for-byte, including
+// comments, ids and multiline data fields.
 // The limit also bounds malformed streams without an event separator.
 type turnStateStream struct {
 	body     io.ReadCloser
@@ -146,7 +147,9 @@ func (r *turnStateStream) maskFrame(frame []byte) ([]byte, error) {
 	}
 	// Parse only the event discriminator on the common path. JSON escapes in
 	// either the discriminator or header name must not bypass token masking.
-	if gjson.GetBytes(data, "type").String() != "response.metadata" {
+	switch strings.TrimSpace(gjson.GetBytes(data, "type").String()) {
+	case "response.metadata", "codex.response.metadata", "responsesapi.response.metadata":
+	default:
 		return frame, nil
 	}
 	var event map[string]json.RawMessage
