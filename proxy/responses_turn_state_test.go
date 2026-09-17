@@ -17,6 +17,7 @@ import (
 	"github.com/codex2api/config"
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 )
@@ -66,10 +67,11 @@ func TestResponsesTurnStateAllowsOnlyBoundTurnPastWHAMLimit(t *testing.T) {
 	upstream := newContinuationRelayUpstream(t, false, &seenBody)
 	store, account := newUsageLimitedCodexStore(t, upstream.URL)
 	handler := NewHandler(store, nil, nil, nil)
+	root := uuid.Must(uuid.NewV7()).String()
 	body := []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":"continue"}],"stream":true}`)
 
 	fresh := invokeResponsesHandlerWithContext(t, func(c *gin.Context) {
-		c.Request.Header.Set("Session-Id", "turn-session")
+		c.Request.Header.Set("Session-Id", root)
 	}, handler.Responses, body)
 	if fresh.Code != http.StatusTooManyRequests {
 		t.Fatalf("fresh status = %d, want 429; body=%s", fresh.Code, fresh.Body.String())
@@ -81,9 +83,9 @@ func TestResponsesTurnStateAllowsOnlyBoundTurnPastWHAMLimit(t *testing.T) {
 		t.Fatalf("fresh request reached upstream despite WHAM limit: %s", seenBody)
 	}
 
-	store.BindSessionAffinity("turn-session", account, "")
+	store.BindSessionAffinity(root, account, "")
 	continued := invokeResponsesHandlerWithContext(t, func(c *gin.Context) {
-		c.Request.Header.Set("Session-Id", "turn-session")
+		c.Request.Header.Set("Session-Id", root)
 		c.Request.Header.Set(codexTurnStateHeader, "turn-state-1")
 	}, handler.Responses, body)
 	if continued.Code != http.StatusOK {

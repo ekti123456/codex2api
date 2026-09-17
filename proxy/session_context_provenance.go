@@ -35,7 +35,10 @@ func (handler *Handler) sessionContextVerifier(request *gin.Context, record data
 			scope = sessionContextScope(responseCacheOwnerForRequest(request, requestAPIKeyID(request)), hashRiskIdentity(rootKeys[0]), account.EffectiveAccountID(), record)
 		}
 	}
-	return handler.sessionContextVerifierForScope(request.Request.Context(), scope)
+	known, cancel := handler.sessionContextVerifierForScope(request.Request.Context(), scope)
+	return func(kind, value string) bool {
+		return kind == "turn_state" && trustedMappedTurnState(request.Request.Context(), record, value) || known(kind, value)
+	}, cancel
 }
 
 func (handler *Handler) sessionContextVerifierForScope(ctx context.Context, scope string) (sessionContextTokenVerifier, context.CancelFunc) {
@@ -105,7 +108,7 @@ func recordSessionContextTokens(ctx context.Context, account *auth.Account, coll
 }
 
 func recordSessionTurnState(ctx context.Context, account *auth.Account, token string) {
-	if token != "" {
+	if token != "" && !strings.HasPrefix(token, database.CodexTurnStateAliasPrefix) {
 		recordSessionContextTokens(ctx, account, func(record func(string, string)) { record("turn_state", token) })
 	}
 }

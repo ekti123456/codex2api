@@ -13,6 +13,7 @@ import (
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -79,6 +80,7 @@ func TestSessionContextProvenanceIsScopedToOwnerAccountAndGeneration(test *testi
 }
 
 func TestSessionContextProvenanceCurrentCompactionHTTPFlow(test *testing.T) {
+	root := uuid.Must(uuid.NewV7()).String()
 	handler, owner, target, _ := failoverTestSetup(test, true)
 	previous := GetResinConfig()
 	test.Cleanup(func() { SetResinConfig(previous) })
@@ -102,6 +104,7 @@ func TestSessionContextProvenanceCurrentCompactionHTTPFlow(test *testing.T) {
 			atomic.StoreInt32(&target.Disabled, 0)
 		}
 		_, body := failoverTestRequest(test, handler)
+		body = bytes.ReplaceAll(body, []byte(continuityTestThread), []byte(root))
 		body, _ = sjson.SetBytes(body, "stream", true)
 		path := "/v1/responses"
 		if step == 1 {
@@ -169,6 +172,7 @@ func TestSessionFailoverUnsentMainAccountGuardCoversCompactAndABA(test *testing.
 }
 
 func TestSessionContextProvenanceNativeWebsocketFlow(test *testing.T) {
+	root := uuid.Must(uuid.NewV7()).String()
 	handler, owner, target, _ := failoverTestSetup(test, true)
 	previous := GetResinConfig()
 	test.Cleanup(func() { SetResinConfig(previous) })
@@ -205,6 +209,7 @@ func TestSessionContextProvenanceNativeWebsocketFlow(test *testing.T) {
 			atomic.StoreInt32(&target.Disabled, 0)
 		}
 		_, body := failoverTestRequest(test, handler)
+		body = bytes.ReplaceAll(body, []byte(continuityTestThread), []byte(root))
 		body, _ = sjson.SetBytes(body, "type", "response.create")
 		if step == 1 {
 			body, _ = sjson.SetRawBytes(body, "input", []byte(`[{"type":"reasoning","encrypted_content":"gAAAAold-restart-reasoning"},{"type":"compaction","encrypted_content":"gAAAAold-restart-compaction"},{"role":"user","content":"continue current task"}]`))

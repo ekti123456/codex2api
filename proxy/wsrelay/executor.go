@@ -172,6 +172,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	// 准备请求头
 	headers := e.prepareWebsocketHeaders(accessToken, account, accountIDStr, headerSessionID, apiKey, deviceCfg, ginHeaders, wsBody, fingerprint)
 	proxy.ApplyCodexAnalyticsHeader(headers, wsBody)
+	wsBody, headers = proxy.PrepareCodexTurnStateOutbound(ctx, account, wsBody, headers)
 	wsBody = applyCodexFrameMetadata(wsBody, headers)
 	if fingerprint.PreservesSessionIdentity() {
 		prepareCodexHandshakeSnapshot(headers)
@@ -1006,6 +1007,12 @@ func ExecuteRequestWebsocket(ctx context.Context, account *auth.Account, request
 	// 但这里要包装成现有 handler 可消费的 SSE HTTP 200 响应。
 	handshakeResp := wsResp.HTTPResponse()
 	statusCode, handshakeHeader, handshakeFailed := normalizeWebsocketHandshakeResponse(handshakeResp)
+	// A pooled connection's handshake belongs to its first turn. Replaying its
+	// old turn-state into another turn would incorrectly mint a fresh alias for
+	// stale upstream state. Later turns obtain state through response.metadata.
+	if !handshakeFailed {
+		handshakeHeader = turnScopedHandshakeHeaders(wsResp.conn, handshakeHeader)
+	}
 	if handshakeFailed {
 		detail := formatFailedHandshakeHTTPBody(statusCode, handshakeResp)
 		if wsResp.observeTelemetry != nil {
@@ -1098,6 +1105,18 @@ func websocketResponseToHTTP(ctx context.Context, wsResp *WsResponse, statusCode
 	}()
 
 	return resp
+}
+
+func turnScopedHandshakeHeaders(conn *WsConnection, headers http.Header) http.Header {
+	if conn != nil && conn.turnStateHeaderTaken.Swap(true) {
+		headers = headers.Clone()
+		for key := range headers {
+			if strings.EqualFold(key, "X-Codex-Turn-State") {
+				delete(headers, key)
+			}
+		}
+	}
+	return headers
 }
 
 func normalizeWebsocketHandshakeResponse(handshakeResp *http.Response) (statusCode int, header http.Header, failed bool) {

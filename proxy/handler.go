@@ -2549,6 +2549,7 @@ func (h *Handler) unbindOrRetainAffinityForCapacityShed(exclusions *retryAccount
 
 func (h *Handler) unbindOrRetainAffinityForCapacityShedWithGuard(exclusions *retryAccountExclusions, affinityKey string, account *auth.Account, proxyURL string, guard auth.SessionAffinityGuard, outcome streamOutcome, retries map[int64]int, policy database.ContinuousRetryPolicy) {
 	id := account.ID()
+	exclusions.noteQuotaFailure(id, outcome.logStatusCode, outcome.failurePayload)
 	// Catch-all promises a real account rotation for every upstream failure.
 	// Keep the legacy same-account capacity backoff only for the normal,
 	// selective policy mode.
@@ -4109,6 +4110,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	}
 	h.primeNewAPIPolicyContext(c, ingressRequestBody(c, rawBody))
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, rawBody)
+	rawBody = normalizeTurnStateIngress(c, rawBody)
 	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/responses", model) {
 		return
 	}
@@ -4236,7 +4238,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	var lastStatusCode int
 	var lastBody []byte
 	var lastRetryAfter string
-	retryExclusions := newRetryAccountExclusions()
+	retryExclusions := newSessionRetryAccountExclusions(c, affinityKey, rawBody)
 	var wsHTTPFallback websocketHTTPFallbackState
 	invalidEncryptedContentRetried := false
 	antigravityRefreshRetried := map[int64]bool{}
@@ -4305,7 +4307,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) {
 				return
 			}
-			if sessionFailoverNoCandidate(c) || selectionTraceForRequest(c).SessionModelDenied() {
+			if sessionFailoverDispatchBlocked(c) || selectionTraceForRequest(c).SessionModelDenied() {
 				h.sendDispatchUnavailable(c, isStream, false)
 				return
 			}
@@ -4618,7 +4620,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					AccountID: account.ID(), AttemptIndex: attempt + 1,
 				}))
 				shouldRetry := h.shouldRetryUpstreamHTTPStatus(resp.StatusCode, errBody, &generalRetries, &rateLimitRetries, maxRetries, attemptMaxRateLimitRetries, continuousRetryPolicy)
-				disposition := h.httpSessionFailureDispositionForPolicy(resp.StatusCode, errBody, shouldRetry, continuousRetryPolicy)
+				disposition := h.httpSessionFailureDispositionForUpstream(account, resp, errBody, shouldRetry, continuousRetryPolicy)
 				decision := codex429Decision{}
 				if disposition.reportAccount {
 					if kind := classifyHTTPFailure(resp.StatusCode); kind != "" && !antigravityRefreshFailed && !antigravityNonPenalizingUpstreamFailure(account, resp.StatusCode, errBody) {
@@ -5022,7 +5024,9 @@ func (h *Handler) Responses(c *gin.Context) {
 			if len(terminalFailurePayload) > 0 && !outcome.terminalLocal {
 				outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 				if withContinuousRetryDeadlinePending(c.Request.Context(), func() {
-					responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, attemptEffectiveModel)
+					if !h.pendingStickyStream429Retry(account, outcome, terminalFailurePayload, attemptEffectiveModel, generalRetries, rateLimitRetries, maxRetries, attemptMaxRateLimitRetries, streamAttempt.downstreamWrote(wroteAnyBody), c.Request.Context().Err(), writeErr, continuousRetryPolicy) {
+						responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, attemptEffectiveModel)
+					}
 				}) {
 					outcome = applyResponseFailedDecisionKind(outcome, terminalFailurePayload, responseFailedDecision)
 				} else {
@@ -5421,7 +5425,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				AccountID: account.ID(), AttemptIndex: attempt + 1,
 			}))
 			shouldRetry := h.shouldRetryUpstreamHTTPStatus(resp.StatusCode, errBody, &generalRetries, &rateLimitRetries, maxRetries, attemptMaxRateLimitRetries, continuousRetryPolicy)
-			disposition := h.httpSessionFailureDispositionForPolicy(resp.StatusCode, errBody, shouldRetry, continuousRetryPolicy)
+			disposition := h.httpSessionFailureDispositionForUpstream(account, resp, errBody, shouldRetry, continuousRetryPolicy)
 			decision := codex429Decision{}
 			if disposition.reportAccount {
 				if kind := classifyHTTPFailure(resp.StatusCode); kind != "" {
@@ -5956,7 +5960,9 @@ func (h *Handler) Responses(c *gin.Context) {
 		if len(terminalFailurePayload) > 0 && !outcome.terminalLocal {
 			outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 			if withContinuousRetryDeadlinePending(c.Request.Context(), func() {
-				responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, effectiveModel)
+				if !h.pendingStickyStream429Retry(account, outcome, terminalFailurePayload, effectiveModel, generalRetries, rateLimitRetries, maxRetries, attemptMaxRateLimitRetries, streamAttempt.downstreamWrote(wroteAnyBody), c.Request.Context().Err(), writeErr, continuousRetryPolicy) {
+					responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, effectiveModel)
+				}
 			}) {
 				outcome = applyResponseFailedDecisionKind(outcome, terminalFailurePayload, responseFailedDecision)
 			} else {
@@ -6290,6 +6296,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	}
 	h.primeNewAPIPolicyContext(c, ingressRequestBody(c, rawBody))
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, rawBody)
+	rawBody = normalizeTurnStateIngress(c, rawBody)
 	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/responses/compact", model) {
 		return
 	}
@@ -6404,7 +6411,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	rateLimitRetries := 0
 	var lastStatusCode int
 	var lastBody []byte
-	retryExclusions := newRetryAccountExclusions()
+	retryExclusions := newSessionRetryAccountExclusions(c, affinityKey, rawBody)
 	invalidEncryptedContentRetried := false
 	relayContinuationAttempted := false
 
@@ -6415,7 +6422,13 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		var account *auth.Account
 		var stickyProxyURL string
 		var affinityGuard auth.SessionAffinityGuard
-		if attempt == 0 {
+		if attempt > 0 {
+			if _, blocked := h.prepareSessionQuotaRetry(c.Request.Context(), affinityKey, retryExclusions, dispatchPolicy); blocked {
+				h.sendDispatchUnavailable(c, false, false)
+				return
+			}
+		}
+		{
 			var handled bool
 			account, stickyProxyURL, handled = h.takeSessionAccountFailover(c.Request.Context(), affinityKey, apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy)
 			if handled && account == nil {
@@ -6480,7 +6493,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) {
 					return
 				}
-				if sessionFailoverNoCandidate(c) || selectionTraceForRequest(c).SessionModelDenied() {
+				if sessionFailoverDispatchBlocked(c) || selectionTraceForRequest(c).SessionModelDenied() {
 					h.sendDispatchUnavailable(c, false, false)
 					return
 				}
@@ -6623,7 +6636,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				}))
 				effectiveRateLimitRetries := h.effectiveMaxRateLimitRetries(account, maxRateLimitRetries)
 				shouldRetry := h.shouldRetryUpstreamHTTPStatus(resp.StatusCode, errBody, &generalRetries, &rateLimitRetries, maxRetries, effectiveRateLimitRetries, continuousRetryPolicy)
-				disposition := h.httpSessionFailureDispositionForPolicy(resp.StatusCode, errBody, shouldRetry, continuousRetryPolicy)
+				disposition := h.httpSessionFailureDispositionForUpstream(account, resp, errBody, shouldRetry, continuousRetryPolicy)
 				decision := codex429Decision{}
 				if disposition.reportAccount {
 					if kind := classifyHTTPFailure(resp.StatusCode); kind != "" {
@@ -6892,7 +6905,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			}))
 			effectiveRateLimitRetries := h.effectiveMaxRateLimitRetries(account, maxRateLimitRetries)
 			shouldRetry := h.shouldRetryUpstreamHTTPStatus(resp.StatusCode, errBody, &generalRetries, &rateLimitRetries, maxRetries, effectiveRateLimitRetries, continuousRetryPolicy)
-			disposition := h.httpSessionFailureDispositionForPolicy(resp.StatusCode, errBody, shouldRetry, continuousRetryPolicy)
+			disposition := h.httpSessionFailureDispositionForUpstream(account, resp, errBody, shouldRetry, continuousRetryPolicy)
 			decision := codex429Decision{}
 			if disposition.reportAccount {
 				if kind := classifyHTTPFailure(resp.StatusCode); kind != "" {
@@ -7038,9 +7051,12 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				}
 			}
 
+			effectiveRateLimitRetries := h.effectiveMaxRateLimitRetries(account, maxRateLimitRetries)
 			var decision codex429Decision
 			if !withContinuousRetryDeadlinePending(c.Request.Context(), func() {
-				decision = h.applyResponseFailedCooldown(account, compactFailedPayload, resp, effectiveModel)
+				if !h.pendingStickyStream429Retry(account, failureOutcome, compactFailedPayload, effectiveModel, generalRetries, rateLimitRetries, maxRetries, effectiveRateLimitRetries, false, c.Request.Context().Err(), nil, continuousRetryPolicy) {
+					decision = h.applyResponseFailedCooldown(account, compactFailedPayload, resp, effectiveModel)
+				}
 			}) {
 				resp.Body.Close()
 				h.store.Release(account)
@@ -7048,7 +7064,6 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			}
 			failureOutcome = applyResponseFailedDecisionKind(failureOutcome, compactFailedPayload, decision)
 			SyncCodexUsageState(h.store, account, resp)
-			effectiveRateLimitRetries := h.effectiveMaxRateLimitRetries(account, maxRateLimitRetries)
 			// Use the request snapshot so a hot reload cannot change a request
 			// after its first upstream attempt.
 			continuousPolicy := continuousRetryPolicy
@@ -7186,6 +7201,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		if responseID := responseIDFromPayload(respBody); responseID != "" {
 			h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account), c.Request.Context())
 		}
+		relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
 		c.Data(http.StatusOK, "application/json", respBody)
 		h.recordResponseContextProvenance(c, account, respBody)
 		return
@@ -7266,6 +7282,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	logEffectiveModel := usageEffectiveModelForMapping(logModel, effectiveModel, mappingApplied)
 	h.primeNewAPIPolicyContext(c, ingressRequestBody(c, rawBody))
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, codexBody)
+	codexBody = normalizeTurnStateIngress(c, codexBody)
 	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/chat/completions", model) {
 		return
 	}
@@ -7331,7 +7348,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	rateLimitRetries := 0
 	var lastStatusCode int
 	var lastBody []byte
-	retryExclusions := newRetryAccountExclusions()
+	retryExclusions := newSessionRetryAccountExclusions(c, affinityKey, rawBody)
 	var wsHTTPFallback websocketHTTPFallbackState
 	antigravityRefreshRetried := map[int64]bool{}
 
@@ -7360,7 +7377,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolChat) {
 				return
 			}
-			if sessionFailoverNoCandidate(c) || selectionTraceForRequest(c).SessionModelDenied() {
+			if sessionFailoverDispatchBlocked(c) || selectionTraceForRequest(c).SessionModelDenied() {
 				h.sendDispatchUnavailable(c, isStream, true)
 				return
 			}
@@ -7633,7 +7650,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				AccountID: account.ID(), AttemptIndex: attempt + 1,
 			}))
 			shouldRetry := h.shouldRetryUpstreamHTTPStatus(resp.StatusCode, errBody, &generalRetries, &rateLimitRetries, maxRetries, attemptMaxRateLimitRetries, continuousRetryPolicy)
-			disposition := h.httpSessionFailureDispositionForPolicy(resp.StatusCode, errBody, shouldRetry, continuousRetryPolicy)
+			disposition := h.httpSessionFailureDispositionForUpstream(account, resp, errBody, shouldRetry, continuousRetryPolicy)
 			decision := codex429Decision{}
 			if disposition.reportAccount {
 				if kind := classifyHTTPFailure(resp.StatusCode); kind != "" && !antigravityNonPenalizingUpstreamFailure(account, resp.StatusCode, errBody) {
@@ -8152,7 +8169,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		if len(terminalFailurePayload) > 0 && !outcome.terminalLocal {
 			outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 			if withContinuousRetryDeadlinePending(c.Request.Context(), func() {
-				responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, attemptEffectiveModel)
+				if !h.pendingStickyStream429Retry(account, outcome, terminalFailurePayload, attemptEffectiveModel, generalRetries, rateLimitRetries, maxRetries, attemptMaxRateLimitRetries, streamAttempt.downstreamWrote(wroteAnyBody), c.Request.Context().Err(), writeErr, continuousRetryPolicy) {
+					responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, attemptEffectiveModel)
+				}
 			}) {
 				outcome = applyResponseFailedDecisionKind(outcome, terminalFailurePayload, responseFailedDecision)
 			} else {

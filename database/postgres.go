@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"crypto/cipher"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -198,8 +199,11 @@ type sqlExecer interface {
 
 // DB PostgreSQL 数据库操作
 type DB struct {
-	conn   *sql.DB
-	driver string
+	turnStateCipher cipher.AEAD
+	turnStateKey    []byte
+	turnStateWrites atomic.Uint64
+	conn            *sql.DB
+	driver          string
 
 	promptFilterAudit *promptFilterAuditQueue
 	serviceErrors     *serviceErrorQueue
@@ -514,6 +518,11 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	}
 	if err := db.ensureCodexIdentityMappingTables(ctx); err != nil {
 		return nil, fmt.Errorf("创建出站会话映射表失败: %w", err)
+	}
+	if err := db.ensureCodexTurnStateTable(ctx); err != nil {
+		backgroundTaskCancel()
+		_ = conn.Close()
+		return nil, fmt.Errorf("创建轮次状态映射表失败: %w", err)
 	}
 	if err := db.ensurePromptWindowOperationsTables(ctx); err != nil {
 		return nil, fmt.Errorf("创建会话窗口操作表失败: %w", err)

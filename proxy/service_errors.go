@@ -276,6 +276,7 @@ func (handler *Handler) recordServiceError(ctx *gin.Context, status int, apiErro
 		upstream.ErrorSource, upstream.ErrorStage = "gateway", event.Stage
 	}
 	event.UpstreamInfo = []byte(transportDiagnosticJSON(upstream))
+	event.TurnState = turnStateDiagnostic(ctx.Request.Context())
 	if value, exists := ctx.Get(usageRequestDiagnosticsContextKey); exists {
 		if diagnostics, ok := value.(*usageRequestDiagnostics); ok && diagnostics != nil {
 			incoming = diagnostics.Incoming

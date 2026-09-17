@@ -114,7 +114,7 @@ func (handler *Handler) dispatchFailureForRequest(ctx *gin.Context) dispatchFail
 }
 
 func (handler *Handler) sendDispatchUnavailable(ctx *gin.Context, stream bool, chat bool) {
-	if sessionFailoverNoCandidate(ctx) {
+	if sessionFailoverDispatchBlocked(ctx) {
 		sendSessionFailoverUnavailable(ctx, stream, chat)
 		return
 	}
@@ -181,7 +181,7 @@ func dispatchStreamError(ctx *gin.Context, message, code string) gin.H {
 }
 
 func (handler *Handler) dispatchUnavailableAPIError(ctx *gin.Context) *api.APIError {
-	if sessionFailoverNoCandidate(ctx) {
+	if sessionFailoverDispatchBlocked(ctx) {
 		return sessionFailoverUnavailableAPIError(ctx)
 	}
 	if modelError := sessionModelErrorForRequest(ctx); modelError != nil {

@@ -42,8 +42,19 @@ func sessionFailoverNoCandidate(ctx *gin.Context) bool {
 }
 
 func sessionFailoverUnavailableAPIError(ctx *gin.Context) *api.APIError {
+	if plan, _ := ctx.Request.Context().Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan); plan != nil && plan.Failure != nil {
+		return plan.Failure
+	}
 	return api.NewAPIErrorWithDetails(api.ErrCodeNoAvailableAccount, sessionFailoverUnavailableMessage, api.ErrorTypeInvalidRequest,
 		gin.H{"request_id": diagnosticRequestID(snapshotUpstreamTrace(ctx.Request.Context()).RequestID), "retryable": false})
+}
+
+func sessionFailoverDispatchBlocked(ctx *gin.Context) bool {
+	if ctx == nil || ctx.Request == nil {
+		return false
+	}
+	plan, _ := ctx.Request.Context().Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan)
+	return plan != nil && plan.Failure != nil || sessionFailoverNoCandidate(ctx)
 }
 
 func sendSessionFailoverUnavailable(ctx *gin.Context, stream, chat bool) {
@@ -55,10 +66,14 @@ func sendSessionFailoverUnavailable(ctx *gin.Context, stream, chat bool) {
 		return
 	}
 	failure := sessionFailoverUnavailableAPIError(ctx)
-	api.ObserveError(ctx, http.StatusBadRequest, failure)
+	status := http.StatusBadRequest
+	if plan, _ := ctx.Request.Context().Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan); plan != nil && plan.Failure != nil {
+		status = api.HTTPStatusCode(failure.Code)
+	}
+	api.ObserveError(ctx, status, failure)
 	if !ctx.Writer.Written() {
 		ctx.Header("X-Should-Retry", "false")
-		ctx.JSON(http.StatusBadRequest, api.ErrorResponse{Error: *failure})
+		ctx.JSON(status, api.ErrorResponse{Error: *failure})
 		return
 	}
 	if stream {

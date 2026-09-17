@@ -189,6 +189,9 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 func (epoch *sessionOutboundEpoch) restartContextVerifier(ctx context.Context) (sessionContextTokenVerifier, context.CancelFunc) {
 	known, cancel := epoch.handler.sessionContextVerifierForScope(ctx, sessionContextScope(epoch.owner, epoch.key, epoch.upstreamAccount, epoch.record))
 	return func(kind, value string) bool {
+		if kind == "turn_state" && trustedMappedTurnState(ctx, epoch.record, value) {
+			return true
+		}
 		if kind != "previous_response_id" {
 			return known(kind, value)
 		}
@@ -205,6 +208,7 @@ func PrepareSessionRestartOutbound(ctx context.Context, account *auth.Account, b
 	if initialErr != nil {
 		return nil, nil, initialErr
 	}
+	body, headers = PrepareCodexTurnStateOutbound(ctx, account, body, headers)
 
 	epoch := outboundEpochFromContext(ctx)
 	if epoch == nil || !epoch.record.LossyContextRestart || account == nil || account.IsRelayStyle() {

@@ -101,7 +101,8 @@ type WsConnection struct {
 	disconnectNotified atomic.Bool
 
 	// HTTP 握手响应
-	httpResp *http.Response
+	httpResp             *http.Response
+	turnStateHeaderTaken atomic.Bool
 
 	// 连接关闭回调
 	onDisconnected func(accountID int64)

@@ -76,6 +76,7 @@ func sessionFailoverContextError(request *gin.Context, diagnostic *sessionAccoun
 }
 
 type sessionAccountFailoverPlan struct {
+	Failure       *api.APIError
 	PreserveInput bool
 	Request       *gin.Context
 	Key           string
@@ -300,6 +301,9 @@ func (handler *Handler) prepareSessionAccountFailover(request *gin.Context, key 
 
 func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key string, apiKeyID int64, exclude map[int64]bool, filter auth.AccountFilter, policy auth.DispatchPolicy) (*auth.Account, string, bool) {
 	plan, _ := ctx.Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan)
+	if plan != nil && plan.Key == key && plan.Failure != nil {
+		return nil, "", true
+	}
 	if plan == nil || plan.Checked || plan.Key != key {
 		return nil, "", false
 	}

@@ -32,6 +32,20 @@ func TestWebsocketSessionFailoverResetsWindowAndConnection(test *testing.T) {
 
 func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 	keepInput := len(preserve) > 0 && preserve[0]
+	runWebsocketToolFailoverScenario(test, native, keepInput, false)
+}
+
+func TestWebsocketSessionQuotaRetry(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		for _, preserve := range []bool{false, true} {
+			t.Run(fmt.Sprintf("native=%v/preserve=%v", native, preserve), func(t *testing.T) {
+				runWebsocketToolFailoverScenario(t, native, preserve, true)
+			})
+		}
+	}
+}
+
+func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota bool) {
 	oldRuntime, oldResin, oldExecutor := proxy.CurrentRuntimeSettings(), proxy.GetResinConfig(), proxy.WebsocketExecuteFunc
 	test.Cleanup(func() {
 		proxy.ApplyRuntimeSettings(oldRuntime)
@@ -42,6 +56,7 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 	settings := proxy.DefaultRuntimeSettings()
 	settings.CodexSessionFailoverEnabled, settings.CodexForceWebsocket = true, true
 	settings.CodexSessionFailoverPreserveInput = keepInput
+	settings.CodexWSSilentRetry, settings.CodexWSSilentRetries = true, 1
 	proxy.ApplyRuntimeSettings(settings)
 	dbPath := filepath.Join(test.TempDir(), "epoch.db")
 	db, err := database.New("sqlite", dbPath)
@@ -50,6 +65,10 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 	memory := cache.NewMemory(100)
 	test.Cleanup(func() { require.NoError(test, memory.Close()) })
 	store := auth.NewStore(nil, memory, nil)
+	store.SetMaxRetries(0)
+	store.SetMaxRateLimitRetries(1)
+	store.SetRetryIntervalMS(1)
+	store.SetTransportRetryPolicy("sticky")
 	test.Cleanup(store.Stop)
 	first := &auth.Account{DBID: 1695, AccountID: "661373c1-f1a9-4ca9-8682-a0594b30c36c", AccessToken: "first-token", Status: auth.StatusReady, Models: []string{"gpt-5.6-sol"}, CodexFingerprintMode: auth.CodexFingerprintModeDevice}
 	second := &auth.Account{DBID: 1696, AccountID: "761373c1-f1a9-4ca9-8682-a0594b30c36c", AccessToken: "second-token", Status: auth.StatusReady, Models: []string{"gpt-5.6-sol"}, CodexFingerprintMode: auth.CodexFingerprintModeDevice, Disabled: 1}
@@ -62,8 +81,9 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 		body       []byte
 		connection int32
 	}
-	seen := make(chan capture, 1)
+	seen := make(chan capture, 8)
 	var connections atomic.Int32
+	var quotaActive atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		connection, err := (&websocket.Upgrader{}).Upgrade(writer, request, nil)
 		if err != nil {
@@ -77,6 +97,24 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 				return
 			}
 			seen <- capture{request.Header.Clone(), body, index}
+			if quotaActive.Load() && request.Header.Get("Authorization") == "Bearer first-token" {
+				// Lifecycle/metadata frames are not visible answer content and must
+				// not accidentally prevent a safe pre-content quota retry.
+				if err := connection.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"quota-failed-attempt"}}`)); err != nil {
+					return
+				}
+				if err := connection.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"real-turn-state-1"}}`)); err != nil {
+					return
+				}
+				failure := fmt.Sprintf(`{"type":"response.failed","response":{"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"quota exhausted","resets_at":%d,"plan_type":"plus"}}}`, time.Now().Add(time.Hour).Unix())
+				if err := connection.WriteMessage(websocket.TextMessage, []byte(failure)); err != nil {
+					return
+				}
+				continue
+			}
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.metadata","headers":{"x-codex-turn-state":"real-turn-state-%d"}}`, index))); err != nil {
+				return
+			}
 			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"epoch-response","status":"completed","output":[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"gAAAAepoch-state-%d"},{"type":"function_call","call_id":"tool-call","name":"exec_command","arguments":"{}"}],"usage":{"input_tokens":1,"output_tokens":1}}}`, index))); err != nil {
 				return
 			}
@@ -110,9 +148,18 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 	var captures []capture
 	const originalTurn = "01a095b5-86a3-7ec2-af42-0bb1111ef330"
 	var mappedTurns []string
-	for number := 0; number < 5; number++ {
+	var clientAlias string
+	steps := 5
+	if quota {
+		steps = 4
+	}
+	for number := 0; number < steps; number++ {
 		if number == 2 {
-			atomic.StoreInt32(&first.Disabled, 1)
+			if quota {
+				quotaActive.Store(true)
+			} else {
+				atomic.StoreInt32(&first.Disabled, 1)
+			}
 			atomic.StoreInt32(&second.Disabled, 0)
 		}
 		if number == 3 && !native {
@@ -142,6 +189,11 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 			require.NoError(test, err)
 		}
 		body = addSessionWireTools(test, body)
+		if clientAlias != "" {
+			body, err = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", clientAlias)
+			require.NoError(test, err)
+		}
+		previousAlias := clientAlias
 		if native {
 			body, err = sjson.SetBytes(body, "type", "response.create")
 			require.NoError(test, err)
@@ -153,6 +205,10 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 				kind := gjson.GetBytes(event, "type").String()
 				require.NotEqual(test, "error", kind, string(event))
 				require.NotEqual(test, "response.failed", kind, string(event))
+				require.NotContains(test, string(event), "real-turn-state-")
+				if kind == "response.metadata" {
+					clientAlias = gjson.GetBytes(event, "headers.x-codex-turn-state").String()
+				}
 				if kind == "response.completed" {
 					require.Contains(test, string(event), "exec_command")
 					break
@@ -170,11 +226,41 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 			require.Equal(test, http.StatusOK, recorder.Code, recorder.Body.String())
 			require.Contains(test, recorder.Body.String(), "response.completed")
 			require.Contains(test, recorder.Body.String(), "exec_command")
+			require.NotContains(test, recorder.Body.String(), "real-turn-state-")
+			for _, line := range strings.Split(recorder.Body.String(), "\n") {
+				payload := strings.TrimPrefix(line, "data: ")
+				if gjson.Get(payload, "type").String() == "response.metadata" {
+					clientAlias = gjson.Get(payload, "headers.x-codex-turn-state").String()
+				}
+			}
+		}
+		require.True(test, database.ValidCodexTurnStateAlias(clientAlias))
+		if number == 1 || number == 3 {
+			require.Equal(test, previousAlias, clientAlias)
+		} else {
+			require.NotEqual(test, previousAlias, clientAlias)
 		}
 		select {
 		case sent := <-seen:
+			if quota && number == 2 {
+				require.Equal(test, "Bearer first-token", sent.headers.Get("Authorization"))
+				require.Equal(test, "real-turn-state-1", gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-state").String())
+				select {
+				case sent = <-seen:
+					require.Equal(test, "Bearer second-token", sent.headers.Get("Authorization"))
+				case <-time.After(time.Second):
+					test.Fatal("quota retry did not reach the new account")
+				}
+			}
 			captures = append(captures, sent)
 			assertSessionWireTools(test, sent.body)
+			state := gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-state").String()
+			if number == 1 || number == 3 {
+				require.Equal(test, fmt.Sprintf("real-turn-state-%d", sent.connection), state)
+			} else {
+				require.Empty(test, state)
+			}
+			require.NotContains(test, string(sent.body), database.CodexTurnStateAliasPrefix)
 			if keepInput && number >= 2 {
 				require.JSONEq(test, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(sent.body, "input").Raw)
 			}
@@ -206,6 +292,13 @@ func runWebsocketToolFailover(test *testing.T, native bool, preserve ...bool) {
 	require.Equal(test, captures[0].connection, captures[1].connection)
 	require.Equal(test, captures[2].connection, captures[3].connection)
 	require.NotEqual(test, captures[0].connection, captures[2].connection)
+	if quota {
+		require.EqualValues(test, 2, connections.Load())
+		require.Equal(test, mappedTurns[0], mappedTurns[1])
+		require.Equal(test, mappedTurns[2], mappedTurns[3])
+		require.NotEqual(test, mappedTurns[0], mappedTurns[2])
+		return
+	}
 	require.NotEqual(test, captures[0].connection, captures[4].connection)
 	require.NotEqual(test, captures[0].headers.Get("Session-Id"), captures[4].headers.Get("Session-Id"))
 	require.EqualValues(test, 3, connections.Load())

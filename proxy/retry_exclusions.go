@@ -14,10 +14,12 @@ import (
 )
 
 type retryAccountExclusions struct {
-	hard        map[int64]bool
-	soft        map[int64]bool
-	transient   map[int64]bool
-	recoverable map[int64]bool
+	sessionQuota  *sessionQuotaRetry
+	quotaFailures map[int64]bool
+	hard          map[int64]bool
+	soft          map[int64]bool
+	transient     map[int64]bool
+	recoverable   map[int64]bool
 }
 
 // websocketHTTPFallbackState carries the already-acquired account lease across
@@ -183,6 +185,7 @@ func (r *retryAccountExclusions) MarkRequestFailure(accountID int64, err error, 
 // the lifetime of the request, while allowing genuinely recoverable failures
 // to participate in another pool cycle when continuous retry is enabled.
 func (r *retryAccountExclusions) MarkHTTPFailure(accountID int64, statusCode int, body []byte, generalLimit, rateLimit int, policies ...database.ContinuousRetryPolicy) {
+	r.noteQuotaFailure(accountID, statusCode, body)
 	if isHardStopUpstreamPolicy(body) {
 		r.MarkHard(accountID)
 		return
@@ -208,6 +211,7 @@ func (r *retryAccountExclusions) MarkStreamFailure(accountID int64, outcome stre
 }
 
 func (r *retryAccountExclusions) MarkStreamFailureForEvent(accountID int64, outcome streamOutcome, eventType string, generalLimit, rateLimit int, policies ...database.ContinuousRetryPolicy) {
+	r.noteQuotaFailure(accountID, outcome.logStatusCode, outcome.failurePayload)
 	failureKind := strings.ToLower(strings.TrimSpace(outcome.failureKind))
 	if failureKind == "cyber_policy" || isHardStopUpstreamPolicy(outcome.failurePayload) {
 		r.MarkHard(accountID)
@@ -529,6 +533,11 @@ func (h *Handler) nextRetryAccount(ctx context.Context, affinityKey string, apiK
 
 func (h *Handler) nextRetryAccountWithGuard(ctx context.Context, affinityKey string, apiKeyID int64, exclusions *retryAccountExclusions, filter auth.AccountFilter, preserveBinding bool, policy auth.DispatchPolicy) (*auth.Account, string, auth.SessionAffinityGuard) {
 	if h == nil || h.store == nil {
+		return nil, "", auth.SessionAffinityGuard{}
+	}
+	var blocked bool
+	ctx, blocked = h.prepareSessionQuotaRetry(ctx, affinityKey, exclusions, policy)
+	if blocked {
 		return nil, "", auth.SessionAffinityGuard{}
 	}
 	if account, proxyURL, handled := h.takeSessionAccountFailover(ctx, affinityKey, apiKeyID, exclusions.ForSelection(), filter, policy); handled {

@@ -139,6 +139,7 @@ type SessionToolSummary struct {
 }
 
 type ServiceErrorEvent struct {
+	TurnState              *TurnStateDiagnostic              `json:"turn_state,omitempty"`
 	ID                     string                            `json:"id"`
 	CreatedAt              time.Time                         `json:"created_at"`
 	RequestID              string                            `json:"request_id"`

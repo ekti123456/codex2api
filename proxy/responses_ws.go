@@ -398,6 +398,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		return newResponsesWSCloseError(websocket.ClosePolicyViolation, apiErr.Message, err)
 	}
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, rawBody)
+	rawBody = normalizeTurnStateIngress(c, rawBody)
 	auditEndpoint := "/v1/responses"
 	if options != nil {
 		if configured := strings.TrimSpace(options.auditEndpoint); configured != "" {
@@ -581,7 +582,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	var lastStatusCode int
 	var lastBody []byte
 	var lastRetryableUpstreamErr *api.APIError
-	retryExclusions := newRetryAccountExclusions()
+	retryExclusions := newSessionRetryAccountExclusions(c, affinityKey, rawBody)
 	invalidEncryptedContentRetried := false
 	// 官方 Codex 每个 turn 都使用新的 ModelClientSession，并只在同一 turn 的
 	// 后续请求里回送 x-codex-turn-state。只有该信号和既有绑定/硬窗口 owner
@@ -677,7 +678,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			if c.Request.Context().Err() != nil {
 				return errResponsesWSClientGone
 			}
-			if sessionFailoverNoCandidate(c) {
+			if sessionFailoverDispatchBlocked(c) {
 				apiErr = sessionFailoverUnavailableAPIError(c)
 			} else if modelError := sessionModelErrorForRequest(c); modelError != nil {
 				apiErr = modelError
@@ -974,7 +975,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 				AccountID: account.ID(), AttemptIndex: attempt + 1,
 			}))
 			shouldRetry := retryEnabled && h.shouldRetryUpstreamHTTPStatus(resp.StatusCode, errBody, &generalRetries, &rateLimitRetries, maxRetries, maxRateLimitRetries, continuousRetryPolicy)
-			disposition := h.httpSessionFailureDispositionForPolicy(resp.StatusCode, errBody, shouldRetry, continuousRetryPolicy)
+			disposition := h.httpSessionFailureDispositionForUpstream(account, resp, errBody, shouldRetry, continuousRetryPolicy)
 			if preserveContinuationBinding() {
 				disposition.retainAffinity = true
 			}
@@ -1107,6 +1108,11 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 						return errResponsesWSClientGone
 					}
 					continue
+				}
+				// The inner reader deferred temporary cooldown while a sticky retry
+				// was possible. The outer loop owns the final budget decision.
+				if h.deferStickyStream429Cooldown(account, retryErr.outcome, retryErr.outcome.failurePayload, effectiveModel, true, continuousRetryPolicy) {
+					h.applyResponseFailedCooldown(account, retryErr.outcome.failurePayload, resp, effectiveModel)
 				}
 				apiErr = lastRetryableUpstreamErr
 				clientErr := responsesWSClientUpstreamAPIError(apiErr, hideUpstreamErrors)
@@ -1472,7 +1478,10 @@ func (h *Handler) streamResponsesWSUpstream(
 	if len(terminalFailurePayload) > 0 && !outcome.terminalLocal {
 		outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 		if withContinuousRetryDeadlinePending(c.Request.Context(), func() {
-			responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, effectiveModel)
+			retryPossible := retryEnabled && continuousRetryStreamFailureSelected(outcome, terminalFailurePayload, terminalFailureEventType, continuousRetryPolicy) && !(wroteAnyBody && wsReplay == nil) && c.Request.Context().Err() == nil && writeErr == nil
+			if !h.deferStickyStream429Cooldown(account, outcome, terminalFailurePayload, effectiveModel, retryPossible, continuousRetryPolicy) {
+				responseFailedDecision = h.applyResponseFailedCooldown(account, terminalFailurePayload, resp, effectiveModel)
+			}
 		}) {
 			outcome = applyResponseFailedDecisionKind(outcome, terminalFailurePayload, responseFailedDecision)
 		} else {

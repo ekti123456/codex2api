@@ -67,7 +67,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
     ['outbound', outbound.snapshot],
     ['outboundDiagnostics', outbound.local],
     ['resolved', data.resolved],
-    ['continuity', { ...diagnosticRecord(data.session_continuity), account_failover: data.account_failover ?? diagnosticRecord(data.session_continuity).account_failover }],
+    ['continuity', { ...diagnosticRecord(data.session_continuity), account_failover: data.account_failover ?? diagnosticRecord(data.session_continuity).account_failover, turn_state: data.turn_state }],
     ['audit', data.audit],
     ['dispatch', data.dispatch],
     ['windows', { user_window: data.user_window, account_window: data.account_window, user_window_key_hash: data.user_window_key_hash }],

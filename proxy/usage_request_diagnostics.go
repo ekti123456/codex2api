@@ -69,6 +69,7 @@ type usageRecentAccountDiagnostic struct {
 }
 
 type usageRequestDiagnostics struct {
+	TurnState              *database.TurnStateDiagnostic            `json:"turn_state,omitempty"`
 	InitialSession         *initialSessionDiagnostic                `json:"initial_session,omitempty"`
 	WindowNumberOriginal   string                                   `json:"window_number_original,omitempty"`
 	WindowNumberOutbound   string                                   `json:"window_number_outbound,omitempty"`
@@ -429,6 +430,7 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		return
 	}
 	snapshot := *state
+	snapshot.TurnState = turnStateDiagnostic(c.Request.Context())
 	input.SessionIDPrefix = snapshot.SessionIDPrefix
 	snapshot.Request = usageRequestInfoSnapshot(c, input)
 	if input.UpstreamDiagnostics != "" {
@@ -508,6 +510,14 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		upstream := *snapshot.Upstream
 		upstream.OutboundIdentity = &outboundIdentityDiagnostic{FormatVersion: upstream.OutboundIdentity.FormatVersion, Truncated: true}
 		snapshot.Upstream = &upstream
+		payload, err = json.Marshal(snapshot)
+	}
+	// Keep both the incoming and latest outgoing state when retry diagnostics
+	// exceed the shared budget; do not discard the entire request diagnostic.
+	for len(payload) > database.MaxUsageRequestDiagnosticsBytes && snapshot.TurnState != nil && len(snapshot.TurnState.Events) > 2 {
+		snapshot.TurnState.Events = append(snapshot.TurnState.Events[:1], snapshot.TurnState.Events[2:]...)
+		snapshot.TurnState.Omitted++
+		snapshot.Truncated = true
 		payload, err = json.Marshal(snapshot)
 	}
 	if err == nil && len(payload) <= database.MaxUsageRequestDiagnosticsBytes {
