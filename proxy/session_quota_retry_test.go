@@ -55,6 +55,7 @@ func TestSessionQuotaRetryEndToEnd(t *testing.T) {
 		{name: "temporary_stream_budget_exhausted", budget: 1, temporary: true, streamFailure: true, temporaryAlways: true},
 		{name: "native_temporary_stream_budget_exhausted", native: true, budget: 1, temporary: true, streamFailure: true, temporaryAlways: true},
 		{name: "different_tags", budget: 1, targetMismatch: "tags"},
+		{name: "native_different_tags", native: true, budget: 1, targetMismatch: "tags"},
 		{name: "different_groups", budget: 1, targetMismatch: "groups"},
 		{name: "different_model", budget: 1, targetMismatch: "model"},
 		{name: "visible_output", streamFailure: true, visible: true, budget: 1},
@@ -227,7 +228,7 @@ func TestSessionQuotaRetryEndToEnd(t *testing.T) {
 			body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata.window_number", 1)
 			body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata.window_id", root+":1")
 			output, status = send(body, tc.compact)
-			blocked := tc.budget == 0 || tc.disabled || tc.targetMismatch != "" || tc.visible
+			blocked := tc.budget == 0 || tc.disabled || tc.targetMismatch == "groups" || tc.targetMismatch == "model" || tc.visible
 			expectSwitch := !blocked && !tc.temporary
 			var attempts []capture
 			for len(seen) > 0 {

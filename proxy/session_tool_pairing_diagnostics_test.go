@@ -16,7 +16,7 @@ import (
 )
 
 func TestPreserveInputToolPairingDiagnostics(t *testing.T) {
-	body := []byte(`{"input":[{"type":"function_call","call_id":"paired","arguments":"private-arguments"},{"type":"function_call_output","call_id":"paired","output":"private-output"},{"type":"function_call_output","call_id":"missing-function","output":"private-output"},{"type":"custom_tool_call_output","call_id":"missing-custom","output":"private-output"},{"type":"function_call_output","output":"private-output"},{"type":"tool_search_output","execution":"client","call_id":"missing-search","tools":[]}],"tools":[{"type":"function","name":"private-tool"}]}`)
+	body := []byte(`{"input":[{"type":"function_call","call_id":"paired","arguments":"private-arguments"},{"type":"function_call_output","call_id":"paired","output":"private-output"},{"type":"function_call_output","call_id":"missing-function","output":"private-output"},{"type":"custom_tool_call_output","call_id":"missing-custom","output":"private-output"},{"type":"custom_tool_call_output","output":"private-output"},{"type":"tool_search_output","execution":"client","call_id":"missing-search","tools":[]}],"tools":[{"type":"function","name":"private-tool"}]}`)
 	before := bytes.Clone(body)
 	_, _, report, err := cleanSessionRestartContext(nil, body, nil, true)
 	require.ErrorContains(t, err, "工具结果缺少对应调用")

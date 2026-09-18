@@ -1065,11 +1065,12 @@ func inputHasToolCallContext(input gjson.Result) bool {
 	return found
 }
 
-// inputHasFunctionCallOutput 判断 input 数组里是否含 *_output 项（缺少配对的 function_call 时上游会 400）。
+// inputHasFunctionCallOutput reports outputs that need invocation context.
+// Standalone Codex function messages must not create a false cache dependency.
 func inputHasFunctionCallOutput(input gjson.Result) bool {
 	found := false
 	input.ForEach(func(_, v gjson.Result) bool {
-		if isCodexToolCallOutputType(v.Get("type").String()) {
+		if isCodexToolCallOutputType(v.Get("type").String()) && !responseContextStandaloneFunctionOutput(v) {
 			found = true
 			return false
 		}

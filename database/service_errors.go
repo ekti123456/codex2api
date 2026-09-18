@@ -89,7 +89,7 @@ type SessionAccountFailoverDiagnostic struct {
 
 type SessionFailoverSelection struct {
 	RequiredGroupIDs    []int64                    `json:"required_group_ids"`
-	RequiredTags        []string                   `json:"required_tags"`
+	RequiredTags        []string                   `json:"required_tags,omitempty"` // Historical diagnostics only; tags no longer constrain failover.
 	MatchMode           string                     `json:"match_mode"`
 	Attempts            int                        `json:"attempts"`
 	RejectionCounts     map[string]int             `json:"rejection_counts"`

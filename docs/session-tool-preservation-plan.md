@@ -2,6 +2,8 @@
 
 状态：已实现，验证记录见文末。2026-09-15。
 
+后续调整（2026-09-18）：切号候选只要求账号分组集合一致，标签不再参与；本文原“同标签”要求属于历史方案。独立 `function_call_output`（`call_id` 缺省或 `null`）按官方协议保留，参见 `session-preserve-input.md`。
+
 调查证据：`F:/codex/reports/failover-tool-audit-20260915/README.md`，包含官方 Codex 0.154.0 源码、官方文档、诊断探针和五份客户端样本回放。
 
 ## 1. 修复目标与范围

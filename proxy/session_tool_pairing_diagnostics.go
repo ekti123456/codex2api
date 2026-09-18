@@ -8,9 +8,9 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Match the existing preserve-input rules exactly. This is a diagnostic scan,
-// not reconstruction: calls may occur later in input, and hosted tool search
-// outputs without a client call are allowed. Nested user data is not protocol.
+// Diagnose pairing without reconstruction: calls may occur later in input;
+// standalone function messages and hosted search outputs need no matching call.
+// Nested user data is not protocol.
 func inspectPreservedToolPairing(input gjson.Result) (*database.SessionToolPairingDiagnostic, bool) {
 	items := input.Array()
 	report := &database.SessionToolPairingDiagnostic{Scope: "input_top_level", InputItems: len(items)}
@@ -31,7 +31,7 @@ func inspectPreservedToolPairing(input gjson.Result) (*database.SessionToolPairi
 		expected := ""
 		if strings.HasSuffix(typ, "_call_output") {
 			report.OutputItems++
-			if !calls[id.String()] {
+			if !responseContextStandaloneFunctionOutput(item) && !calls[id.String()] {
 				missingOutput = true
 				expected = strings.TrimSuffix(typ, "_output")
 			}

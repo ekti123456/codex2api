@@ -1062,6 +1062,12 @@ func sanitizeMalformedResponsesFunctionCalls(body map[string]any) bool {
 			filtered = append(filtered, raw)
 			continue
 		}
+		// Missing/null call_id is a standalone Codex message, not the result
+		// of a malformed id-less call removed above.
+		if item["call_id"] == nil {
+			filtered = append(filtered, raw)
+			continue
+		}
 		callID := strings.TrimSpace(firstNonEmptyAnyString(item["call_id"]))
 		if callID == "" && invalidEmptyCalls > 0 {
 			invalidEmptyCalls--
@@ -1083,7 +1089,8 @@ func sanitizeMalformedResponsesFunctionCalls(body map[string]any) bool {
 // 会丢掉配对中的一半：只剩 *_call_output 时上游 400 "No tool call found for
 // function call output with call_id ..."（issue #414），只剩 *_call 时上游 400
 // "No tool output found for function call ..."。修复策略：
-//   - 孤儿 *_call_output（含缺 call_id 的）：改写为 user message 保留输出文本，
+//   - 独立 function_call_output（call_id 缺省或 null）：原样保留；
+//   - 其余孤儿 *_call_output：改写为 user message 保留输出文本，
 //     避免直接丢弃造成上下文缺失；
 //   - 孤儿 function_call / custom_tool_call：紧随其后补一条占位 output；
 //     其余 *_call 类型形态不明，原样保留不做合成。
@@ -1125,6 +1132,8 @@ func repairResponsesToolCallPairing(body map[string]any) bool {
 		callID := strings.TrimSpace(firstNonEmptyAnyString(item["call_id"]))
 		switch {
 		case typ == "tool_search_output":
+			out = append(out, raw)
+		case typ == "function_call_output" && item["call_id"] == nil:
 			out = append(out, raw)
 		case isCodexToolCallOutputType(typ):
 			if callID != "" && callIDs[callID] {

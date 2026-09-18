@@ -6,6 +6,18 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// Codex's FunctionCallOutput.call_id is optional: notifications and cross-thread
+// messages have no corresponding invocation. Only this protocol type permits
+// a missing/null call_id; an empty string, wrong type, or custom output does not
+// acquire the same exemption. Names and namespaces are optional as well.
+func responseContextStandaloneFunctionOutput(item gjson.Result) bool {
+	if item.Get("type").String() != "function_call_output" {
+		return false
+	}
+	id := item.Get("call_id")
+	return !id.Exists() || id.Type == gjson.Null
+}
+
 // Only protocol containers contain context items. Schemas, arguments, grammar,
 // metadata and text are data, even when their keys resemble protocol fields.
 func responseContextMessage(value gjson.Result) bool {

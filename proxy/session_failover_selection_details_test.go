@@ -22,7 +22,7 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			owner.SessionCapacityEnabled, owner.SessionCapacityMax = true, 1
 			require.True(t, h.store.AdmitAccountSession(owner, "occupied", time.Now()))
 			require.True(t, h.store.ApplyAccountGroups(owner.ID(), []int64{11}))
-			require.True(t, h.store.ApplyAccountGroups(target.ID(), []int64{11}))
+			require.True(t, h.store.ApplyAccountGroups(target.ID(), []int64{12}))
 			require.True(t, h.store.ApplyAccountTags(owner.ID(), []string{"private-pool", "pro"}))
 			require.True(t, h.store.ApplyAccountTags(target.ID(), []string{"pro"}))
 			ctx, body := failoverTestRequest(t, h)
@@ -33,12 +33,14 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			require.True(t, sessionFailoverNoCandidate(ctx))
 			diagnostic := continuityRequest(ctx).Diagnostic.AccountFailover
 			require.Equal(t, []int64{11}, diagnostic.Selection.RequiredGroupIDs)
-			require.Equal(t, []string{"private-pool", "pro"}, diagnostic.Selection.RequiredTags)
-			require.Positive(t, diagnostic.Selection.RejectionCounts["account_tags_mismatch"])
+			require.Empty(t, diagnostic.Selection.RequiredTags)
+			require.Equal(t, "exact_groups", diagnostic.Selection.MatchMode)
+			require.Positive(t, diagnostic.Selection.RejectionCounts["account_groups_mismatch"])
 			found := false
 			for _, candidate := range diagnostic.Selection.Candidates {
-				if candidate.AccountID == target.ID() && candidate.Reason == "account_tags_mismatch" {
+				if candidate.AccountID == target.ID() && candidate.Reason == "account_groups_mismatch" {
 					found = true
+					require.Equal(t, []int64{12}, candidate.GroupIDs)
 					require.Equal(t, []string{"pro"}, candidate.Tags)
 				}
 			}
@@ -67,7 +69,7 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			require.Contains(t, recorder.Body.String(), "暂无可用账号")
 			require.Contains(t, recorder.Body.String(), `"retryable":false`)
 			require.NotContains(t, recorder.Body.String(), "private-pool")
-			require.NotContains(t, recorder.Body.String(), "account_tags_mismatch")
+			require.NotContains(t, recorder.Body.String(), "account_groups_mismatch")
 			if !stream {
 				require.Equal(t, http.StatusBadRequest, ctx.Writer.Status())
 				require.Equal(t, "false", ctx.Writer.Header().Get("X-Should-Retry"))
@@ -84,7 +86,8 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			require.Equal(t, 400, page.Items[0].StatusCode)
 			require.Equal(t, "dispatch", page.Items[0].Stage)
 			require.NotNil(t, page.Items[0].AccountFailover.Selection)
-			require.Equal(t, []string{"private-pool", "pro"}, page.Items[0].AccountFailover.Selection.RequiredTags)
+			require.Empty(t, page.Items[0].AccountFailover.Selection.RequiredTags)
+			require.Equal(t, "exact_groups", page.Items[0].AccountFailover.Selection.MatchMode)
 		})
 	}
 }

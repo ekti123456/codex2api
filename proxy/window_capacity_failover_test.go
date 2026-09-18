@@ -159,7 +159,7 @@ func TestWindowCapacityQuoteReachesAccountFailover(test *testing.T) {
 				return
 			}
 			require.True(test, handled)
-			if scenario != "success" && scenario != "expansion_no_reserved" && scenario != "expansion_quota_exhausted" {
+			if scenario != "success" && scenario != "different_tags" && scenario != "expansion_no_reserved" && scenario != "expansion_quota_exhausted" {
 				require.Nil(test, selected)
 				require.Equal(test, "no_safe_candidate", usageRequestDiagnosticState(request).AccountFailover.Result)
 				stored, _, err := handler.db.ReadSessionContinuity(test.Context(), hashRiskIdentity(key))
@@ -169,9 +169,6 @@ func TestWindowCapacityQuoteReachesAccountFailover(test *testing.T) {
 				require.NoError(test, err)
 				require.False(test, admissions.Windows[grant.Grant.Root].Confirmed)
 				require.Equal(test, owner.ID(), admissions.Windows[grant.Grant.Root].OwnerAccountID)
-				if scenario == "different_tags" {
-					require.Contains(test, selectionTraceForRequest(request).Snapshot().Reasons, "account_tags_mismatch")
-				}
 				return
 			}
 			require.Same(test, target, selected)

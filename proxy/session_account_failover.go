@@ -351,9 +351,8 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 		}
 	}()
 	ownerGroups := old.GroupIDSnapshot()
-	ownerTags := old.TagSnapshot()
-	selection := &database.SessionFailoverSelection{MatchMode: "exact_groups_and_tags"}
-	selection.RequiredGroupIDs, selection.RequiredTags, selection.Truncated = failoverSelectionLabels(request, ownerGroups, ownerTags)
+	selection := &database.SessionFailoverSelection{MatchMode: "exact_groups"}
+	selection.RequiredGroupIDs, _, selection.Truncated = failoverSelectionLabels(request, ownerGroups, nil)
 	plan.Diagnostic.Selection = selection
 	defer func() {
 		details := trace.CandidateDetails()
@@ -372,10 +371,6 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 	eligible := func(account *auth.Account) bool {
 		if !account.HasExactGroupIDs(ownerGroups) {
 			trace.RejectAccount(account.ID(), "account_groups_mismatch")
-			return false
-		}
-		if !account.HasExactTags(ownerTags) {
-			trace.RejectAccount(account.ID(), "account_tags_mismatch")
 			return false
 		}
 		grant := windowGrantForRequest(request)
@@ -426,12 +421,6 @@ func (handler *Handler) takeSessionAccountFailover(ctx context.Context, key stri
 			handler.store.RemoveAccountSession(candidate.ID(), key)
 			handler.store.Release(candidate)
 			plan.Diagnostic.Result, plan.Diagnostic.Reason = "blocked", "account_groups_changed"
-			return nil, "", true
-		}
-		if !old.HasExactTags(ownerTags) || !candidate.HasExactTags(ownerTags) {
-			handler.store.RemoveAccountSession(candidate.ID(), key)
-			handler.store.Release(candidate)
-			plan.Diagnostic.Result, plan.Diagnostic.Reason = "blocked", "account_tags_changed"
 			return nil, "", true
 		}
 		input := database.SessionAccountFailover{RootKey: state.Key, AffinityKey: key, ExpectedAccountID: old.ID(), AccountID: candidate.ID(), ExpectedGeneration: entry.Record.FailoverCount, Reason: plan.Diagnostic.Reason, At: time.Now().UTC(), ResetOutboundWindow: true, WindowThreadID: state.ThreadID, WindowNumber: state.Number}

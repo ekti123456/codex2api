@@ -224,7 +224,7 @@ func inspectSessionFailoverContext(headers http.Header, body []byte, known sessi
 		}
 	}
 	for index, item := range input.Array() {
-		if strings.HasSuffix(item.Get("type").String(), "_call_output") && !calls[item.Get("call_id").String()] {
+		if strings.HasSuffix(item.Get("type").String(), "_call_output") && !responseContextStandaloneFunctionOutput(item) && !calls[item.Get("call_id").String()] {
 			return "incomplete_tool_context", []database.SessionContextBlocker{{Kind: "missing_tool_call", Path: "input[" + strconv.Itoa(index) + "].call_id"}}
 		}
 	}

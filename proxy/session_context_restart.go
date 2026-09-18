@@ -161,8 +161,9 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 			}
 			paired := items[:0]
 			for index, item := range items {
-				currentPath, currentType = "input["+strconv.Itoa(indices[index])+"]", responseContextSafeType(gjson.ParseBytes(item))
-				if strings.HasSuffix(gjson.GetBytes(item, "type").String(), "_call_output") && !calls[gjson.GetBytes(item, "call_id").String()] {
+				parsed := gjson.ParseBytes(item)
+				currentPath, currentType = "input["+strconv.Itoa(indices[index])+"]", responseContextSafeType(parsed)
+				if strings.HasSuffix(parsed.Get("type").String(), "_call_output") && !responseContextStandaloneFunctionOutput(parsed) && !calls[parsed.Get("call_id").String()] {
 					remove("orphan_tool_output")
 					continue
 				}
