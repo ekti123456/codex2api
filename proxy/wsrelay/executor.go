@@ -174,12 +174,13 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	proxy.ApplyCodexAnalyticsHeader(headers, wsBody)
 	wsBody, headers = proxy.PrepareCodexTurnStateOutbound(ctx, account, wsBody, headers)
 	wsBody = applyCodexFrameMetadata(wsBody, headers)
+	wsBody, headers = proxy.PrepareCodexTurnStateOutbound(ctx, account, wsBody, headers)
 	if fingerprint.PreservesSessionIdentity() {
 		prepareCodexHandshakeSnapshot(headers)
 	} else if !proxy.IsStatelessWebsocketSessionID(sessionID) || !statelessOneShotEnabled() {
 		stripCodexFrameScopedHandshakeHeaders(headers)
 	}
-	headers.Del("X-Codex-Turn-State")
+	proxy.ClearCodexTurnStateHeaders(headers)
 	// Record the attempted handshake UA immediately so failed handshakes are
 	// still auditable. A reused connection replaces this below with the UA that
 	// was actually sent when that connection was established.
@@ -534,6 +535,7 @@ func mergeCodexTurnMetadataStringField(body []byte, field, value string) []byte 
 // request-scoped compatibility headers off its frozen handshake; their current
 // values are carried by each response.create frame instead.
 func stripCodexFrameScopedHandshakeHeaders(headers http.Header) {
+	proxy.ClearCodexTurnStateHeaders(headers)
 	for _, name := range []string{
 		"X-Codex-Turn-State",
 		"X-Codex-Turn-Metadata",
@@ -1110,11 +1112,7 @@ func websocketResponseToHTTP(ctx context.Context, wsResp *WsResponse, statusCode
 func turnScopedHandshakeHeaders(conn *WsConnection, headers http.Header) http.Header {
 	if conn != nil && conn.turnStateHeaderTaken.Swap(true) {
 		headers = headers.Clone()
-		for key := range headers {
-			if strings.EqualFold(key, "X-Codex-Turn-State") {
-				delete(headers, key)
-			}
-		}
+		proxy.ClearCodexTurnStateHeaders(headers)
 	}
 	return headers
 }

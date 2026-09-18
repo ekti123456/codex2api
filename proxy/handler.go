@@ -6149,7 +6149,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			if !writeCommittedResponsesRetryError(c, outcome.failureMessage) {
 				c.Header("Content-Type", "application/json; charset=utf-8")
 				c.JSON(http.StatusBadGateway, gin.H{
-					"error": gin.H{"message": outcome.failureMessage, "type": ErrorTypeUpstreamError, "code": ErrorCodeUpstreamStreamBreak},
+					"error": gin.H{"message": publicUpstreamMessage(ErrorCodeUpstreamStreamBreak), "type": ErrorTypeUpstreamError, "code": ErrorCodeUpstreamStreamBreak},
 				})
 			}
 		} else if !isStream {
@@ -6161,7 +6161,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
 				c.Header("Content-Type", "application/json")
 				c.Status(http.StatusOK)
-				if err := writeAll(c.Writer, responseJSON); err == nil {
+				if err := writeAll(c.Writer, publicResponseErrorPayload(c, responseJSON)); err == nil {
 					for _, payload := range compactionProvenancePayloads {
 						h.recordResponseContextProvenance(c, account, payload)
 					}
@@ -7225,7 +7225,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			h.recordResponseAccountAffinity(respCacheOwner, responseID, account.ID(), affinityKey, effectiveModel, responseAccountUpstreamType(account), c.Request.Context())
 		}
 		relayCodexTurnStateResponseHeader(c, affinityKey, account, resp.Header)
-		c.Data(http.StatusOK, "application/json", respBody)
+		c.Data(http.StatusOK, "application/json", publicResponseErrorPayload(c, respBody))
 		h.recordResponseContextProvenance(c, account, respBody)
 		return
 	}
@@ -9328,17 +9328,7 @@ func (h *Handler) sendUpstreamError(c *gin.Context, statusCode int, body []byte)
 		})
 		return
 	}
-	message := usageLogErrorMessage(statusCode, body)
-	if message == "" || message == fmt.Sprintf("HTTP %d", statusCode) {
-		message = fmt.Sprintf("Upstream returned status %d", statusCode)
-	}
-	c.JSON(statusCode, gin.H{
-		"error": gin.H{
-			"message": message,
-			"type":    "upstream_error",
-			"code":    fmt.Sprintf("upstream_%d", statusCode),
-		},
-	})
+	c.JSON(statusCode, gin.H{"error": publicUpstreamAPIError(c, body, statusCode, "")})
 }
 
 func normalizedRetryAfter(value string) string {
@@ -9380,17 +9370,11 @@ func (h *Handler) sendFinalUpstreamError(c *gin.Context, statusCode int, body []
 		}
 
 		message := "账号池额度已耗尽，请稍后重试"
-		if details.message != "" {
-			message = fmt.Sprintf("%s：%s", message, details.message)
-		}
 
 		errInfo := gin.H{
 			"message": message,
 			"type":    "server_error",
 			"code":    "account_pool_usage_limit_reached",
-		}
-		if details.planType != "" {
-			errInfo["plan_type"] = details.planType
 		}
 		if details.resetsAt != 0 {
 			errInfo["resets_at"] = details.resetsAt
@@ -9418,7 +9402,7 @@ func (h *Handler) sendFinalUpstreamError(c *gin.Context, statusCode int, body []
 
 	// 402 工作区停用（deactivated_workspace）：重试已换过号仍拿到它说明池内暂无
 	// 可服务账号，与 403 一样改写为 503 池级错误（带 Retry-After 提示退避）。
-	// 文案末尾附上游原始错误体，便于下游直接看到封禁原因。坏账号已被标错隔离，
+	// 仅返回公开错误分类，原始错误体留在服务端。坏账号已被标错隔离，
 	// 稍后重试可落到健康账号。裸 402 保持原样：可能携带用量/计费语义，上面已单独处理。
 	if statusCode == http.StatusPaymentRequired && IsDeactivatedWorkspaceError(body) {
 		if c.Writer.Header().Get("Retry-After") == "" {

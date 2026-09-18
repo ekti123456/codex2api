@@ -111,6 +111,8 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 				return
 			}
 			seen <- capture{request.Header.Clone(), body, index}
+			require.NotContains(test, string(body), "unverified-nested-state")
+			require.NotContains(test, request.Header.Get("X-Codex-Turn-Metadata"), "unverified-nested-state")
 			if quotaActive.Load() && request.Header.Get("Authorization") == "Bearer first-token" {
 				// Lifecycle/metadata frames are not visible answer content and must
 				// not accidentally prevent a safe pre-content quota retry.
@@ -126,7 +128,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 				}
 				continue
 			}
-			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":%q,"headers":{"x-codex-turn-state":"real-turn-state-%d"}}`, metadataType, index))); err != nil {
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":%q,"headers":{"x-codex-turn-state":"real-turn-state-%d"},"client_metadata":{"nested":{"X-Codex-Turn-State":"real-turn-state-%d"}}}`, metadataType, index, index))); err != nil {
 				return
 			}
 			if err := connection.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"epoch-response","status":"completed","output":[{"type":"reasoning","id":"epoch-reasoning","encrypted_content":"gAAAAepoch-state-%d"},{"type":"function_call","call_id":"tool-call","name":"exec_command","arguments":"{}"}],"usage":{"input_tokens":1,"output_tokens":1}}}`, index))); err != nil {
@@ -188,6 +190,8 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 			atomic.StoreInt32(&second.Disabled, 1)
 		}
 		body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":true,"input":"full plaintext context","client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","thread_source":"user","request_kind":"turn","window_id":"%s:%d","window_number":%d}}}`, root, root, root, root, root, number, number))
+		body, _ = sjson.SetBytes(body, "client_metadata.X-Codex-Turn-State", "unverified-nested-state")
+		body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata.nested.x-codex-turn-state", "unverified-nested-state")
 		for _, field := range []string{"turn_id", "root_turn_id"} {
 			body, err = sjson.SetBytes(body, "client_metadata."+field, originalTurn)
 			require.NoError(test, err)

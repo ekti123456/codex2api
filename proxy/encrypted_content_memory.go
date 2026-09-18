@@ -275,6 +275,18 @@ type encryptedErrorObserver struct {
 	record                      func([]byte)
 }
 
+func (r *encryptedErrorObserver) observeUpstreamEvent(event string, payload []byte) {
+	if observer, ok := r.ReadCloser.(interface{ observeUpstreamEvent(string, []byte) }); ok {
+		observer.observeUpstreamEvent(event, payload)
+	}
+}
+func (r *encryptedErrorObserver) finishObservedSSE(terminal bool) error {
+	if observer, ok := r.ReadCloser.(interface{ finishObservedSSE(bool) error }); ok {
+		return observer.finishObservedSSE(terminal)
+	}
+	return nil
+}
+
 func (r *encryptedErrorObserver) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
 	r.mu.Lock()

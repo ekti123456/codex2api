@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/codex2api/api"
-	"github.com/codex2api/security"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -41,14 +40,10 @@ func codexCapacityErrorForClient(body []byte) *api.APIError {
 		if !isCodexCapacityCodeOrMessage(code, message) {
 			continue
 		}
-		errorType := strings.TrimSpace(object.Get("type").String())
-		if errorType == "" {
-			errorType = string(api.ErrorTypeUpstream)
+		if code != "slow_down" {
+			code = "server_is_overloaded"
 		}
-		if message == "" {
-			message = code
-		}
-		return api.NewAPIError(api.ErrorCode(code), security.SafeTruncate(security.SanitizeLog(message), 600), api.ErrorType(errorType))
+		return api.NewAPIError(api.ErrorCode(code), publicUpstreamMessage(code), "service_unavailable_error")
 	}
 	return nil
 }
@@ -114,5 +109,5 @@ func writeResponseFailedHTTPError(c *gin.Context, status int, body []byte, messa
 	if writeCodexCapacityError(c, body, continuousRetryProtocolOpenAI) {
 		return
 	}
-	c.JSON(status, gin.H{"error": gin.H{"message": message, "type": "upstream_error"}})
+	c.JSON(status, gin.H{"error": publicUpstreamAPIError(c, body, status, "")})
 }

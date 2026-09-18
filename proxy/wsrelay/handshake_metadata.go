@@ -1,6 +1,7 @@
 package wsrelay
 
 import (
+	"github.com/codex2api/proxy"
 	"net/http"
 
 	"github.com/tidwall/gjson"
@@ -8,7 +9,7 @@ import (
 )
 
 func prepareCodexHandshakeSnapshot(headers http.Header) {
-	headers.Del("X-Codex-Turn-State")
+	proxy.ClearCodexTurnStateHeaders(headers)
 	const name = "X-Codex-Turn-Metadata"
 	raw := headers.Get(name)
 	if raw == "" {
@@ -39,6 +40,7 @@ func prepareCodexHandshakeSnapshot(headers http.Header) {
 }
 
 func stripCodexHandshakeSnapshotFromProfile(headers http.Header) {
+	proxy.ClearCodexTurnStateHeaders(headers)
 	metadata := gjson.Parse(headers.Get("X-Codex-Turn-Metadata"))
 	if enabled := metadata.Get("analytics_enabled"); enabled.Type == gjson.True || enabled.Type == gjson.False {
 		headers.Set("Codex-Profile-Analytics-Enabled", enabled.Raw)

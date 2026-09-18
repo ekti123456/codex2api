@@ -131,7 +131,9 @@ func TestWebsocketTerminalRecoveryKeepsCurrentMetadataAndAccount(test *testing.T
 				actual := <-received
 				require.Equal(test, "thread-current", gjson.GetBytes(actual, "client_metadata.thread_id").String())
 				require.Equal(test, "thread-current:"+current, gjson.GetBytes(actual, "client_metadata.x-codex-window-id").String())
-				require.Equal(test, "state-"+current, gjson.GetBytes(actual, "client_metadata.x-codex-turn-state").String())
+				// Direct executor calls have no verified alias binding. Connection
+				// reuse must not turn arbitrary caller state into trusted state.
+				require.False(test, gjson.GetBytes(actual, "client_metadata.x-codex-turn-state").Exists())
 			}
 			require.Equal(test, scenario.connections, openings.Load())
 		})

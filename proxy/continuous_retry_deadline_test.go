@@ -256,8 +256,8 @@ func TestContinuousRetryDeadlineReturnsLastUpstreamFailure(t *testing.T) {
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
 	}
-	if recorder.Body.String() != string(lastBody) {
-		t.Fatalf("body = %q, want last upstream body %q", recorder.Body.String(), lastBody)
+	if !strings.Contains(recorder.Body.String(), publicUpstreamFailureMessage) || strings.Contains(recorder.Body.String(), "last upstream failure") {
+		t.Fatalf("body = %q, want public last failure without private details", recorder.Body.String())
 	}
 }
 
@@ -273,7 +273,7 @@ func TestContinuousRetryErrorWriterReturnsLastUpstreamFailure(t *testing.T) {
 	continuousRetryDeadlineForContext(c.Request.Context()).cancel(errContinuousRetryDeadlineExceeded)
 	ErrorToGinResponse(c, errors.New("later local cancellation"))
 	stop()
-	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != string(lastBody) {
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), publicUpstreamFailureMessage) || strings.Contains(recorder.Body.String(), string(lastBody)) {
 		t.Fatalf("response = %d %q, want exact latest upstream failure", recorder.Code, recorder.Body.String())
 	}
 }
@@ -306,7 +306,7 @@ func TestContinuousRetryCommittedWritersReturnLastFailureOnce(t *testing.T) {
 			}
 			stop()
 			body := recorder.Body.String()
-			if !strings.Contains(body, tc.contains) || strings.Count(body, "latest selected failure") != 1 {
+			if !strings.Contains(body, tc.contains) || strings.Count(body, publicUpstreamFailureMessage) != 1 || strings.Contains(body, "latest selected failure") {
 				t.Fatalf("body = %q, want one converted latest upstream failure", body)
 			}
 			if strings.Contains(body, continuousRetryTimeoutMessage) {
@@ -560,7 +560,7 @@ func TestResponsesCompactContinuousRetryDeadlineReturnsLatestFailureAndReleasesS
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("deadline did not cancel the active upstream request")
 	}
-	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != string(lastBody) {
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), publicUpstreamFailureMessage) || strings.Contains(recorder.Body.String(), string(lastBody)) {
 		t.Fatalf("response = %d %q, want exact latest upstream failure", recorder.Code, recorder.Body.String())
 	}
 	if got := atomic.LoadInt64(&account.ActiveRequests); got != 0 {
@@ -681,7 +681,7 @@ func TestGrokImagesContinuousRetryDeadlineCancelsActiveBodyRead(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("deadline did not cancel the active Grok media body read")
 	}
-	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != string(lastBody) {
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), publicUpstreamFailureMessage) || strings.Contains(recorder.Body.String(), string(lastBody)) {
 		t.Fatalf("response = %d %q, want exact latest upstream failure", recorder.Code, recorder.Body.String())
 	}
 	if got := atomic.LoadInt64(&account.ActiveRequests); got != 0 {

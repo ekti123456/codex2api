@@ -4,6 +4,7 @@ import "net/http"
 
 func codexWebsocketCurrentFrameHeaders(headers http.Header, body []byte) http.Header {
 	current := headers.Clone()
+	ClearCodexTurnStateHeaders(current)
 	for _, name := range []string{
 		"Session-Id", "Session_id", "Thread-Id", "Conversation-Id", "Conversation_id",
 		"X-Client-Request-Id", "X-Codex-Window-Id", "X-Codex-Turn-Metadata", "X-Codex-Turn-State",

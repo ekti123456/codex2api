@@ -407,11 +407,8 @@ func writeContinuousRetryLastFailure(c *gin.Context, protocol continuousRetryHTT
 	if status < 400 || status > 599 {
 		status = http.StatusBadGateway
 	}
-	message := usageLogErrorMessage(status, failure.body)
-	if message == "" {
-		message = fmt.Sprintf("Upstream returned HTTP %d", status)
-	}
-	code := fmt.Sprintf("upstream_%d", status)
+	publicError := publicUpstreamAPIError(c, failure.body, status, "")
+	message, code := publicError.Message, string(publicError.Code)
 	if retryKeepaliveCommitted(c) {
 		var payload []byte
 		switch protocol {
@@ -434,15 +431,7 @@ func writeContinuousRetryLastFailure(c *gin.Context, protocol continuousRetryHTT
 		c.JSON(status, gin.H{"type": "error", "error": gin.H{"type": mapHTTPStatusToAnthropicError(status), "message": message}})
 		return
 	}
-	if len(failure.body) > 0 && json.Valid(failure.body) {
-		contentType := failure.contentType
-		if contentType == "" {
-			contentType = "application/json"
-		}
-		c.Data(status, contentType, failure.body)
-		return
-	}
-	c.JSON(status, gin.H{"error": gin.H{"message": message, "type": ErrorTypeUpstreamError, "code": code}})
+	c.JSON(status, gin.H{"error": publicError})
 }
 
 func continuousRetryCommitExpired(c *gin.Context, protocol continuousRetryHTTPProtocol) bool {

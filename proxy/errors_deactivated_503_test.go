@@ -27,9 +27,9 @@ func TestErrorToGinResponseHandshakeDeactivatedBecomes503(t *testing.T) {
 	if !strings.Contains(body, "account_pool_deactivated") {
 		t.Fatalf("body = %s", body)
 	}
-	// 文案须附上游原始错误体,但握手内部细节(Cf-Ray 等)不外漏。
-	if !strings.Contains(body, "deactivated_workspace") {
-		t.Fatalf("upstream detail missing: %s", body)
+	// Only the stable public category is returned, never the upstream body.
+	if strings.Contains(body, "deactivated_workspace") {
+		t.Fatalf("upstream detail leaked: %s", body)
 	}
 	if strings.Contains(body, "websocket handshake failed") || strings.Contains(body, "Cf-Ray") {
 		t.Fatalf("raw handshake detail leaked: %s", body)

@@ -36,6 +36,9 @@ func PreparePreservedInputTransport(ctx context.Context, body []byte) (context.C
 }
 
 func ValidateSessionOutboundRequest(ctx context.Context, account *auth.Account, body []byte) error {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+		return codexAccountIdentityError("出站请求正文无效，已停止发送。")
+	}
 	if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
 		return err
 	}

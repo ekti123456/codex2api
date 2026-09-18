@@ -70,6 +70,24 @@ func TestSessionContextRestartAllItemsAndEmptyInput(test *testing.T) {
 	require.NoError(test, err)
 }
 
+func TestSessionContextRestartValidatesEffectiveDuplicateValues(t *testing.T) {
+	for _, item := range []string{
+		`{"type":"reasoning","encrypted_content":"trusted","encrypted_content":"old-secret"}`,
+		`{"type":"item_reference","id":"trusted","id":"old-secret"}`,
+		`{"role":"user","content":[{"type":"input_file","file_id":"trusted","file_id":"old-secret"}]}`,
+		`{"role":"user","id":"trusted","id":"old-secret","content":"keep"}`,
+	} {
+		body := []byte(`{"input":[` + item + `,{"role":"user","content":"current task"}]}`)
+		out, _, _, err := cleanSessionRestartContext(nil, body, func(_, token string) bool { return token == "trusted" })
+		require.NoError(t, err)
+		require.NotContains(t, string(out), "old-secret")
+		require.Contains(t, string(out), "current task")
+		again, _, _, err := cleanSessionRestartContext(nil, out, func(_, token string) bool { return token == "trusted" })
+		require.NoError(t, err)
+		require.Equal(t, out, again)
+	}
+}
+
 func TestSessionContextRestartFailoverRestoresAndKeepsNewProvenance(test *testing.T) {
 	handler, owner, target, key := failoverTestSetup(test, true)
 	atomic.StoreInt32(&owner.Disabled, 1)

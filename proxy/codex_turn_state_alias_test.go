@@ -33,6 +33,8 @@ func TestTurnStateAliasHTTPAndNativeWebsocketFailover(t *testing.T) {
 			seen := make(chan seenRequest, 16)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
+				require.NotContains(t, string(body), "unverified-nested-state")
+				require.NotContains(t, r.Header.Get(codexTurnMetadataHeader), "unverified-nested-state")
 				seen <- seenRequest{r.Header.Get("Authorization"), r.Header.Get(codexTurnStateHeader), gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String()}
 				real := "real-" + r.Header.Get("Authorization")
 				w.Header().Set(codexTurnStateHeader, real)
@@ -42,7 +44,7 @@ func TestTurnStateAliasHTTPAndNativeWebsocketFailover(t *testing.T) {
 					return
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				payload, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{"x-codex-turn-state": real}})
+				payload, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{"x-codex-turn-state": real}, "client_metadata": map[string]any{"nested": map[string]string{"X-Codex-Turn-State": real}}})
 				_, _ = io.WriteString(w, "data: "+string(payload)+"\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_alias\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n")
 			}))
 			t.Cleanup(upstream.Close)
@@ -90,6 +92,8 @@ func TestTurnStateAliasHTTPAndNativeWebsocketFailover(t *testing.T) {
 					sentAlias = aliasB
 				}
 				requestBody := bytes.Clone(body)
+				requestBody, _ = sjson.SetBytes(requestBody, "client_metadata.X-Codex-Turn-State", "unverified-nested-state")
+				requestBody, _ = sjson.SetBytes(requestBody, "client_metadata.x-codex-turn-metadata.nested.x-codex-turn-state", "unverified-nested-state")
 				if sentAlias != "" {
 					requestBody, _ = sjson.SetBytes(requestBody, "client_metadata.x-codex-turn-state", sentAlias)
 				}

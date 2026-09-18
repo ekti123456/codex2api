@@ -261,7 +261,7 @@ const (
 	maxUsageLogFlushIntervalSeconds     = 300
 
 	postgresMaxBindParams       = 65535
-	usageLogInsertColumnCount   = 68
+	usageLogInsertColumnCount   = 71
 	maxUsageLogInsertRowsPerSQL = postgresMaxBindParams / usageLogInsertColumnCount
 
 	// usageLogBufferHardLimit 内存缓冲的硬上限。PG 长时间不可用时（维护、主从切换、
@@ -307,6 +307,9 @@ func NormalizeUsageLogFlushIntervalSeconds(n int) int {
 
 // usageLogEntry 日志缓冲条目
 type usageLogEntry struct {
+	TurnID                   string
+	IsTurnFirstRequest       *bool
+	TurnPromptPreview        string
 	TurnStateLength          *int
 	TurnStateDecodedBytes    *int
 	UpstreamResponseModel    string
@@ -521,6 +524,11 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 	}
 	if err := db.ensureCodexIdentityMappingTables(ctx); err != nil {
 		return nil, fmt.Errorf("创建出站会话映射表失败: %w", err)
+	}
+	if err := db.ensureUsageTurnStarts(ctx); err != nil {
+		backgroundTaskCancel()
+		_ = conn.Close()
+		return nil, fmt.Errorf("创建使用日志轮次表失败: %w", err)
 	}
 	if err := db.ensureCodexTurnStateTable(ctx); err != nil {
 		backgroundTaskCancel()
@@ -1322,6 +1330,9 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_response_model TEXT DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS turn_state_length INTEGER;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS turn_state_decoded_bytes INTEGER;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS turn_id VARCHAR(128) DEFAULT '';
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS is_turn_first_request BOOLEAN;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS turn_prompt_preview TEXT DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS request_diagnostics TEXT DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS request_id VARCHAR(128) DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_request_id VARCHAR(128) DEFAULT '';
@@ -4418,6 +4429,9 @@ func (db *DB) RebindAccountProxyURLs(ctx context.Context, oldURL, newURL string)
 
 // UsageLog 请求日志行
 type UsageLog struct {
+	TurnID             string `json:"turn_id,omitempty"`
+	IsTurnFirstRequest *bool  `json:"is_turn_first_request"`
+	TurnPromptPreview  string `json:"turn_prompt_preview,omitempty"`
 	// nil: not recorded; zero: inspected upstream response without a token.
 	TurnStateLength        *int      `json:"turn_state_length"`
 	TurnStateDecodedBytes  *int      `json:"turn_state_decoded_bytes"`
@@ -4600,6 +4614,9 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 		ParentRequestID:          clampUsageLogText(log.ParentRequestID, usageLogRequestIDMaxLen),
 		RequestType:              usageRequestType(log.RequestType, log.InternalReason),
 		SessionIDPrefix:          normalizeUsageSessionIDPrefix(log.SessionIDPrefix),
+		TurnID:                   clampUsageLogText(log.TurnID, usageLogRequestIDMaxLen),
+		IsTurnFirstRequest:       cloneUsageBool(log.IsTurnFirstRequest),
+		TurnPromptPreview:        clampUsageLogText(log.TurnPromptPreview, 21),
 		RequestDiagnostics:       normalizeUsageRequestDiagnostics(log.RequestDiagnostics),
 		TurnStateLength:          cloneUsageTurnStateInt(log.TurnStateLength),
 		TurnStateDecodedBytes:    cloneUsageTurnStateInt(log.TurnStateDecodedBytes),
@@ -4680,6 +4697,9 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 
 // UsageLogInput 日志写入参数
 type UsageLogInput struct {
+	TurnID                string
+	IsTurnFirstRequest    *bool
+	TurnPromptPreview     string
 	TurnStateLength       *int
 	TurnStateDecodedBytes *int
 	UpstreamResponseModel string
@@ -5068,8 +5088,8 @@ func (db *DB) insertSQLiteUsageLogBatch(ctx context.Context, batch []usageLogEnt
 				  requested_service_tier, actual_service_tier, billing_service_tier,
 				  api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
 				  is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
-				  client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, session_id_prefix, window_number_original, window_number_outbound, upstream_response_model, turn_state_length, turn_state_decoded_bytes)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68)`)
+				  client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, session_id_prefix, window_number_original, window_number_outbound, upstream_response_model, turn_state_length, turn_state_decoded_bytes, turn_id, is_turn_first_request, turn_prompt_preview)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71)`)
 		if err != nil {
 			return fmt.Errorf("准备语句: %w", err)
 		}
@@ -5081,7 +5101,7 @@ func (db *DB) insertSQLiteUsageLogBatch(ctx context.Context, batch []usageLogEnt
 				e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
 				e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
 				e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
-				e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics, e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.SessionIDPrefix, e.WindowNumberOriginal, e.WindowNumberOutbound, e.UpstreamResponseModel, e.TurnStateLength, e.TurnStateDecodedBytes); err != nil {
+				e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics, e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.SessionIDPrefix, e.WindowNumberOriginal, e.WindowNumberOutbound, e.UpstreamResponseModel, e.TurnStateLength, e.TurnStateDecodedBytes, e.TurnID, e.IsTurnFirstRequest, e.TurnPromptPreview); err != nil {
 				return fmt.Errorf("执行插入: %w", err)
 			}
 		}
@@ -5177,7 +5197,7 @@ func (db *DB) batchInsertLogsChunk(ctx context.Context, execer sqlExecer, batch 
 			e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
 			e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
 			e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
-			e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics, e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.SessionIDPrefix, e.WindowNumberOriginal, e.WindowNumberOutbound, e.UpstreamResponseModel, e.TurnStateLength, e.TurnStateDecodedBytes)
+			e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.NewAPIUserName, e.RequestType, e.RequestDiagnostics, e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.SessionIDPrefix, e.WindowNumberOriginal, e.WindowNumberOutbound, e.UpstreamResponseModel, e.TurnStateLength, e.TurnStateDecodedBytes, e.TurnID, e.IsTurnFirstRequest, e.TurnPromptPreview)
 		argIdx += usageLogInsertColumnCount
 	}
 
@@ -5186,7 +5206,7 @@ func (db *DB) batchInsertLogsChunk(ctx context.Context, execer sqlExecer, batch 
 		requested_service_tier, actual_service_tier, billing_service_tier,
 		api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
 		is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
-		client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, session_id_prefix, window_number_original, window_number_outbound, upstream_response_model, turn_state_length, turn_state_decoded_bytes)
+		client_user_agent, upstream_user_agent, user_agent_overridden, internal_reason, parent_request_id, prompt_policy_incident_id, newapi_user_name, request_type, request_diagnostics, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, session_id_prefix, window_number_original, window_number_outbound, upstream_response_model, turn_state_length, turn_state_decoded_bytes, turn_id, is_turn_first_request, turn_prompt_preview)
 		VALUES %s`, strings.Join(valueStrings, ","))
 
 	_, err := execer.ExecContext(ctx, query, valueArgs...)
@@ -5757,7 +5777,7 @@ func (db *DB) ListRecentUsageLogs(ctx context.Context, limit int) ([]*UsageLog, 
 	            COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 	            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 	            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes,
+	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes, COALESCE(u.turn_id, ''), u.is_turn_first_request, COALESCE(u.turn_prompt_preview, ''),
 	            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 	           FROM usage_logs u
 	           LEFT JOIN accounts a ON u.account_id = a.id
@@ -5779,7 +5799,7 @@ func (db *DB) ListRecentUsageLogs(ctx context.Context, limit int) ([]*UsageLog, 
 			&l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier,
 			&l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize, &l.AccountBilled, &l.UserBilled,
 			&l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel,
-			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes,
+			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes, &l.TurnID, &l.IsTurnFirstRequest, &l.TurnPromptPreview,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -6328,7 +6348,7 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 	            COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 	            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 	            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes,
+	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes, COALESCE(u.turn_id, ''), u.is_turn_first_request, COALESCE(u.turn_prompt_preview, ''),
 	            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 	           FROM usage_logs u
 	           LEFT JOIN accounts a ON u.account_id = a.id
@@ -6351,7 +6371,7 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 			&l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier,
 			&l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize, &l.AccountBilled, &l.UserBilled,
 			&l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel,
-			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes,
+			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes, &l.TurnID, &l.IsTurnFirstRequest, &l.TurnPromptPreview,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -6605,7 +6625,7 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 			            COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 			            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 			            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-			            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.newapi_user_name, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes,
+			            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.newapi_user_name, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes, COALESCE(u.turn_id, ''), u.is_turn_first_request, COALESCE(u.turn_prompt_preview, ''),
 			            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at,
 	            COUNT(*) OVER() AS total_count
 	           FROM usage_logs u
@@ -6627,7 +6647,7 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.ImageInputTokens, &l.ImageOutputTokens, &l.CachedImageInputTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens,
 			&l.ServiceTier, &l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier, &l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize,
 			&l.AccountBilled, &l.UserBilled, &l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage,
-			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.NewAPIUserName, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes,
+			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.NewAPIUserName, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes, &l.TurnID, &l.IsTurnFirstRequest, &l.TurnPromptPreview,
 			&credentialRaw, &l.AccountName, &createdAtRaw, &result.Total); err != nil {
 			return nil, err
 		}
@@ -6696,7 +6716,7 @@ func (db *DB) walkUsageLogExport(ctx context.Context, filter *UsageLogFilter, in
 			COALESCE(u.account_billed, 0), COALESCE(u.user_billed, 0),
 			COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''),
 			COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.channel, ''),
-			COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes,
+			COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_type, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.session_id_prefix, ''), COALESCE(u.window_number_original, ''), COALESCE(u.window_number_outbound, ''), COALESCE(u.upstream_response_model, ''), u.turn_state_length, u.turn_state_decoded_bytes, COALESCE(u.turn_id, ''), u.is_turn_first_request, COALESCE(u.turn_prompt_preview, ''),
 			COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at,
 			COALESCE(u.newapi_user_name, ''), ` + diagnosticColumn + `
 		FROM usage_logs u
@@ -6718,7 +6738,7 @@ func (db *DB) walkUsageLogExport(ctx context.Context, filter *UsageLogFilter, in
 			&l.InputTokens, &l.OutputTokens, &l.ReasoningTokens, &l.FirstTokenMs, &l.WsAcquireMs, &l.ReasoningEffort, &l.InboundEndpoint, &l.UpstreamEndpoint, &l.Stream, &l.Compact, &l.HasCompactionHistory, &l.ViaWebsocket, &l.CachedTokens, &l.ImageInputTokens, &l.ImageOutputTokens, &l.CachedImageInputTokens, &l.CacheWrite5mTokens, &l.CacheWrite1hTokens,
 			&l.ServiceTier, &l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier, &l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize,
 			&l.AccountBilled, &l.UserBilled, &l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage,
-			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes,
+			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestType, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.SessionIDPrefix, &l.WindowNumberOriginal, &l.WindowNumberOutbound, &l.UpstreamResponseModel, &l.TurnStateLength, &l.TurnStateDecodedBytes, &l.TurnID, &l.IsTurnFirstRequest, &l.TurnPromptPreview,
 			&credentialRaw, &l.AccountName, &createdAtRaw, &l.NewAPIUserName, &diagnostics); err != nil {
 			return err
 		}

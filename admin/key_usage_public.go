@@ -27,17 +27,17 @@ type publicAPIKeyUsageResponse struct {
 }
 
 type publicAPIKeyUsageKey struct {
-	Name        string                `json:"name"`
-	Key         string                `json:"key"`
-	QuotaLimit  float64               `json:"quota_limit"`
-	QuotaUsed   float64               `json:"quota_used"`
-	TotalUsed   float64               `json:"total_used"`
-	ResetCount  int                   `json:"reset_count"`
-	LastResetAt *string               `json:"last_reset_at,omitempty"`
-	ExpiresAt   *string               `json:"expires_at,omitempty"`
-	Limits      database.APIKeyLimits `json:"limits"`
-	Status      string                `json:"status"`
-	CreatedAt   string                `json:"created_at"`
+	Name        string             `json:"name"`
+	Key         string             `json:"key"`
+	QuotaLimit  float64            `json:"quota_limit"`
+	QuotaUsed   float64            `json:"quota_used"`
+	TotalUsed   float64            `json:"total_used"`
+	ResetCount  int                `json:"reset_count"`
+	LastResetAt *string            `json:"last_reset_at,omitempty"`
+	ExpiresAt   *string            `json:"expires_at,omitempty"`
+	Limits      publicAPIKeyLimits `json:"limits"`
+	Status      string             `json:"status"`
+	CreatedAt   string             `json:"created_at"`
 }
 
 type publicAPIKeyUsageRange struct {
@@ -235,7 +235,7 @@ func newPublicAPIKeyUsageKey(row *database.APIKeyRow) publicAPIKeyUsageKey {
 		ResetCount:  row.ResetCount,
 		LastResetAt: lastResetAt,
 		ExpiresAt:   expiresAt,
-		Limits:      row.Limits,
+		Limits:      newPublicAPIKeyLimits(row.Limits),
 		Status:      status,
 		CreatedAt:   row.CreatedAt.Format(time.RFC3339),
 	}

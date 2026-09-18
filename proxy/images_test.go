@@ -1109,7 +1109,7 @@ func TestForwardImagesCommittedKeepaliveEndsWithSSEFailure(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.HasPrefix(body, continuousRetryKeepaliveComment) {
 		t.Fatalf("heartbeat did not commit SSE response: status=%d body=%q", recorder.Code, body)
 	}
-	if !strings.Contains(body, `"type":"response.failed"`) || !strings.Contains(body, "stop now") {
+	if !strings.Contains(body, `"type":"response.failed"`) || !strings.Contains(body, publicUpstreamFailureMessage) || strings.Contains(body, "stop now") {
 		t.Fatalf("committed stream missing terminal response.failed: %q", body)
 	}
 }

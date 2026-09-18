@@ -96,6 +96,11 @@ func (h *Handler) bindTurnStateSession(c *gin.Context, body []byte, identity req
 	if isResponsesWebSocketUpgradeRequest(c.Request) {
 		headers = nil
 	}
+	var inputs []struct{ carrier, value string }
+	body, headers = rewriteRequestTurnState(body, headers, func(value, carrier string) string {
+		inputs = append(inputs, struct{ carrier, value string }{carrier, value})
+		return value
+	})
 	projected := CodexRequestMetadataHeaders(headers, body)
 	metadata := projected.Get(codexTurnMetadataHeader)
 	turn := gjson.Get(metadata, "turn_id").String()
@@ -115,7 +120,7 @@ func (h *Handler) bindTurnStateSession(c *gin.Context, body []byte, identity req
 		action string
 	}
 	checked := make(map[string]lookupResult)
-	for _, input := range []struct{ carrier, value string }{{"request_header", headers.Get(codexTurnStateHeader)}, {"request_metadata", gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String()}} {
+	for _, input := range inputs {
 		value := strings.TrimSpace(input.value)
 		if value == "" {
 			continue
@@ -175,14 +180,16 @@ func turnStateAccountHash(account *auth.Account) string {
 // alias as proof that a request should stay on its former account.
 func normalizeTurnStateIngress(c *gin.Context, body []byte) []byte {
 	s := turnStateSessionFrom(c.Request.Context())
-	if s == nil {
-		return body
-	}
 	headers := c.Request.Header.Clone()
 	if isResponsesWebSocketUpgradeRequest(c.Request) {
-		deleteTurnStateHeader(headers)
+		ClearCodexTurnStateHeaders(headers)
 	}
-	body, headers = rewriteRequestTurnState(body, headers, func(value, carrier string) string { return s.incoming[strings.TrimSpace(value)].Real })
+	body, headers = rewriteRequestTurnState(body, headers, func(value, carrier string) string {
+		if s == nil {
+			return ""
+		}
+		return s.incoming[strings.TrimSpace(value)].Real
+	})
 	// HTTP clients echo turn state in a request header. After restoring its
 	// scoped alias, project it into this request's metadata before identity
 	// rewriting changes the metadata snapshot and drops header-only values.
@@ -194,47 +201,17 @@ func normalizeTurnStateIngress(c *gin.Context, body []byte) []byte {
 	return body
 }
 
-func rewriteRequestTurnState(body []byte, headers http.Header, replace func(string, string) string) ([]byte, http.Header) {
-	headers = headers.Clone()
-	value := headers.Get(codexTurnStateHeader)
-	deleteTurnStateHeader(headers)
-	if value != "" {
-		if value = replace(value, "request_header"); value != "" {
-			if headers == nil {
-				headers = make(http.Header)
-			}
-			headers.Set(codexTurnStateHeader, value)
-		}
-	}
-	if value := gjson.GetBytes(body, "client_metadata.x-codex-turn-state"); value.Exists() {
-		replacement := replace(value.String(), "request_metadata")
-		if replacement == "" {
-			body, _ = sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
-		} else {
-			body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", replacement)
-		}
-	}
-	return body, headers
-}
-
-func deleteTurnStateHeader(headers http.Header) {
-	for key := range headers {
-		if strings.EqualFold(key, codexTurnStateHeader) {
-			delete(headers, key)
-		}
-	}
-}
-
 // Run at each executor boundary, after new-session/restart cleanup. No alias can
 // escape even through payload rules or a caller without a bound request context.
 func PrepareCodexTurnStateOutbound(ctx context.Context, account *auth.Account, body []byte, headers http.Header) ([]byte, http.Header) {
 	s := turnStateSessionFrom(ctx)
+	var initial *initialSessionDiagnostic
+	if ctx != nil {
+		initial, _ = ctx.Value(initialSessionContextKey{}).(*initialSessionDiagnostic)
+	}
 	return rewriteRequestTurnState(body, headers, func(value, carrier string) string {
-		if s == nil {
-			if strings.HasPrefix(value, "c2ts_v1_") || database.ValidCodexTurnStateAlias(value) {
-				return ""
-			}
-			return value
+		if s == nil || initial != nil {
+			return ""
 		}
 		generation := uint64(0)
 		if epoch := outboundEpochFromContext(ctx); epoch != nil {

@@ -21,6 +21,7 @@ var (
 )
 
 type streamFlushWriter struct {
+	clientContext *gin.Context
 	writer        io.Writer
 	flusher       http.Flusher
 	policy        string
@@ -106,6 +107,7 @@ func (d *streamPhaseDiagnostics) summary() string {
 
 func (h *Handler) newStreamFlushWriter(c *gin.Context, writer io.Writer, flusher http.Flusher) *streamFlushWriter {
 	w := newStreamFlushWriter(writer, flusher)
+	w.clientContext = c
 	if h != nil && h.store != nil {
 		cfg := h.promptFilterConfigForRequest(c)
 		if cfg.Enabled && cfg.Advanced.Output.Enabled {
@@ -120,7 +122,9 @@ func (h *Handler) newStreamFlushWriter(c *gin.Context, writer io.Writer, flusher
 // winning attempt is scanned exactly once by commitStreamAttempt below.
 func (h *Handler) newAttemptStreamFlushWriter(c *gin.Context, attempt *continuousRetryStreamAttempt, writer io.Writer, flusher http.Flusher) *streamFlushWriter {
 	if attempt != nil {
-		return newStreamFlushWriter(attempt.writerOr(writer), attempt.flusherOr(flusher))
+		w := newStreamFlushWriter(attempt.writerOr(writer), attempt.flusherOr(flusher))
+		w.clientContext = c
+		return w
 	}
 	return h.newStreamFlushWriter(c, writer, flusher)
 }
@@ -187,6 +191,7 @@ func writeDeferredSSEData(streamWriter *streamFlushWriter, pending *bytes.Buffer
 	if streamWriter == nil {
 		return false, nil
 	}
+	data = publicResponseErrorPayload(streamWriter.clientContext, data)
 	if shouldDefer {
 		appendSSEData(pending, data)
 		if pending != nil && pending.Len() <= pendingFirstTokenFlushBytes {
@@ -309,6 +314,7 @@ func (w *streamFlushWriter) WriteSSEData(data []byte) error {
 	if w == nil || w.writer == nil {
 		return nil
 	}
+	data = publicResponseErrorPayload(w.clientContext, data)
 	framed := make([]byte, 0, len(sseDataPrefix)+len(data)+len(sseDataSuffix))
 	framed = append(framed, sseDataPrefix...)
 	framed = append(framed, data...)

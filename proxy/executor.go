@@ -694,6 +694,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	}
 
 	endpoint := CodexBaseURL + "/responses"
+	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
 
 	// 出站字节在选客户端之前定稿：send() 会因 Agent Identity 401 重注册而重放，
 	// 两次重放必须发同一份字节。routing hint 等需要读字段的改写点继续用明文
@@ -774,6 +775,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 }
 
 func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, requestBody []byte, proxyOverride string, headers http.Header) (upstreamResponse *http.Response, upstreamErr error) {
+	defer func() { finishTurnStateResponse(ctx, account, &upstreamResponse, &upstreamErr) }()
 	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
 	if ctx == nil {
 		ctx = context.Background()
@@ -817,6 +819,10 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 	client := getPooledClient(account, proxyURL)
 	send := func(body []byte) (*http.Response, error) {
 		body = StripCodexProjectMetadata(body)
+		body, headers = PrepareCodexTurnStateOutbound(ctx, account, body, headers)
+		if err := ValidateSessionOutboundRequest(ctx, account, body); err != nil {
+			return nil, err
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, ErrInternalError("创建请求失败", err)
@@ -939,6 +945,7 @@ func isCodexAccessRestrictedResponse(resp *http.Response) bool {
 // 上游自己的 compact 端点，从而让没有官方 Codex OAuth 账号、仅接入中转的用户也能
 // 触发上下文自动压缩（参见 issue #174）。compact 始终为非流式。
 func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Account, requestBody []byte, proxyOverride string, headers http.Header) (upstreamResponse *http.Response, upstreamErr error) {
+	defer func() { finishTurnStateResponse(ctx, account, &upstreamResponse, &upstreamErr) }()
 	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
 	if ctx == nil {
 		ctx = context.Background()
@@ -964,6 +971,10 @@ func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Acc
 
 	endpoint := auth.OpenAIResponsesEndpoint(baseURL, "/v1/responses/compact")
 	requestBody = StripCodexProjectMetadata(requestBody)
+	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
+	if err := ValidateSessionOutboundRequest(ctx, account, requestBody); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, ErrInternalError("创建请求失败", err)
@@ -1056,6 +1067,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 
 	// compact 端点
 	endpoint := CodexBaseURL + "/responses/compact"
+	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
 
 	// Resin 反向代理模式
 	var client *http.Client
@@ -1375,6 +1387,7 @@ func applyOpenAIResponsesRequestHeaders(req *http.Request, account *auth.Account
 		}
 	}
 	applyAccountCustomHeaders(req, account)
+	_, req.Header = PrepareCodexTurnStateOutbound(req.Context(), account, nil, req.Header)
 	StripCodexProjectMetadataHeaders(req.Header)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
 }
@@ -1568,10 +1581,19 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 			})
 		}
 	} else if verifiedPolicy {
-		// Root-capable senders deliberately omit an affinity override when their
-		// signed root is unavailable/conflicting. Older leaf-only senders retain
-		// the compatibility path below.
-		if policyContext.Meta.RootSessionVersion == 0 {
+		// An authoritative unresolved root must also invalidate inherited local
+		// routing hints (including Claude hints). Keep transport identity separate.
+		if policyContext.Meta.RootSessionVersion > 0 {
+			identity.affinityID = ""
+			identity.stableIdentity = false
+			identity.hasDownstreamAffinity = false
+			identity.hasRequestFingerprint = false
+			identity.relatedToRoot = false
+			identity.ownsRootBinding = false
+			identity.relatedSource = auth.AccountSessionRelatedSource{}
+			identity.relatedRequestID = ""
+			identity.forkSourceAffinityID = ""
+		} else {
 			if fingerprint := strings.TrimSpace(policyContext.Meta.SessionFingerprint); fingerprint != "" {
 				identity.affinityID = "newapi-session:" + fingerprint
 				identity.stableIdentity = true

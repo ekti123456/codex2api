@@ -13,8 +13,6 @@ import (
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 type initialSessionContextKey struct{}
@@ -178,18 +176,16 @@ func PrepareInitialSessionOutbound(ctx context.Context, account *auth.Account, b
 	if d == nil {
 		return body, headers, nil
 	}
-	headers = headers.Clone()
-	if headers.Get("X-Codex-Turn-State") != "" {
-		d.HeaderStateRemoved = true
-	}
-	headers.Del("X-Codex-Turn-State")
-	if gjson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists() {
-		updated, err := sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
-		if err != nil {
-			return nil, nil, codexAccountIdentityError("当前会话无法继续处理，请新建对话。")
+	body, headers = rewriteRequestTurnState(body, headers, func(value, carrier string) string {
+		if strings.HasPrefix(carrier, "request_header") {
+			d.HeaderStateRemoved = true
+		} else {
+			d.BodyStateRemoved = true
 		}
-		body = updated
-		d.BodyStateRemoved = true
+		return ""
+	})
+	if body == nil {
+		return nil, nil, codexAccountIdentityError("当前会话无法继续处理，请新建对话。")
 	}
 	return body, headers, nil
 }

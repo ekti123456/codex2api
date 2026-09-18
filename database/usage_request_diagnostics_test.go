@@ -173,6 +173,8 @@ func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 		{RequestType: "compaction", RequestDiagnostics: fmt.Sprintf(`{"version":1,"attempt":2,"incoming":{"headers":{"User-Agent":%q}}}`, strings.Repeat("x", 64*1024)), RequestID: "request-2", UpstreamRequestID: "upstream-2", WindowNumberOriginal: "18446744073709551615", WindowNumberOutbound: "0"},
 	}
 	batch[0].TurnStateLength, batch[0].TurnStateDecodedBytes = &length, &decoded
+	first := true
+	batch[0].TurnID, batch[0].IsTurnFirstRequest, batch[0].TurnPromptPreview = "turn-a", &first, "请检查接口"
 	if err := db.batchInsertLogsChunk(test.Context(), capture, batch); err != nil {
 		test.Fatal(err)
 	}
@@ -188,6 +190,7 @@ func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	}
 	for index, entry := range batch {
 		for name, expected := range map[string]interface{}{
+			"turn_id": entry.TurnID, "is_turn_first_request": entry.IsTurnFirstRequest, "turn_prompt_preview": entry.TurnPromptPreview,
 			"turn_state_length": entry.TurnStateLength, "turn_state_decoded_bytes": entry.TurnStateDecodedBytes,
 			"session_id_prefix":      entry.SessionIDPrefix,
 			"window_number_original": entry.WindowNumberOriginal, "window_number_outbound": entry.WindowNumberOutbound,

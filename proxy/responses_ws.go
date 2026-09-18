@@ -546,11 +546,7 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	writeTimeoutTerminal := func() error {
 		apiErr := api.NewAPIError(api.ErrCodeUpstreamTimeout, continuousRetryTimeoutMessage, api.ErrorTypeUpstream)
 		if lastFailure, ok := continuousRetryLastFailure(c.Request.Context()); ok {
-			message := usageLogErrorMessage(lastFailure.status, lastFailure.body)
-			if message == "" {
-				message = fmt.Sprintf("Upstream returned HTTP %d", lastFailure.status)
-			}
-			apiErr = api.NewAPIError(api.ErrorCode(fmt.Sprintf("upstream_%d", lastFailure.status)), message, api.ErrorTypeUpstream)
+			apiErr = publicUpstreamAPIError(c, lastFailure.body, lastFailure.status, "")
 			if capacityError := codexCapacityErrorForClient(lastFailure.body); capacityError != nil {
 				apiErr = capacityError
 			}
@@ -1247,7 +1243,7 @@ func (h *Handler) streamResponsesWSUpstream(
 		wsReplay = h.newContinuousRetryWSReplay()
 	}
 	writeClientMessage := func(payload []byte) error {
-		return writeResponsesWSMessage(conn, payload)
+		return writeResponsesWSMessage(conn, publicResponseErrorPayload(c, payload))
 	}
 	// 首 token 前收到不可重试的 response.failed 时置位:不把原始失败帧透传给客户端,
 	// 循环外改写 error 帧并按错误类别用非正常 close code 关闭,
@@ -1735,7 +1731,7 @@ func (h *Handler) streamResponsesWSUpstream(
 			// This is deterministic continuation state, not an infrastructure error.
 			// Preserve the official code so Codex can classify the failed turn even
 			// when generic upstream-error details are hidden.
-			apiErr = api.NewAPIError(api.ErrorCode("previous_response_not_found"), outcome.failureMessage, api.ErrorTypeInvalidRequest)
+			apiErr = api.NewAPIError(api.ErrorCode("previous_response_not_found"), publicUpstreamMessage("previous_response_not_found"), api.ErrorTypeInvalidRequest)
 		}
 		clientErr := apiErr
 		if !preserveErrorCode {
@@ -1939,10 +1935,18 @@ func responsesWSClientUpstreamAPIError(apiErr *api.APIError, hideUpstreamErrors 
 		}
 	}
 	if apiErr != nil && isCodexCapacityCodeOrMessage(string(apiErr.Code), apiErr.Message) {
-		return apiErr
+		code := "server_is_overloaded"
+		if apiErr.Code == "slow_down" {
+			code = "slow_down"
+		}
+		return api.NewAPIError(api.ErrorCode(code), publicUpstreamMessage(code), "service_unavailable_error")
 	}
 	if !hideUpstreamErrors {
-		return apiErr
+		if apiErr == nil {
+			return api.NewAPIError(api.ErrCodeUpstreamError, publicUpstreamFailureMessage, api.ErrorTypeUpstream)
+		}
+		body, _ := json.Marshal(gin.H{"error": apiErr})
+		return publicUpstreamAPIError(nil, body, http.StatusBadGateway, "upstream_error")
 	}
 	return api.NewAPIError(api.ErrCodeUpstreamError, responsesWSFriendlyUpstreamErr, api.ErrorTypeUpstream)
 }

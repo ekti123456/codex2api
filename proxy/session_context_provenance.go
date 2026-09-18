@@ -167,14 +167,15 @@ func inspectSessionFailoverContext(headers http.Header, body []byte, known sessi
 		}
 	}
 	allowed := func(kind, value string) bool { return known != nil && known(kind, value) }
-	for index, token := range []string{headers.Get("X-Codex-Turn-State"), gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String()} {
-		if token != "" && !allowed("turn_state", token) {
-			path := "headers.X-Codex-Turn-State"
-			if index == 1 {
-				path = "client_metadata.x-codex-turn-state"
-			}
-			return "connection_turn_state", []database.SessionContextBlocker{{Kind: "turn_state", Path: path}}
+	statePath := ""
+	_, _ = rewriteRequestTurnState(body, headers, func(token, carrier string) string {
+		if statePath == "" && !allowed("turn_state", token) {
+			statePath = carrier
 		}
+		return token
+	})
+	if statePath != "" {
+		return "connection_turn_state", []database.SessionContextBlocker{{Kind: "turn_state", Path: statePath}}
 	}
 	input := gjson.GetBytes(body, "input")
 	if !input.Exists() || input.Type == gjson.Null || input.IsArray() && len(input.Array()) == 0 {

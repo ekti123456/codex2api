@@ -254,8 +254,8 @@ func TestResponsesWebSocketNonRetryableFailureReturnsErrorClose(t *testing.T) {
 	if eventType := gjson.GetBytes(first, "type").String(); eventType != "error" {
 		t.Fatalf("first event type = %q, want \"error\" (原始 response.failed 帧不应透传) body=%s", eventType, first)
 	}
-	if !strings.Contains(string(first), "input too long") {
-		t.Fatalf("error frame should carry upstream message when hiding disabled: %s", first)
+	if strings.Contains(string(first), "input too long") || !strings.Contains(string(first), publicUpstreamFailureMessage) {
+		t.Fatalf("error frame must not carry private upstream prose: %s", first)
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))

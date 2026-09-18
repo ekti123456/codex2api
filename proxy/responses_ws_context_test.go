@@ -63,9 +63,12 @@ func TestResponsesWSContextSurvivesMultiTurnFallback(t *testing.T) {
 					sse = wsContextTestSSE("resp_turn1", `{"type":"custom_tool_call","id":"ctc_one","call_id":"call_one","name":"exec","input":"print(\"hello\")"}`)
 				case 2:
 					if fallback == "expires_during_turn" {
+						state := responseIdentityFrom(ctx)
 						respCache.mu.Lock()
-						if entry := respCache.store[responseCacheStoreKey("anon", "resp_turn1")]; entry != nil {
+						if entry := respCache.store[responseCacheStoreKey(state.owner, state.incoming.Alias)]; entry != nil {
 							entry.expiresAt = time.Now().Add(-time.Second)
+						} else {
+							t.Error("first response cache entry missing before expiry simulation")
 						}
 						respCache.mu.Unlock()
 					}
@@ -90,8 +93,10 @@ func TestResponsesWSContextSurvivesMultiTurnFallback(t *testing.T) {
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(sse))}, nil
 			}
 			store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2, TestConcurrency: 1, TestModel: "gpt-5.5"})
+			t.Cleanup(store.Stop)
 			store.AddAccount(&auth.Account{DBID: 1, AccessToken: "test-token", PlanType: "plus", AccountID: "test-account"})
-			handler := NewHandler(store, nil, &config.Config{AllowAnonymousV1: true}, nil)
+			handler := nativeContinuationHandler(t, store)
+			root := NewUpstreamSessionUUID()
 			router := gin.New()
 			handler.RegisterRoutes(router)
 			server := httptest.NewServer(router)
@@ -107,13 +112,21 @@ func TestResponsesWSContextSurvivesMultiTurnFallback(t *testing.T) {
 				`{"previous_response_id":"resp_turn2","input":[{"type":"custom_tool_call_output","call_id":"call_two","output":"world"}]}`,
 				`{"previous_response_id":"resp_turn3","input":[{"type":"message","role":"user","content":"continue"}]}`,
 			}
+			previousAlias := ""
 			for turnIndex, input := range inputs {
 				var request map[string]any
 				if err := json.Unmarshal([]byte(input), &request); err != nil {
 					t.Fatal(err)
 				}
-				request["type"], request["model"], request["prompt_cache_key"] = "response.create", "gpt-5.5", "har-context-test"
-				if err := conn.WriteJSON(request); err != nil {
+				request["type"], request["model"] = "response.create", "gpt-5.5"
+				if turnIndex > 0 {
+					request["previous_response_id"] = previousAlias
+				}
+				payload, err := json.Marshal(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, nativeContinuationBody(t, root, payload)); err != nil {
 					t.Fatal(err)
 				}
 				conn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -124,6 +137,10 @@ func TestResponsesWSContextSurvivesMultiTurnFallback(t *testing.T) {
 				}
 				if gjson.GetBytes(terminal, "type").String() != wantTerminal {
 					t.Fatalf("unexpected terminal: %s", terminal)
+				}
+				previousAlias = gjson.GetBytes(terminal, "response.id").String()
+				if !handler.db.IsManagedCodexResponseID(previousAlias) {
+					t.Fatalf("response has no managed alias: %s", terminal)
 				}
 			}
 			select {
@@ -358,7 +375,14 @@ func TestResponsesWSContextOnDemandBootstrapsFromStoreSignal(t *testing.T) {
 	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2, TestConcurrency: 1, TestModel: "gpt-5.5"})
 	t.Cleanup(store.Stop)
 	store.AddAccount(&auth.Account{DBID: 1, AccessToken: "test-token", PlanType: "plus", AccountID: "test-account"})
-	handler := NewHandler(store, nil, &config.Config{AllowAnonymousV1: true}, nil)
+	db, err := database.New("sqlite", t.TempDir()+"/privacy.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	handler := NewHandler(store, db, &config.Config{AllowAnonymousV1: true}, nil)
+	root := NewUpstreamSessionUUID()
+	ids := []string{}
 	router := gin.New()
 	handler.RegisterRoutes(router)
 	server := httptest.NewServer(router)
@@ -371,13 +395,29 @@ func TestResponsesWSContextOnDemandBootstrapsFromStoreSignal(t *testing.T) {
 	owner := ""
 	send := func(payload string) {
 		t.Helper()
+		var request map[string]any
+		if err := json.Unmarshal([]byte(payload), &request); err != nil {
+			t.Fatal(err)
+		}
+		request["client_metadata"] = map[string]any{"session_id": root, "thread_id": root, "x-codex-turn-metadata": map[string]any{"session_id": root, "thread_id": root, "thread_source": "user", "request_kind": "turn", "window_id": root + ":0", "window_number": 0}}
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload = string(encoded)
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
 			t.Fatal(err)
 		}
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		if terminal := readResponsesWSTerminalEvent(t, conn); gjson.GetBytes(terminal, "type").String() != "response.completed" {
+		terminal := readResponsesWSTerminalEvent(t, conn)
+		if gjson.GetBytes(terminal, "type").String() != "response.completed" {
 			t.Fatalf("unexpected terminal: %s", terminal)
 		}
+		id := gjson.GetBytes(terminal, "response.id").String()
+		if !db.IsManagedCodexResponseID(id) {
+			t.Fatalf("missing public response alias: %s", terminal)
+		}
+		ids = append(ids, id)
 		currentOwner := <-owners
 		if owner != "" && owner != currentOwner {
 			t.Fatal("anonymous connection cache owner changed between frames")
@@ -388,16 +428,16 @@ func TestResponsesWSContextOnDemandBootstrapsFromStoreSignal(t *testing.T) {
 	// 决定在下一轮终态到达时必然已经落定，断言按这个顺序排。
 	send(`{"type":"response.create","model":"gpt-5.5","store":false,"input":[{"type":"message","role":"user","content":"full context every turn"}]}`)
 	send(`{"type":"response.create","model":"gpt-5.5","input":[{"type":"message","role":"user","content":"incremental root"}]}`)
-	if getResponseCache(owner, "resp_1") != nil {
+	if getResponseCache(owner, ids[0]) != nil {
 		t.Fatal("store:false root turn was cached under on_demand")
 	}
-	send(`{"type":"response.create","model":"gpt-5.5","previous_response_id":"resp_2","input":[{"type":"message","role":"user","content":"second turn"}]}`)
-	if getResponseCache(owner, "resp_2") == nil {
+	send(fmt.Sprintf(`{"type":"response.create","model":"gpt-5.5","previous_response_id":%q,"input":[{"type":"message","role":"user","content":"second turn"}]}`, ids[1]))
+	if getResponseCache(owner, ids[1]) == nil {
 		t.Fatal("continuation-capable root turn was not cached under on_demand")
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		if cached := getResponseCache(owner, "resp_3"); len(cached) == 4 {
+		if cached := getResponseCache(owner, ids[2]); len(cached) == 4 {
 			break
 		} else if time.Now().After(deadline) {
 			t.Fatalf("continuation snapshot has %d items, want root + answer + new message + answer", len(cached))

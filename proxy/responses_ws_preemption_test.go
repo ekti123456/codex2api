@@ -275,8 +275,17 @@ func TestResponsesWebSocketNewerSameSessionPreemptsBeforeConcurrencyAdmission(t 
 	t.Cleanup(store.Stop)
 	account := &auth.Account{DBID: 1, AccessToken: "at-1", AccountID: "acct-1", PlanType: "pro"}
 	store.AddAccount(account)
-	h := NewHandler(store, nil, nil, nil)
-	row := &database.APIKeyRow{ID: 77, Limits: database.APIKeyLimits{MaxConcurrency: 1}}
+	h := nativeContinuationHandler(t, store)
+	keyID, err := h.db.InsertAPIKeyWithOptions(t.Context(), database.APIKeyInput{
+		Key: "preemption-test-key", Name: "preemption", Limits: database.APIKeyLimits{MaxConcurrency: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := h.db.GetAPIKeyByID(t.Context(), keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	router := gin.New()
 	router.GET("/v1/responses", func(c *gin.Context) {
 		c.Set(contextAPIKeyID, row.ID)
@@ -292,14 +301,16 @@ func TestResponsesWebSocketNewerSameSessionPreemptsBeforeConcurrencyAdmission(t 
 		t.Fatalf("dial first websocket: %v", err)
 	}
 	t.Cleanup(func() { _ = first.Close() })
-	body := []byte(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"conversation","input":"hello"}`)
+	body := nativeContinuationBody(t, NewUpstreamSessionUUID(), []byte(`{"type":"response.create","model":"gpt-5.5","input":"hello"}`))
 	if err := first.WriteMessage(websocket.TextMessage, body); err != nil {
 		t.Fatalf("write first request: %v", err)
 	}
 	select {
 	case <-firstStarted:
 	case <-time.After(time.Second):
-		t.Fatal("first upstream request did not start")
+		_ = first.SetReadDeadline(time.Now().Add(time.Second))
+		_, event, readErr := first.ReadMessage()
+		t.Fatalf("first upstream request did not start: event=%s read_error=%v", event, readErr)
 	}
 
 	second, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

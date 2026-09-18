@@ -34,6 +34,18 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 			report.OmittedItems++
 		}
 	}
+	stateBody, stateHeaders := rewriteRequestTurnState(body, headers, func(token, carrier string) string {
+		if allowed("turn_state", token) {
+			return token
+		}
+		currentPath, currentType = carrier, ""
+		remove("turn_state")
+		return ""
+	})
+	headers = stateHeaders
+	if err := json.Unmarshal(stateBody, &payload); err != nil {
+		return nil, nil, report, codexAccountIdentityError("换号重开无法解析请求正文。")
+	}
 	for _, field := range []string{"previous_response_id", "conversation", "conversation_id"} {
 		currentPath, currentType = field, ""
 		value := gjson.ParseBytes(payload[field])
@@ -43,21 +55,6 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 			}
 			delete(payload, field)
 			remove(field)
-		}
-	}
-	headers = headers.Clone()
-	if token := headers.Get("X-Codex-Turn-State"); token != "" && !allowed("turn_state", token) {
-		headers.Del("X-Codex-Turn-State")
-		currentPath, currentType = "headers.X-Codex-Turn-State", ""
-		remove("turn_state")
-	}
-	var metadata map[string]json.RawMessage
-	if json.Unmarshal(payload["client_metadata"], &metadata) == nil && metadata != nil {
-		if token := gjson.ParseBytes(metadata["x-codex-turn-state"]).String(); token != "" && !allowed("turn_state", token) {
-			delete(metadata, "x-codex-turn-state")
-			payload["client_metadata"], _ = json.Marshal(metadata)
-			currentPath, currentType = "client_metadata.x-codex-turn-state", ""
-			remove("turn_state")
 		}
 	}
 	if preserve {
@@ -83,6 +80,12 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 		if !value.IsObject() {
 			return json.RawMessage(value.Raw), true
 		}
+		// Validate the same effective values that will be serialized. gjson.Get
+		// reads the first duplicate while encoding/json keeps the last one.
+		var object map[string]json.RawMessage
+		_ = json.Unmarshal([]byte(value.Raw), &object)
+		canonical, _ := json.Marshal(object)
+		value = gjson.ParseBytes(canonical)
 		kind := value.Get("type").String()
 		if token := value.Get("encrypted_content"); token.Exists() && token.Type != gjson.Null && token.String() != "" && !allowed("encrypted_content", token.String()) {
 			category := "encrypted_content"
@@ -99,8 +102,6 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 			remove("item_reference")
 			return nil, false
 		}
-		var object map[string]json.RawMessage
-		_ = json.Unmarshal([]byte(value.Raw), &object)
 		if token := value.Get("file_id"); token.Exists() && token.Type != gjson.Null && token.String() != "" && !allowed("file_id", token.String()) {
 			remove("file_reference")
 			if value.Get("file_data").String() == "" && value.Get("file_url").String() == "" && value.Get("image_url").Type != gjson.String {
@@ -140,7 +141,8 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 		indices := make([]int, 0)
 		for index, item := range input.Array() {
 			if cleaned, keep := scrub(item, 0, "input["+strconv.Itoa(index)+"]"); keep {
-				if identifier := item.Get("id").String(); identifier != "" && item.Get("type").String() != "item_reference" && !allowed("item_reference", identifier) {
+				cleanedItem := gjson.ParseBytes(cleaned)
+				if identifier := cleanedItem.Get("id").String(); identifier != "" && cleanedItem.Get("type").String() != "item_reference" && !allowed("item_reference", identifier) {
 					var fullItem map[string]json.RawMessage
 					if json.Unmarshal(cleaned, &fullItem) == nil && fullItem != nil {
 						delete(fullItem, "id")

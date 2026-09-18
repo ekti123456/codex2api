@@ -280,7 +280,7 @@ func TestContinuousRetrySSEKeepaliveAndCommittedErrors(t *testing.T) {
 	if !writeCommittedResponsesRetryError(c, "upstream failed") {
 		t.Fatal("committed Responses error was not written as SSE")
 	}
-	if body := recorder.Body.String(); !strings.Contains(body, `"type":"response.failed"`) || !strings.Contains(body, "upstream failed") {
+	if body := recorder.Body.String(); !strings.Contains(body, `"type":"response.failed"`) || !strings.Contains(body, publicUpstreamFailureMessage) || strings.Contains(body, "upstream failed") {
 		t.Fatalf("committed Responses SSE error = %q", body)
 	}
 }

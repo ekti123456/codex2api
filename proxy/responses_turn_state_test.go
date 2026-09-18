@@ -61,7 +61,7 @@ func newUsageLimitedCodexStore(test *testing.T, upstreamURL string) (*auth.Store
 	return store, account
 }
 
-func TestResponsesTurnStateAllowsOnlyBoundTurnPastWHAMLimit(t *testing.T) {
+func TestResponsesTurnStateRejectsUnverifiedContinuationPastWHAMLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var seenBody []byte
 	upstream := newContinuationRelayUpstream(t, false, &seenBody)
@@ -88,11 +88,11 @@ func TestResponsesTurnStateAllowsOnlyBoundTurnPastWHAMLimit(t *testing.T) {
 		c.Request.Header.Set("Session-Id", root)
 		c.Request.Header.Set(codexTurnStateHeader, "turn-state-1")
 	}, handler.Responses, body)
-	if continued.Code != http.StatusOK {
-		t.Fatalf("continued status = %d, want 200; body=%s", continued.Code, continued.Body.String())
+	if continued.Code != http.StatusTooManyRequests {
+		t.Fatalf("unverified continuation status = %d, want 429; body=%s", continued.Code, continued.Body.String())
 	}
-	if len(seenBody) == 0 {
-		t.Fatal("bound turn continuation did not reach upstream")
+	if len(seenBody) != 0 {
+		t.Fatal("unverified turn state bypassed the usage limit")
 	}
 }
 
@@ -249,7 +249,7 @@ func TestResponsesReconcilesEndpointEnabledDirectlyInDatabase(t *testing.T) {
 	}
 }
 
-func TestResponsesCopiesCodexTurnStateResponseHeader(t *testing.T) {
+func TestResponsesDropsUnmappedCodexTurnStateResponseHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var hits atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,12 +269,12 @@ func TestResponsesCopiesCodexTurnStateResponseHeader(t *testing.T) {
 	if hits.Load() != 1 {
 		t.Fatalf("upstream hits = %d, want 1", hits.Load())
 	}
-	if got := recorder.Header().Get(codexTurnStateHeader); got != "turn-state-upstream" {
-		t.Fatalf("%s = %q, want turn-state-upstream", codexTurnStateHeader, got)
+	if got := recorder.Header().Get(codexTurnStateHeader); got != "" {
+		t.Fatalf("unmapped %s escaped: %q", codexTurnStateHeader, got)
 	}
 }
 
-func TestResponsesWebSocketTurnStateRetainsLimitedAccountOnlyWithinTurn(t *testing.T) {
+func TestResponsesWebSocketTurnStateRejectsUnverifiedContinuation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousExec := WebsocketExecuteFunc
 	t.Cleanup(func() { WebsocketExecuteFunc = previousExec })
@@ -340,12 +340,9 @@ func TestResponsesWebSocketTurnStateRetainsLimitedAccountOnlyWithinTurn(t *testi
 		}
 	}
 
-	run(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"ws-turn","input":"tool output","client_metadata":{"x-codex-turn-state":"turn-1"}}`, "response.completed")
+	run(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"ws-turn","input":"tool output","client_metadata":{"x-codex-turn-state":"turn-1"}}`, "error")
 	run(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"ws-turn","input":"new turn"}`, "error")
 
-	if first := <-served; first != limited.ID() {
-		t.Fatalf("same-turn account = %d, want limited bound account %d", first, limited.ID())
-	}
 	select {
 	case second := <-served:
 		t.Fatalf("fresh turn reached account %d after the bound account exhausted its quota", second)

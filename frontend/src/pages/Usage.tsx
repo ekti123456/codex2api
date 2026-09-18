@@ -1,3 +1,4 @@
+import { UsageTurnStartBadge } from '../components/UsageTurnStartBadge'
 import { UsageTurnState } from '../components/UsageTurnState'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -2858,6 +2859,7 @@ export default function Usage() {
                             <div className="truncate font-mono">
                               <span className="font-sans font-semibold text-foreground/80">{t('usage.tableEndpoint')}: </span>
                               {log.inbound_endpoint || log.endpoint || '-'}
+                              <UsageTurnStartBadge log={log} />
                             </div>
                           )}
                           {visibleColumns.userAgent && (
@@ -3075,16 +3077,12 @@ export default function Usage() {
                           <UserAgentCell log={log} />
                         </TableCell>}
                         {visibleColumns.endpoint && <TableCell>
-                          <div
-                            className={`${usageTableMonoClass} leading-relaxed`}
-                            // 中转/Grok 账号的完整上游 URL 收进 tooltip，列内只显示入站端点
-                            title={
-                              log.upstream_endpoint && log.upstream_endpoint !== log.inbound_endpoint
-                                ? `→ ${log.upstream_endpoint}`
-                                : undefined
-                            }
-                          >
-                            <UsageEndpointText value={log.inbound_endpoint || log.endpoint || '-'} />
+                          <div className={`${usageTableMonoClass} leading-relaxed whitespace-nowrap`}>
+                            <span title={log.upstream_endpoint && log.upstream_endpoint !== log.inbound_endpoint
+                              ? `→ ${log.upstream_endpoint}` : undefined}>
+                              <UsageEndpointText value={log.inbound_endpoint || log.endpoint || '-'} />
+                            </span>
+                            <UsageTurnStartBadge log={log} />
                           </div>
                         </TableCell>}
                         {visibleColumns.type && <TableCell>

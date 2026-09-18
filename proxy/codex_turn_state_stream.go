@@ -32,27 +32,16 @@ func finishTurnStateResponse(ctx context.Context, account *auth.Account, respons
 // frames converted to SSE. It never invents a metadata event or token.
 func maskTurnStateResponse(ctx context.Context, account *auth.Account, response *http.Response) error {
 	s := turnStateSessionFrom(ctx)
-	if response == nil || (s == nil && responseIdentityFrom(ctx) == nil) {
+	if response == nil {
 		return nil
 	}
 	observeUsageTurnState(ctx, "")
-	response.Header = response.Header.Clone()
-	var real string
-	for key, values := range response.Header {
-		if strings.EqualFold(key, codexTurnStateHeader) && len(values) > 0 {
-			real = values[0]
-			break
-		}
-	}
-	deleteTurnStateHeader(response.Header)
-	if real != "" && s != nil {
-		alias, err := s.issue(ctx, account, real, "response_header")
-		if err != nil {
-			return err
-		}
-		if alias != "" {
-			response.Header.Set(codexTurnStateHeader, alias)
-		}
+	var err error
+	response.Header, err = rewriteTurnStateHeaders(response.Header, "response_header", func(value, carrier string) (string, error) {
+		return maskResponseTurnState(ctx, account, value, carrier)
+	})
+	if err != nil {
+		return err
 	}
 	if response.Body != nil && strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		response.Body = &turnStateStream{body: response.Body, reader: bufio.NewReaderSize(response.Body, 32*1024), ctx: ctx, account: account, state: s}
@@ -61,7 +50,7 @@ func maskTurnStateResponse(ctx context.Context, account *auth.Account, response 
 	} else if response.Body != nil {
 		// Lazy reads keep response/header timing and the handler's cancellation
 		// watchdog intact, even when an upstream omits Content-Type.
-		response.Body = &responsePrivacyBody{body: response.Body, ctx: ctx, account: account}
+		response.Body = &responsePrivacyBody{body: response.Body, ctx: ctx, account: account, statusCode: response.StatusCode}
 		response.ContentLength = -1
 		response.Header.Del("Content-Length")
 	}
@@ -69,14 +58,26 @@ func maskTurnStateResponse(ctx context.Context, account *auth.Account, response 
 }
 
 type responsePrivacyBody struct {
-	body    io.ReadCloser
-	ctx     context.Context
-	account *auth.Account
-	reader  io.Reader
-	err     error
+	statusCode int
+	body       io.ReadCloser
+	ctx        context.Context
+	account    *auth.Account
+	reader     io.Reader
+	err        error
 }
 
 func (r *responsePrivacyBody) Close() error { return r.body.Close() }
+func (r *responsePrivacyBody) observeUpstreamEvent(event string, payload []byte) {
+	if observer, ok := r.body.(interface{ observeUpstreamEvent(string, []byte) }); ok {
+		observer.observeUpstreamEvent(event, payload)
+	}
+}
+func (r *responsePrivacyBody) finishObservedSSE(terminal bool) error {
+	if observer, ok := r.body.(interface{ finishObservedSSE(bool) error }); ok {
+		return observer.finishObservedSSE(terminal)
+	}
+	return nil
+}
 func (r *responsePrivacyBody) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -103,9 +104,26 @@ func (r *responsePrivacyBody) Read(p []byte) (int, error) {
 			// A mislabeled SSE stream is still processed incrementally.
 			r.reader = &turnStateStream{body: r.body, reader: buffer, ctx: r.ctx, account: r.account, state: turnStateSessionFrom(r.ctx)}
 		} else {
-			original, err := io.ReadAll(buffer)
-			if err == nil && gjson.ValidBytes(original) {
-				original, err = maskResponsePayload(r.ctx, r.account, original, true)
+			var original []byte
+			if r.statusCode >= 400 && r.statusCode <= 599 {
+				// Bound the raw error before buffering/masking it. A limit outside
+				// this lazy reader cannot bound an internal ReadAll of the upstream.
+				original, err = readAllLimited(buffer, upstreamErrorBodyReadMaxBytes)
+			} else {
+				original, err = io.ReadAll(buffer)
+			}
+			if err == nil {
+				if !gjson.ValidBytes(original) {
+					if r.statusCode >= 400 && r.statusCode <= 599 {
+						// Keep the real HTTP failure category, but discard HTML/plain
+						// provider diagnostics. Do not misclassify this as a read error.
+						original = nil
+					} else {
+						err = errors.New("invalid upstream response envelope")
+					}
+				} else {
+					original, err = maskResponsePayload(r.ctx, r.account, original, true)
+				}
 			}
 			if err != nil {
 				r.err = err
@@ -170,6 +188,17 @@ type turnStateStream struct {
 }
 
 func (r *turnStateStream) Close() error { return r.body.Close() }
+func (r *turnStateStream) observeUpstreamEvent(event string, payload []byte) {
+	if observer, ok := r.body.(interface{ observeUpstreamEvent(string, []byte) }); ok {
+		observer.observeUpstreamEvent(event, payload)
+	}
+}
+func (r *turnStateStream) finishObservedSSE(terminal bool) error {
+	if observer, ok := r.body.(interface{ finishObservedSSE(bool) error }); ok {
+		return observer.finishObservedSSE(terminal)
+	}
+	return nil
+}
 func (r *turnStateStream) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil

@@ -2,6 +2,8 @@
 
 核查日期：2026-09-18。范围是 codex2api 原生 Codex 账号的 Responses HTTP、SSE、原生 WS 和 compact 路径；API relay 的转发协议不在本次改写范围。核查使用本地代码及模拟上游，没有调用生产模型或读取生产数据库。
 
+2026-09-19：已补齐正文身份字段、递归 metadata/headers、错误出口和自助用量投影，当前实现见 [下游响应隐私边界](downstream-response-privacy.md)。以下风险盘点中对“本次”的描述保留 09-18 审计背景；错误原文和正文身份字段的遗漏已由该后续修复处理。
+
 ## 本次实现
 
 ### response.id / previous_response_id

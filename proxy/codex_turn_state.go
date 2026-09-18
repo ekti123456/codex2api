@@ -46,7 +46,7 @@ func relayCodexTurnStateResponseHeader(c *gin.Context, affinityKey string, accou
 		token = strings.TrimSpace(headers.Get(codexTurnStateHeader))
 	}
 	if token == "" {
-		c.Writer.Header().Del(codexTurnStateHeader)
+		ClearCodexTurnStateHeaders(c.Writer.Header())
 		return
 	}
 	c.Header(codexTurnStateHeader, token)
@@ -74,7 +74,7 @@ func (h *Handler) commitResponsesStreamAttempt(c *gin.Context, attempt *continuo
 		relayUpstreamFirstResponseHeaders(c, headers)
 		stagedHeader = true
 		if token == "" {
-			c.Writer.Header().Del(codexTurnStateHeader)
+			ClearCodexTurnStateHeaders(c.Writer.Header())
 		} else {
 			c.Header(codexTurnStateHeader, token)
 		}
@@ -86,7 +86,7 @@ func (h *Handler) commitResponsesStreamAttempt(c *gin.Context, attempt *continuo
 		// Header 会先于回放/过滤提交暂存；失败时移除 token，避免本地回放错误
 		// 暴露账号绑定的续链状态或出处数据。
 		if stagedHeader && c != nil && c.Writer != nil && !c.Writer.Written() {
-			c.Writer.Header().Del(codexTurnStateHeader)
+			ClearCodexTurnStateHeaders(c.Writer.Header())
 			clearUpstreamFirstResponseHeaders(c.Writer.Header())
 		}
 		return err
@@ -106,9 +106,6 @@ func guardCodexTurnStateEcho(affinityKey string, account *auth.Account, headers 
 	if headers == nil || account == nil || strings.TrimSpace(affinityKey) == "" {
 		return
 	}
-	if strings.TrimSpace(headers.Get(codexTurnStateHeader)) == "" {
-		return
-	}
 	raw, ok := codexTurnStateOrigins.Load(affinityKey)
 	if !ok {
 		return
@@ -123,7 +120,7 @@ func guardCodexTurnStateEcho(affinityKey string, account *auth.Account, headers 
 		return
 	}
 	if origin.accountID != account.ID() {
-		headers.Del(codexTurnStateHeader)
+		ClearCodexTurnStateHeaders(headers)
 	}
 }
 

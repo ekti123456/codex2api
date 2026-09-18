@@ -70,7 +70,7 @@ func TestChatCompletionsStreamResponseFailedAfterContentHasNoDoneSentinel(t *tes
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 after visible content; body=%q", recorder.Code, body)
 	}
-	if !strings.Contains(body, `"content":"partial"`) || !strings.Contains(body, `"error"`) || !strings.Contains(body, "upstream boom") {
+	if !strings.Contains(body, `"content":"partial"`) || !strings.Contains(body, `"error"`) || !strings.Contains(body, publicUpstreamFailureMessage) || strings.Contains(body, "upstream boom") {
 		t.Fatalf("partial content or stream error missing: %q", body)
 	}
 	if strings.Contains(body, "[DONE]") {

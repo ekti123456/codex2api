@@ -307,8 +307,8 @@ func TestStreamCapacityShedWireBehavior(t *testing.T) {
 		if !strings.Contains(body, "server_is_overloaded") {
 			t.Errorf("应保留 server_is_overloaded, got %q", body)
 		}
-		if !strings.Contains(body, "Our servers are currently overloaded") {
-			t.Errorf("错误消息应原样保留, got %q", body)
+		if strings.Contains(body, "Our servers are currently overloaded") || !strings.Contains(body, publicUpstreamMessage("server_is_overloaded")) {
+			t.Errorf("容量错误应使用公开文案, got %q", body)
 		}
 	})
 }

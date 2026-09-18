@@ -947,7 +947,7 @@ func TestResponsesCompactContinuousRetrySelectsResponseFailedEvent(t *testing.T)
 		t.Fatalf("downstream status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, `"id":"resp_compact_recovered"`) || strings.Contains(body, "temporary compact failure") {
+	if !strings.Contains(body, `"status":"completed"`) || strings.Contains(body, "resp_compact_recovered") || strings.Contains(body, "temporary compact failure") {
 		t.Fatalf("compact body-signal retry was not transparent: %s", body)
 	}
 }

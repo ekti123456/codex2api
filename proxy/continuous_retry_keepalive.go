@@ -589,7 +589,7 @@ func writeCommittedAnthropicRetryError(c *gin.Context, errorType, message string
 		errorType = "api_error"
 		message = continuousRetryTimeoutMessage
 	}
-	errorBody := gin.H{"type": errorType, "message": message}
+	errorBody := gin.H{"type": errorType, "message": publicUpstreamFailureMessage}
 	if !timedOut && promptSafetyDiagnostic(c) != nil {
 		failure := upstreamPromptSafetyAPIError(c, nil)
 		errorBody = gin.H{"type": failure.Type, "code": failure.Code, "message": failure.Message, "details": failure.Details}

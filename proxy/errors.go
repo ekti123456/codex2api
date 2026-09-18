@@ -115,6 +115,9 @@ func (e *Error) UpstreamErrorBody() []byte {
 // ToGinH converts the error to a gin.H map for JSON response
 // Format matches OpenAI API error response format
 func (e *Error) ToGinH() gin.H {
+	if e.Type == ErrorTypeUpstreamError {
+		return gin.H{"error": publicUpstreamAPIError(nil, e.UpstreamErrorBody(), e.HTTPStatus, e.Code)}
+	}
 	errInfo := gin.H{
 		"message": e.Message,
 		"type":    e.Type,
@@ -345,7 +348,7 @@ func ErrorToGinResponse(c *gin.Context, err error) {
 	// 兜底识别:WS 握手阶段的工作区停用错误若因任何原因未在 wsrelay 层转换成
 	// 结构化响应(文本形如 "websocket handshake failed: ... deactivated_workspace"),
 	// 也绝不能以 500 + 原始握手内部细节漏给下游——按 503 池级错误返回(带
-	// Retry-After 提示退避),文案附上游原始错误体。坏账号会由采样探针/主路径
+	// Retry-After 提示退避),仅返回公开文案。坏账号会由采样探针/主路径
 	// 标错隔离,稍后重试可落到健康账号。
 	if message := err.Error(); strings.Contains(message, "websocket handshake failed") &&
 		strings.Contains(message, "deactivated_workspace") {
@@ -371,23 +374,14 @@ func ErrorToGinResponse(c *gin.Context, err error) {
 	// Fallback for non-structured errors
 	c.JSON(http.StatusInternalServerError, gin.H{
 		"error": gin.H{
-			"message": err.Error(),
+			"message": publicUpstreamFailureMessage,
 			"type":    ErrorTypeServerError,
 			"code":    ErrorCodeInternalError,
 		},
 	})
 }
 
-// deactivatedPoolErrorMessage 组装工作区停用的池级错误文案(英文,面向下游
-// 客户端展示),末尾附上游原始错误体(截断,避免超长 body 污染日志/客户端展示)。
-func deactivatedPoolErrorMessage(upstreamDetail string) string {
-	const message = "No available account in the pool (upstream workspace deactivated), please retry later"
-	upstreamDetail = strings.TrimSpace(upstreamDetail)
-	if upstreamDetail == "" {
-		return message
-	}
-	if len(upstreamDetail) > 500 {
-		upstreamDetail = upstreamDetail[:500] + "…"
-	}
-	return message + ". Upstream response: " + upstreamDetail
+// Keep workspace diagnostics private even when the error embeds a JSON body.
+func deactivatedPoolErrorMessage(_ string) string {
+	return publicUpstreamMessage("account_pool_deactivated")
 }

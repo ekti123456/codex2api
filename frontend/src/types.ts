@@ -3518,6 +3518,9 @@ export interface APIKeyAccountStatsResponse {
 }
 
 export interface UsageLog {
+  turn_id?: string
+  is_turn_first_request?: boolean | null
+  turn_prompt_preview?: string
   turn_state_length?: number | null
   turn_state_decoded_bytes?: number | null
   upstream_response_model?: string

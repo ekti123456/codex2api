@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestWebsocketContinuityOffRestartsIdentityAndConnection(t *testing.T) {
@@ -88,10 +90,17 @@ func TestWebsocketContinuityOffRestartsIdentityAndConnection(t *testing.T) {
 		}
 		return websocketResponseToHTTP(ctx, response, http.StatusOK, nil), nil
 	}
-	const root = "01a09351-7b81-7ae0-afd0-225e178ea131"
+	root := proxy.NewUpstreamSessionUUID()
 	var previous capture
+	previousResponse := ""
 	for i, step := range []struct{ incoming, outgoing int }{{47, 0}, {47, 0}, {48, 1}, {55, 0}, {56, 1}} {
-		body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":true,"previous_response_id":"old-response","input":"full plaintext context","client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","thread_source":"user","request_kind":"turn","window_id":"%s:%d","window_number":%d}}}`, root, root, root, root, root, step.incoming, step.incoming))
+		body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":true,"input":"full plaintext context","client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","thread_source":"user","request_kind":"turn","window_id":"%s:%d","window_number":%d}}}`, root, root, root, root, root, step.incoming, step.incoming))
+		// The first request starts a fresh session. Later requests carry an alias
+		// actually issued to this owner, so admission reaches restart cleanup.
+		if previousResponse != "" {
+			body, err = sjson.SetBytes(body, "previous_response_id", previousResponse)
+			require.NoError(t, err)
+		}
 		body = addSessionWireTools(t, body)
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
@@ -102,6 +111,13 @@ func TestWebsocketContinuityOffRestartsIdentityAndConnection(t *testing.T) {
 		router.ServeHTTP(recorder, request)
 		cancel()
 		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		previousResponse = ""
+		for _, line := range strings.Split(recorder.Body.String(), "\n") {
+			if payload, ok := strings.CutPrefix(line, "data: "); ok && gjson.Get(payload, "type").String() == "response.completed" {
+				previousResponse = gjson.Get(payload, "response.id").String()
+			}
+		}
+		require.True(t, db.IsManagedCodexResponseID(previousResponse), recorder.Body.String())
 		db.FlushUsageLogs()
 		logs, err := db.ListRecentUsageLogs(t.Context(), 1)
 		require.NoError(t, err)

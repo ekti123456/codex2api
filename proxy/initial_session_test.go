@@ -107,14 +107,15 @@ func TestInitialSessionAdmissionModesBindingsAndCleanup(t *testing.T) {
 			require.Equal(t, "old", headers.Get("X-Codex-Turn-State"))
 			require.True(t, state.InitialSession.HeaderStateRemoved)
 			require.True(t, state.InitialSession.BodyStateRemoved)
-			// New-account retry still strips state, normal bound contexts leave it alone.
+			// New-account retry and callers without verified state both strip it.
 			_, hdr, err = PrepareSessionRestartOutbound(r.Request.Context(), &auth.Account{DBID: 100}, payload, headers)
 			require.NoError(t, err)
 			require.Empty(t, hdr.Get("X-Codex-Turn-State"))
 			out, hdr, err = PrepareSessionRestartOutbound(context.Background(), a, payload, headers)
 			require.NoError(t, err)
-			require.Equal(t, payload, out)
-			require.Equal(t, "old", hdr.Get("X-Codex-Turn-State"))
+			require.False(t, gjson.GetBytes(out, "client_metadata.x-codex-turn-state").Exists())
+			require.Empty(t, hdr.Get("X-Codex-Turn-State"))
+			require.Equal(t, gjson.GetBytes(payload, "input").Raw, gjson.GetBytes(out, "input").Raw)
 			require.Nil(t, h.commitSessionContinuity(r, a))
 			r2, _ := continuityTestRequest(0, "turn")
 			usageRequestDiagnosticState(r2).StartedAt = now.Add(time.Hour)
@@ -152,7 +153,7 @@ func TestInitialSessionHTTPOutboundStripsStateAndFrameReset(t *testing.T) {
 	// not strip the newly bound account's state on subsequent requests.
 	r.Set(usageRequestDiagnosticsContextKey, (*usageRequestDiagnostics)(nil))
 	captureUsageRequestIngress(r, body)
-	out, hdr, err := PrepareSessionRestartOutbound(r.Request.Context(), account, body, http.Header{"X-Codex-Turn-State": []string{"new-account-state"}})
+	out, hdr, err := PrepareInitialSessionOutbound(r.Request.Context(), account, body, http.Header{"X-Codex-Turn-State": []string{"new-account-state"}})
 	require.NoError(t, err)
 	require.Equal(t, body, out)
 	require.Equal(t, "new-account-state", hdr.Get("X-Codex-Turn-State"))

@@ -69,6 +69,8 @@ type usageRecentAccountDiagnostic struct {
 }
 
 type usageRequestDiagnostics struct {
+	TurnStart              *usageTurnStart `json:"turn_start,omitempty"`
+	turnStartCaptured      bool
 	ResponseIdentity       []responseIdentityEvent                  `json:"response_identity,omitempty"`
 	AccessPrograms         *accessProgramsDiagnostic                `json:"access_programs,omitempty"`
 	TurnState              *database.TurnStateDiagnostic            `json:"turn_state,omitempty"`
@@ -380,6 +382,7 @@ func (h *Handler) captureUsageRequestResolution(c *gin.Context, body []byte, ide
 	state.Recent.Enabled = false
 	state.Recent.Result = "retired"
 	state.Recent.Scope = identity.unlinkedFallbackScope
+	h.captureUsageTurnStart(c, body, state)
 }
 
 func (h *Handler) recordUsageAuthorization(c *gin.Context, stage string) {
@@ -513,6 +516,11 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 	}
 	if trace := selectionTraceForRequest(c); trace != nil {
 		snapshot.CandidateRejections = trace.Snapshot().Reasons
+	}
+	populateUsageTurnStart(state, input)
+	if snapshot.TurnStart != nil {
+		// Each saved attempt describes its own badge, not a mutable turn claim.
+		snapshot.TurnStart = &usageTurnStart{TurnID: input.TurnID, First: input.IsTurnFirstRequest, Preview: input.TurnPromptPreview}
 	}
 	populateUsageWindowNumbers(&snapshot, input)
 	// Collectors already constrain the fields they capture. Preserve that

@@ -1018,7 +1018,7 @@ func TestApplyCodexRequestHeadersPreservesOfficialClientHeaders(t *testing.T) {
 		"Originator":            []string{"codex_vscode"},
 		"Version":               []string{"1.2.3"},
 		"X-Codex-Turn-State":    []string{"turn-state"},
-		"X-Codex-Turn-Metadata": []string{"turn-metadata"},
+		"X-Codex-Turn-Metadata": []string{`{"turn_id":"turn-metadata"}`},
 		"X-Client-Request-Id":   []string{"req-123"},
 	}
 
@@ -1033,7 +1033,10 @@ func TestApplyCodexRequestHeadersPreservesOfficialClientHeaders(t *testing.T) {
 	if got := req.Header.Get("Version"); got != "1.2.3" {
 		t.Fatalf("Version = %q", got)
 	}
-	for _, name := range []string{"X-Codex-Turn-State", "X-Codex-Turn-Metadata", "X-Client-Request-Id"} {
+	if got := req.Header.Get("X-Codex-Turn-State"); got != "" {
+		t.Fatalf("unverified turn state escaped: %q", got)
+	}
+	for _, name := range []string{"X-Codex-Turn-Metadata", "X-Client-Request-Id"} {
 		if got := req.Header.Get(name); got != downstreamHeaders.Get(name) {
 			t.Fatalf("%s = %q, want %q", name, got, downstreamHeaders.Get(name))
 		}
@@ -1277,8 +1280,8 @@ func TestApplyOpenAIResponsesRequestHeadersPassthroughAutoPreservesOfficialIdent
 	if got := req.Header.Get("Thread-Id"); got != "thread-456" {
 		t.Fatalf("Thread-Id = %q, want thread-456", got)
 	}
-	if got := req.Header.Get("X-Codex-Turn-State"); got != "t-state" {
-		t.Fatalf("X-Codex-Turn-State = %q, want t-state", got)
+	if got := req.Header.Get("X-Codex-Turn-State"); got != "" {
+		t.Fatalf("unverified X-Codex-Turn-State escaped: %q", got)
 	}
 	if got := req.Header.Get("X-Codex-Beta-Features"); got != "remote_compaction_v2" {
 		t.Fatalf("X-Codex-Beta-Features = %q, want remote_compaction_v2", got)

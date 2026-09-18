@@ -794,7 +794,9 @@ func TestResponsesWebSocketContinuationKeepsBoundAccountPastBoundedLimit(t *test
 	primary.SetSchedulerPriority(10)
 	store.AddAccount(primary)
 	store.AddAccount(&auth.Account{DBID: 2, AccessToken: "at-2", PlanType: "plus", AccountID: "acct-2"})
-	handler := NewHandler(store, nil, &config.Config{AllowAnonymousV1: true}, nil)
+	t.Cleanup(store.Stop)
+	handler := nativeContinuationHandler(t, store)
+	root := NewUpstreamSessionUUID()
 
 	router := gin.New()
 	handler.RegisterRoutes(router)
@@ -817,7 +819,7 @@ func TestResponsesWebSocketContinuationKeepsBoundAccountPastBoundedLimit(t *test
 		if previousResponseID != "" {
 			payload = fmt.Sprintf(`{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"conversation-1","previous_response_id":"%s","input":"turn-%d","client_metadata":{"x-codex-turn-state":"turn-state-1"}}`, previousResponseID, turn)
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, nativeContinuationBody(t, root, []byte(payload))); err != nil {
 			t.Fatalf("turn %d write request: %v", turn, err)
 		}
 
@@ -830,8 +832,18 @@ func TestResponsesWebSocketContinuationKeepsBoundAccountPastBoundedLimit(t *test
 			t.Fatalf("turn %d event type = %q, want response.completed; body=%s", turn, eventType, event)
 		}
 		previousResponseID = gjson.GetBytes(event, "response.id").String()
-		if previousResponseID == "" {
-			t.Fatalf("turn %d response.id missing: %s", turn, event)
+		if !handler.db.IsManagedCodexResponseID(previousResponseID) {
+			t.Fatalf("turn %d response.id is not a managed alias: %s", turn, event)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if responseSequence != 52 {
+		t.Fatalf("upstream responses = %d, want 52", responseSequence)
+	}
+	for id, owner := range responseOwners {
+		if owner != primary.ID() {
+			t.Fatalf("response %s switched to account %d", id, owner)
 		}
 	}
 }
@@ -841,7 +853,6 @@ func TestResponsesWebSocketContinuationKeepsBoundAccountPastBoundedLimit(t *test
 func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousResponse(t *testing.T) {
 	resetResponseCacheForTest()
 	t.Cleanup(resetResponseCacheForTest)
-	setResponseCache(continuationFixtureCacheOwner(), "resp_stale", []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"earlier context"}`)})
 
 	previousResponseNotFoundBody := `{"error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response with id 'resp_stale' not found."}}`
 	completedSSE := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_new\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
@@ -958,10 +969,16 @@ func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousRespon
 				mu.Lock()
 				defer mu.Unlock()
 				attempts++
-				if gjson.GetBytes(requestBody, "previous_response_id").String() != "" {
+				if previous := gjson.GetBytes(requestBody, "previous_response_id").String(); previous != "" {
+					if previous != "resp_stale" {
+						t.Errorf("upstream received unrestored response ID: %s", previous)
+					}
 					return tc.rejected(), nil
 				}
 				retriedWithoutContinuation = true
+				if !strings.Contains(string(requestBody), "earlier context") || !strings.Contains(string(requestBody), "continue") {
+					t.Error("degraded request lost conversation history")
+				}
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     make(http.Header),
@@ -970,8 +987,12 @@ func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousRespon
 			}
 
 			store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2, TestConcurrency: 1, TestModel: "gpt-5.5"})
-			store.AddAccount(&auth.Account{DBID: 1, AccessToken: "at-1", PlanType: "plus", AccountID: "acct-1"})
-			handler := NewHandler(store, nil, &config.Config{AllowAnonymousV1: true}, nil)
+			primary := &auth.Account{DBID: 1, AccessToken: "at-1", PlanType: "plus", AccountID: "acct-1"}
+			store.AddAccount(primary)
+			t.Cleanup(store.Stop)
+			handler := nativeContinuationHandler(t, store)
+			root := NewUpstreamSessionUUID()
+			alias := nativeContinuationAlias(t, handler, primary, root, "resp_stale")
 
 			router := gin.New()
 			handler.RegisterRoutes(router)
@@ -988,8 +1009,8 @@ func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousRespon
 			}
 			defer conn.Close()
 
-			payload := `{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"conversation-1","previous_response_id":"resp_stale","input":"continue"}`
-			if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+			payload := fmt.Sprintf(`{"type":"response.create","model":"gpt-5.5","previous_response_id":%q,"input":"continue"}`, alias)
+			if err := conn.WriteMessage(websocket.TextMessage, nativeContinuationBody(t, root, []byte(payload))); err != nil {
 				t.Fatalf("write request: %v", err)
 			}
 
@@ -1014,7 +1035,6 @@ func TestResponsesWebSocketContinuationDegradesWhenUpstreamRejectsPreviousRespon
 func TestResponsesWebSocketContinuationCannotChangeExcludedSessionOwner(t *testing.T) {
 	resetResponseCacheForTest()
 	t.Cleanup(resetResponseCacheForTest)
-	setResponseCache("anon", "resp_stale", []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"earlier context"}`)})
 
 	gin.SetMode(gin.TestMode)
 
@@ -1051,7 +1071,10 @@ func TestResponsesWebSocketContinuationCannotChangeExcludedSessionOwner(t *testi
 	primary.SetSchedulerPriority(10)
 	store.AddAccount(primary)
 	store.AddAccount(&auth.Account{DBID: 2, AccessToken: "at-2", PlanType: "plus", AccountID: "acct-2"})
-	handler := NewHandler(store, nil, &config.Config{AllowAnonymousV1: true}, nil)
+	t.Cleanup(store.Stop)
+	handler := nativeContinuationHandler(t, store)
+	root := NewUpstreamSessionUUID()
+	alias := nativeContinuationAlias(t, handler, primary, root, "resp_stale")
 
 	router := gin.New()
 	handler.RegisterRoutes(router)
@@ -1059,7 +1082,7 @@ func TestResponsesWebSocketContinuationCannotChangeExcludedSessionOwner(t *testi
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/responses"
-	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, continuationFixtureHeaders(handler))
 	if err != nil {
 		if resp != nil {
 			t.Fatalf("dial websocket failed: %v status=%d", err, resp.StatusCode)
@@ -1068,8 +1091,8 @@ func TestResponsesWebSocketContinuationCannotChangeExcludedSessionOwner(t *testi
 	}
 	defer conn.Close()
 
-	payload := `{"type":"response.create","model":"gpt-5.5","prompt_cache_key":"conversation-1","previous_response_id":"resp_stale","input":"continue"}`
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+	payload := fmt.Sprintf(`{"type":"response.create","model":"gpt-5.5","previous_response_id":%q,"input":"continue"}`, alias)
+	if err := conn.WriteMessage(websocket.TextMessage, nativeContinuationBody(t, root, []byte(payload))); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
 
@@ -2141,8 +2164,8 @@ func TestResponsesWebSocketSilentRetryDisabledRelaysRetryableFailure(t *testing.
 	if eventType := gjson.GetBytes(first, "type").String(); eventType != "response.failed" {
 		t.Fatalf("first event type = %q body=%s", eventType, first)
 	}
-	if !strings.Contains(string(first), "raw quota exhausted") {
-		t.Fatalf("failure should include raw upstream message when hiding disabled: %s", first)
+	if strings.Contains(string(first), "raw quota exhausted") || !strings.Contains(string(first), publicUpstreamFailureMessage) {
+		t.Fatalf("disabling friendly errors must not reveal private upstream prose: %s", first)
 	}
 
 	select {
@@ -3956,8 +3979,8 @@ func TestSendFinalUpstreamError_UsageLimitRewrites429(t *testing.T) {
 	if payload.Error.Code != "account_pool_usage_limit_reached" {
 		t.Fatalf("code = %q, want %q", payload.Error.Code, "account_pool_usage_limit_reached")
 	}
-	if payload.Error.PlanType != "free" {
-		t.Fatalf("plan_type = %q, want %q", payload.Error.PlanType, "free")
+	if payload.Error.PlanType != "" {
+		t.Fatalf("upstream plan_type leaked: %q", payload.Error.PlanType)
 	}
 	if payload.Error.ResetsAt != 1775317531 {
 		t.Fatalf("resets_at = %d, want %d", payload.Error.ResetsAt, 1775317531)

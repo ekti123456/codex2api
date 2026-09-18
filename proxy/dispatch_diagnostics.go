@@ -167,9 +167,10 @@ func dispatchStreamError(ctx *gin.Context, message, code string) gin.H {
 		failure := upstreamPromptSafetyAPIError(ctx, nil)
 		return gin.H{"message": failure.Message, "type": failure.Type, "code": failure.Code, "details": failure.Details}
 	}
-	err := gin.H{"message": message, "type": "upstream_error", "code": code}
+	err := gin.H{"message": publicUpstreamMessage(code), "type": "upstream_error", "code": code}
 	if cached, ok := ctx.Get(dispatchFailureContextKey); ok && message == dispatchPublicMessage && (code == "upstream_error" || code == ErrorCodeUpstreamStreamBreak) {
 		if failure, valid := cached.(dispatchFailure); valid {
+			err["message"] = dispatchPublicMessage
 			err["code"] = "service_unavailable"
 			err["request_id"] = failure.RequestID
 			if failure.Envelope != "" {
