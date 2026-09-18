@@ -42,6 +42,11 @@ func (h *Handler) GetAccountHealthBars(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "获取健康状态失败："+err.Error())
 		return
 	}
+	latest, err := h.db.GetAccountHealthLatestRequests(ctx, ids, now)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "获取最近请求状态失败："+err.Error())
+		return
+	}
 
 	out := make(map[string][]database.AccountHealthBucket, len(buckets))
 	for id, accountBuckets := range buckets {
@@ -53,8 +58,9 @@ func (h *Handler) GetAccountHealthBars(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"buckets":       out,
-		"block_count":   accountHealthBlockCount,
-		"block_minutes": accountHealthBlockMinutes,
+		"buckets":         out,
+		"latest_requests": latest,
+		"block_count":     accountHealthBlockCount,
+		"block_minutes":   accountHealthBlockMinutes,
 	})
 }

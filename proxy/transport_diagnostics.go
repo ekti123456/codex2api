@@ -17,6 +17,8 @@ import (
 )
 
 type UpstreamTransportDiagnostic struct {
+	RequestTurnState       *usageTurnStateValue               `json:"request_turn_state,omitempty"`
+	AccessPrograms         *accessProgramsValueDiagnostic     `json:"access_programs,omitempty"`
 	ResponseModel          string                             `json:"response_model,omitempty"`
 	ResponseModelConflict  bool                               `json:"response_model_conflict,omitempty"`
 	StreamDelivery         *ResponsesStreamDeliveryDiagnostic `json:"stream_delivery,omitempty"`

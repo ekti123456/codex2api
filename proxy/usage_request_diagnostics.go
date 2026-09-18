@@ -69,6 +69,7 @@ type usageRecentAccountDiagnostic struct {
 }
 
 type usageRequestDiagnostics struct {
+	AccessPrograms         *accessProgramsDiagnostic                `json:"access_programs,omitempty"`
 	TurnState              *database.TurnStateDiagnostic            `json:"turn_state,omitempty"`
 	InitialSession         *initialSessionDiagnostic                `json:"initial_session,omitempty"`
 	WindowNumberOriginal   string                                   `json:"window_number_original,omitempty"`
@@ -266,6 +267,7 @@ func captureUsageRequestIngress(c *gin.Context, body []byte) {
 		return
 	}
 	state.rootCaptured = true
+	state.AccessPrograms = &accessProgramsDiagnostic{Inbound: captureAccessPrograms(body)}
 	if c.Request != nil {
 		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), initialSessionContextKey{}, (*initialSessionDiagnostic)(nil)))
 	}
@@ -446,6 +448,19 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 			}
 			snapshot.Upstream = &upstream
 		}
+	}
+	populateUsageOutboundTurnState(input, snapshot.Upstream)
+	// Keep this comparison outside Incoming/OutboundIdentity, whose large
+	// metadata snapshots can be dropped when the shared budget is exceeded.
+	accessPrograms := accessProgramsDiagnostic{}
+	if state.AccessPrograms != nil {
+		accessPrograms.Inbound = state.AccessPrograms.Inbound
+	}
+	if snapshot.Upstream != nil {
+		accessPrograms.Outbound = snapshot.Upstream.AccessPrograms
+	}
+	if accessPrograms.Inbound != nil || accessPrograms.Outbound != nil {
+		snapshot.AccessPrograms = &accessPrograms
 	}
 	snapshot.CaptureStatus = "partial"
 	if state.rootCaptured {

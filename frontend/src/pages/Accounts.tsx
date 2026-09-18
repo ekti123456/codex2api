@@ -53,6 +53,7 @@ import { useToast } from "../hooks/useToast";
 import type {
   AccountRow,
   AccountHealthBucket,
+  AccountHealthLatestRequest,
   AddAccountRequest,
   AddATAccountRequest,
   AddOpenAIResponsesAccountRequest,
@@ -199,6 +200,7 @@ import {
 import { useTranslation } from "react-i18next";
 import AccountUsageModal from "../components/AccountUsageModal";
 import AccountHealthBar from "../components/AccountHealthBar";
+import AccountLatestTurnState from "../components/AccountLatestTurnState";
 import { accountHealthOverloadSummary } from "../lib/accountHealth";
 import AccountDetailSheet from "../components/AccountDetailSheet";
 import RequestCountPills, {
@@ -1276,6 +1278,7 @@ const AccountTableRow = memo(function AccountTableRow({
   allGroups,
   proxyCtx,
   healthBuckets,
+  latestRequest,
   lazyMode,
   refreshing,
   authJsonExporting,
@@ -1291,6 +1294,7 @@ const AccountTableRow = memo(function AccountTableRow({
   allGroups: AccountGroup[];
   proxyCtx: ProxyBindingContext;
   healthBuckets: AccountHealthBucket[] | undefined;
+  latestRequest?: AccountHealthLatestRequest;
   lazyMode: boolean;
   refreshing: boolean;
   authJsonExporting: boolean;
@@ -1564,6 +1568,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                     planType={account.plan_type}
                                     workspaceId={accountWorkspaceId(account)}
                                     healthBuckets={healthBuckets}
+                                    latestRequest={latestRequest}
                                   />
                                   <ExpiryBadge
                                     expiresAt={account.subscription_expires_at}
@@ -1619,7 +1624,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                       <AccountSessionCapacityBadge account={account} />
                                     </div>
                                     <AccountHealthBar
-                                      buckets={healthBuckets}
+                                      buckets={healthBuckets} latestRequest={latestRequest}
                                     />
                                   </div>
                                 )}
@@ -1773,6 +1778,7 @@ const AccountCardItem = memo(function AccountCardItem({
   lazyMode,
   showEmailDomainTags,
   healthBuckets,
+  latestRequest,
   refreshing,
   authJsonExporting,
   variant,
@@ -1789,6 +1795,7 @@ const AccountCardItem = memo(function AccountCardItem({
   lazyMode: boolean;
   showEmailDomainTags: boolean;
   healthBuckets: AccountHealthBucket[] | undefined;
+  latestRequest?: AccountHealthLatestRequest;
   refreshing: boolean;
   authJsonExporting: boolean;
   variant: "mobile" | "personal";
@@ -1807,6 +1814,7 @@ const AccountCardItem = memo(function AccountCardItem({
       lazyMode={lazyMode}
       showEmailDomainTags={showEmailDomainTags}
       healthBuckets={healthBuckets}
+      latestRequest={latestRequest}
       refreshing={refreshing}
       authJsonExporting={authJsonExporting}
       variant={variant}
@@ -2774,6 +2782,7 @@ export default function Accounts() {
     [applyOperationProgressEvent],
   );
 
+  const [latestHealthRequests, setLatestHealthRequests] = useState<Record<string, AccountHealthLatestRequest>>({});
   const [pagedHealthBars, setPagedHealthBars] = useState<
     Record<string, AccountHealthBucket[]>
   >({});
@@ -3063,13 +3072,17 @@ export default function Accounts() {
   useEffect(() => {
     if (!accountPageIDsKey) {
       setPagedHealthBars({});
+      setLatestHealthRequests({});
       return;
     }
     let cancelled = false;
     const ids = accountPageIDsKey.split(",").map(Number);
     void api.getAccountHealthBars(ids)
       .then((response) => {
-        if (!cancelled) setPagedHealthBars(response.buckets ?? {});
+        if (!cancelled) {
+          setPagedHealthBars(response.buckets ?? {});
+          setLatestHealthRequests(response.latest_requests ?? {});
+        }
       })
       .catch((err: unknown) => {
         // 健康条缺失只是降级显示,但失败必须留痕,否则无从排查(issue #493)。
@@ -7621,6 +7634,7 @@ export default function Accounts() {
                         lazyMode={lazyMode}
                         showEmailDomainTags={showEmailDomainTags}
                         healthBuckets={healthBars[String(account.id)]}
+                        latestRequest={latestHealthRequests[String(account.id)]}
                         refreshing={refreshingIds.has(account.id)}
                         authJsonExporting={authJsonExportingIds.has(account.id)}
                         variant={isPersonalMode ? "personal" : "mobile"}
@@ -7868,6 +7882,7 @@ export default function Accounts() {
                           allGroups={allGroups}
                           proxyCtx={proxyBindingCtx}
                           healthBuckets={healthBars[String(account.id)]}
+                          latestRequest={latestHealthRequests[String(account.id)]}
                           lazyMode={lazyMode}
                           refreshing={refreshingIds.has(account.id)}
                           authJsonExporting={authJsonExportingIds.has(account.id)}
@@ -9202,6 +9217,7 @@ export default function Accounts() {
                 ? healthBars[String(detailAccount.id)]
                 : undefined
             }
+            latestRequest={detailAccount ? latestHealthRequests[String(detailAccount.id)] : undefined}
             sequence={
               detailNavIndex >= 0
                 ? (currentPage - 1) * pageSize + detailNavIndex + 1
@@ -13529,10 +13545,12 @@ function PlanBadge({
   planType,
   workspaceId,
   healthBuckets,
+  latestRequest,
 }: {
   planType?: string;
   workspaceId?: string;
   healthBuckets?: AccountHealthBucket[];
+  latestRequest?: AccountHealthLatestRequest;
 }) {
   const { t } = useTranslation();
   const label = formatPlanLabel(planType);
@@ -13568,7 +13586,7 @@ function PlanBadge({
       {label}
     </span>
   );
-  if (!showWorkspace && !overload.overloaded) {
+  if (!showWorkspace && !overload.overloaded && !latestRequest) {
     return badge;
   }
 
@@ -13595,6 +13613,7 @@ function PlanBadge({
               )}
             </>
           )}
+          <AccountLatestTurnState request={latestRequest} />
           {showWorkspace && <div className="font-mono">{t("accounts.planWorkspaceId", { id: trimmedWorkspaceId })}</div>}
         </TooltipContent>
       </Tooltip>
@@ -14052,6 +14071,7 @@ function AccountMobileCard({
   lazyMode,
   showEmailDomainTags,
   healthBuckets,
+  latestRequest,
   refreshing,
   authJsonExporting,
   variant = "mobile",
@@ -14084,6 +14104,7 @@ function AccountMobileCard({
   lazyMode: boolean;
   showEmailDomainTags: boolean;
   healthBuckets: AccountHealthBucket[] | undefined;
+  latestRequest?: AccountHealthLatestRequest;
   refreshing: boolean;
   authJsonExporting: boolean;
   variant?: "mobile" | "personal";
@@ -14200,6 +14221,7 @@ function AccountMobileCard({
                 planType={account.plan_type}
                 workspaceId={accountWorkspaceId(account)}
                 healthBuckets={healthBuckets}
+                latestRequest={latestRequest}
               />
               <SchedulerPriorityBadge account={account} />
               <UsingCreditsBadge account={account} />
@@ -14363,7 +14385,7 @@ function AccountMobileCard({
                   {formatHealthTier(account.health_tier, t)}
                 </span>
               </div>
-              <AccountHealthBar buckets={healthBuckets} />
+              <AccountHealthBar buckets={healthBuckets} latestRequest={latestRequest} />
             </div>
 
             <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-1">
@@ -14495,6 +14517,7 @@ function AccountMobileCard({
                       planType={account.plan_type}
                       workspaceId={accountWorkspaceId(account)}
                       healthBuckets={healthBuckets}
+                      latestRequest={latestRequest}
                     />
                   )}
                   {(!visibleColumns || visibleColumns.priority) && (
@@ -14603,7 +14626,7 @@ function AccountMobileCard({
                 concurrency: account.dynamic_concurrency_limit ?? "-",
               })}
             >
-              <AccountHealthBar buckets={healthBuckets} />
+              <AccountHealthBar buckets={healthBuckets} latestRequest={latestRequest} />
             </div>
           )}
           {(Math.max(account.active_requests ?? 0, account.occupied_requests ?? 0) > 0 ||

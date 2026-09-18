@@ -3,11 +3,14 @@ package proxy
 import (
 	"context"
 	"encoding/base64"
+	"net/http"
+	"strings"
 	"sync"
 	"unicode/utf8"
 
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 type usageTurnStateKey struct{}
@@ -17,6 +20,64 @@ type usageTurnStateKey struct{}
 type usageTurnStateObservation struct {
 	mu                   sync.Mutex
 	length, decodedBytes *int
+}
+
+type usageTurnStateValue struct {
+	Length       int  `json:"length"`
+	DecodedBytes *int `json:"decoded_bytes,omitempty"`
+}
+
+func measureUsageTurnState(real string) usageTurnStateValue {
+	value := usageTurnStateValue{Length: utf8.RuneCountInString(real)}
+	if real != "" {
+		for _, encoding := range []*base64.Encoding{base64.URLEncoding, base64.RawURLEncoding, base64.StdEncoding, base64.RawStdEncoding} {
+			if decoded, err := encoding.Strict().DecodeString(real); err == nil {
+				size := len(decoded)
+				value.DecodedBytes = &size
+				break
+			}
+		}
+	}
+	return value
+}
+
+// Called with the final HTTP headers/body or current WS frame, after alias
+// restoration and account-switch cleanup. Pooled handshake state is excluded.
+func captureUsageOutboundTurnState(body []byte, headers http.Header) *usageTurnStateValue {
+	var real string
+	for name, values := range headers {
+		if strings.EqualFold(name, codexTurnStateHeader) && len(values) > 0 {
+			real = values[0]
+			break
+		}
+	}
+	if real == "" {
+		field := gjson.GetBytes(body, "client_metadata.x-codex-turn-state")
+		if field.Type == gjson.String {
+			real = field.String()
+		}
+	}
+	value := measureUsageTurnState(real)
+	return &value
+}
+
+func populateUsageOutboundTurnState(input *database.UsageLogInput, upstream *UpstreamTransportDiagnostic) {
+	if input == nil || upstream == nil || upstream.AccountID != input.AccountID || upstream.SendPhase != "after_payload" || upstream.RequestTurnState == nil {
+		return
+	}
+	// Prefer a value newly returned by this attempt. Otherwise display the
+	// real value actually sent, even when the response does not repeat it.
+	if input.TurnStateLength != nil && *input.TurnStateLength > 0 {
+		return
+	}
+	value := upstream.RequestTurnState
+	length := value.Length
+	input.TurnStateLength = &length
+	input.TurnStateDecodedBytes = nil
+	if value.DecodedBytes != nil {
+		size := *value.DecodedBytes
+		input.TurnStateDecodedBytes = &size
+	}
 }
 
 func beginUsageTurnStateAttempt(c *gin.Context) {
@@ -37,18 +98,8 @@ func observeUsageTurnState(ctx context.Context, real string) {
 	if observation.length != nil && *observation.length > 0 {
 		return
 	}
-	length := utf8.RuneCountInString(real)
-	observation.length = &length
-	if length == 0 {
-		return
-	}
-	for _, encoding := range []*base64.Encoding{base64.URLEncoding, base64.RawURLEncoding, base64.StdEncoding, base64.RawStdEncoding} {
-		if decoded, err := encoding.Strict().DecodeString(real); err == nil {
-			size := len(decoded)
-			observation.decodedBytes = &size
-			break
-		}
-	}
+	value := measureUsageTurnState(real)
+	observation.length, observation.decodedBytes = &value.Length, value.DecodedBytes
 }
 
 func populateUsageTurnState(c *gin.Context, input *database.UsageLogInput) {

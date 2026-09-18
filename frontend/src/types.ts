@@ -661,8 +661,14 @@ export interface AccountHealthBucket {
 // buckets 按账号 ID（字符串）映射到由旧到新的 block_count 个时间桶。
 export interface AccountHealthBarsResponse {
   buckets: Record<string, AccountHealthBucket[]>
+  latest_requests?: Record<string, AccountHealthLatestRequest>
   block_count: number
   block_minutes: number
+}
+
+export interface AccountHealthLatestRequest {
+  created_at: ISODateString
+  turn_state_length: number | null
 }
 
 export interface InviteItem {
@@ -2987,6 +2993,12 @@ export interface BuiltinPromptRuleFields {
   weight: number
   category: string
   strict: boolean
+  signal_only: boolean
+  all_patterns: string[]
+  any_patterns: string[]
+  exclude_patterns: string[]
+  authorization_exclude_patterns: string[]
+  min_matches: number
 }
 
 export interface PromptFilterRule {
@@ -2997,6 +3009,12 @@ export interface PromptFilterRule {
   weight: number
   category?: string
   strict?: boolean
+  signal_only?: boolean
+  all_patterns?: string[] | null
+  any_patterns?: string[] | null
+  exclude_patterns?: string[] | null
+  authorization_exclude_patterns?: string[] | null
+  min_matches?: number
   enabled?: boolean
   builtin?: boolean
 }

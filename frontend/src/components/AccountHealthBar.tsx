@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { AccountHealthBucket } from '../types'
+import type { AccountHealthBucket, AccountHealthLatestRequest } from '../types'
+import AccountLatestTurnState from './AccountLatestTurnState'
 import { ACCOUNT_HEALTH_BLOCK_COUNT, ACCOUNT_HEALTH_BLOCK_MINUTES } from '../lib/accountHealth'
 
 // 「健康状态」条：把账号最近的请求成败分桶渲染成一排色块 + 成功率。
@@ -105,12 +106,14 @@ function statusBarDataFromBuckets(
 
 interface Props {
   buckets: AccountHealthBucket[] | undefined
+  latestRequest?: AccountHealthLatestRequest
   blockCount?: number
   blockMinutes?: number
 }
 
 export default function AccountHealthBar({
   buckets,
+  latestRequest,
   blockCount = ACCOUNT_HEALTH_BLOCK_COUNT,
   blockMinutes = ACCOUNT_HEALTH_BLOCK_MINUTES,
 }: Props) {
@@ -180,6 +183,7 @@ export default function AccountHealthBar({
         ) : (
           <span className="text-muted-foreground">{t('accounts.healthBarNoRequests')}</span>
         )}
+        <AccountLatestTurnState request={latestRequest} />
       </div>
     )
   }

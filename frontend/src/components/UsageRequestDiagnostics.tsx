@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { UsageLog } from '../types'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
+import { accessProgramsDiagnosticValue, diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
 import { useToast } from '../hooks/useToast'
 import Modal from './Modal'
 import { Button } from './ui/button'
@@ -28,6 +28,25 @@ function DiagnosticFields({ value, includeMissing = false }: { value: unknown; i
       </div>
     })}
   </dl>
+}
+
+function AccessProgramsDiagnostics({ value }: { value: unknown }) {
+  const { t } = useTranslation()
+  const comparison = diagnosticRecord(value)
+  return <section className="rounded-lg border p-3">
+    <h3 className="mb-3 text-sm font-semibold">access_programs</h3>
+    <p className="mb-3 text-xs text-muted-foreground">{t('usage.diagnostics.accessPrograms.hint')}</p>
+    <div className="grid gap-3 sm:grid-cols-2">
+      {(['inbound', 'outbound'] as const).map((direction) => {
+        const item = accessProgramsDiagnosticValue(comparison[direction])
+        return <div key={direction} className="min-w-0 space-y-2">
+          <h4 className="text-xs font-semibold">{t(`usage.diagnostics.accessPrograms.${direction}`)}</h4>
+          {item.state !== 'present' && <p className="text-xs text-muted-foreground">{t(`usage.diagnostics.accessPrograms.${item.state}`)}</p>}
+          {item.text !== undefined && <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/40 p-2 text-xs select-text" tabIndex={0}>{item.text}</pre>}
+        </div>
+      })}
+    </div>
+  </section>
 }
 
 function TurnStateDiagnostics({ value, outbound }: { value: unknown; outbound: unknown }) {
@@ -121,6 +140,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
     </div> : !data ? <p className="text-sm text-muted-foreground">{t('usage.diagnostics.unavailable')}</p> : <div className="space-y-4">
       {data.classification_changed === true && <p role="alert" className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">{t('usage.diagnostics.changed')}</p>}
       {data.truncated === true && <p className="text-xs text-amber-600">{t('usage.diagnostics.truncated')}</p>}
+      <AccessProgramsDiagnostics value={data.access_programs} />
       <TurnStateDiagnostics value={data.turn_state} outbound={outboundIdentity} />
       {sections.map(([title, value]) => <section key={title} className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{title === 'continuity' ? t('sessionContinuity.title') : t(`usage.diagnostics.sections.${title}`)}</h3>

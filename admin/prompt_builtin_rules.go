@@ -64,7 +64,7 @@ func (h *Handler) UpdatePromptFilterBuiltinRule(c *gin.Context) {
 			break
 		}
 	}
-	if current != *request.Expected {
+	if !promptfilter.BuiltinPatternOverridesEqual(current, *request.Expected) {
 		writeError(c, http.StatusConflict, "这条内置规则已被其他页面或实例修改，请刷新后重新编辑")
 		return
 	}
@@ -74,7 +74,7 @@ func (h *Handler) UpdatePromptFilterBuiltinRule(c *gin.Context) {
 			next = append(next, rule)
 		}
 	}
-	if request.Rule != nil && *request.Rule != *original {
+	if request.Rule != nil && !promptfilter.BuiltinPatternOverridesEqual(*request.Rule, *original) {
 		next = append(next, *request.Rule)
 	}
 	replacement, _ := json.Marshal(next)

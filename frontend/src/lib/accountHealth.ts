@@ -1,4 +1,11 @@
-import type { AccountHealthBucket } from '../types'
+import type { AccountHealthBucket, AccountHealthLatestRequest } from '../types'
+
+export function accountLatestTurnStateValue(request?: AccountHealthLatestRequest): { state: 'received' | 'missing' | 'notRecorded'; length?: number } | null {
+  if (!request) return null
+  const length = request.turn_state_length
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return { state: 'notRecorded' }
+  return length > 0 ? { state: 'received', length } : { state: 'missing' }
+}
 
 export const ACCOUNT_HEALTH_BLOCK_COUNT = 20
 export const ACCOUNT_HEALTH_BLOCK_MINUTES = 10

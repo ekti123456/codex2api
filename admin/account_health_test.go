@@ -15,8 +15,10 @@ import (
 
 func TestAccountHealthBarsExposeOverloadAndMatchingBounds(test *testing.T) {
 	db := newTestAdminDB(test)
+	length := 292
 	err := db.InsertUsageLog(context.Background(), &database.UsageLogInput{
 		AccountID: 1, StatusCode: 500, ErrorMessage: "server_is_overloaded · busy", Endpoint: "/v1/responses",
+		TurnStateLength: &length,
 	})
 	require.NoError(test, err)
 	db.FlushUsageLogs()
@@ -29,12 +31,16 @@ func TestAccountHealthBarsExposeOverloadAndMatchingBounds(test *testing.T) {
 	after := time.Now()
 	require.Equal(test, http.StatusOK, recorder.Code, recorder.Body.String())
 	var response struct {
-		Buckets      map[string][]database.AccountHealthBucket `json:"buckets"`
-		BlockCount   int                                       `json:"block_count"`
-		BlockMinutes int                                       `json:"block_minutes"`
+		Buckets      map[string][]database.AccountHealthBucket      `json:"buckets"`
+		Latest       map[string]database.AccountHealthLatestRequest `json:"latest_requests"`
+		BlockCount   int                                            `json:"block_count"`
+		BlockMinutes int                                            `json:"block_minutes"`
 	}
 	require.NoError(test, json.Unmarshal(recorder.Body.Bytes(), &response))
 	buckets := response.Buckets["1"]
+	require.Len(test, response.Latest, 1)
+	require.Equal(test, 292, *response.Latest["1"].TurnStateLength)
+	require.False(test, response.Latest["1"].CreatedAt.IsZero())
 	require.Len(test, buckets, 20)
 	require.Equal(test, 1, buckets[19].Overloaded500)
 	require.Equal(test, 1, buckets[19].Failed)

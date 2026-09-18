@@ -251,7 +251,7 @@ func MarshalDisabledPatterns(names []string) string {
 }
 
 func NormalizeConfig(cfg Config) Config {
-	cfg.BuiltinOverrides = append([]BuiltinPatternOverride(nil), cfg.BuiltinOverrides...)
+	cfg.BuiltinOverrides = cloneBuiltinPatternOverrides(cfg.BuiltinOverrides)
 	defaults := DefaultConfig()
 	if strings.TrimSpace(cfg.Mode) == "" {
 		cfg.Mode = defaults.Mode

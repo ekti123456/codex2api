@@ -44,6 +44,12 @@ func TestBuiltinRuleEditingPersistsAndPreservesOtherSettings(t *testing.T) {
 	}
 	edit := original
 	edit.Pattern, edit.Weight = "builtin_override_probe_987654", 83
+	signalOnly, minimum := true, 2
+	edit.SignalOnly, edit.MinMatches = &signalOnly, &minimum
+	edit.AllPatterns = []string{"required_probe"}
+	edit.AnyPatterns = []string{"alternative_alpha", "alternative_beta"}
+	edit.ExcludePatterns = []string{"excluded_probe"}
+	edit.AuthorizationExcludePatterns = []string{"authorized_probe"}
 	w := send(&original, &edit)
 	require.Equal(t, 200, w.Code, w.Body.String())
 	var rules promptFilterRulesResponse
@@ -54,13 +60,25 @@ func TestBuiltinRuleEditingPersistsAndPreservesOtherSettings(t *testing.T) {
 			require.False(t, rule.Enabled)
 			require.Equal(t, original, *rule.Default)
 			require.Equal(t, edit.Pattern, rule.Pattern)
+			require.True(t, rule.SignalOnly)
+			require.Equal(t, edit.AllPatterns, rule.AllPatterns)
+			require.Equal(t, edit.AnyPatterns, rule.AnyPatterns)
+			require.Equal(t, edit.ExcludePatterns, rule.ExcludePatterns)
+			require.Equal(t, edit.AuthorizationExcludePatterns, rule.AuthorizationExcludePatterns)
+			require.Equal(t, 2, rule.MinMatches)
 		}
 	}
 	require.Equal(t, []promptfilter.BuiltinPatternOverride{edit}, store.GetPromptFilterConfig().BuiltinOverrides)
 	// A stale editor cannot overwrite this change, including by restoring defaults.
 	require.Equal(t, 409, send(&original, nil).Code)
+	staleConditions := edit
+	staleConditions.ExcludePatterns = []string{"stale_exclusion"}
+	require.Equal(t, 409, send(&staleConditions, nil).Code)
 	invalid := edit
 	invalid.Pattern = "["
+	require.Equal(t, 400, send(&edit, &invalid).Code)
+	invalid = edit
+	invalid.AuthorizationExcludePatterns = []string{"["}
 	require.Equal(t, 400, send(&edit, &invalid).Code)
 	invalid = edit
 	invalid.Name = "renamed"
@@ -88,6 +106,12 @@ func TestBuiltinRuleEditingPersistsAndPreservesOtherSettings(t *testing.T) {
 			require.False(t, rule.Overridden)
 			require.False(t, rule.Enabled)
 			require.Equal(t, original.Pattern, rule.Pattern)
+			require.False(t, rule.SignalOnly)
+			require.Empty(t, rule.AllPatterns)
+			require.Empty(t, rule.AnyPatterns)
+			require.Empty(t, rule.ExcludePatterns)
+			require.Empty(t, rule.AuthorizationExcludePatterns)
+			require.Zero(t, rule.MinMatches)
 		}
 	}
 }

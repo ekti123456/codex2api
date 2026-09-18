@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { AccountGroup, AccountHealthBucket, AccountRow } from "../types";
+import type { AccountGroup, AccountHealthBucket, AccountHealthLatestRequest, AccountRow } from "../types";
 import AccountHealthBar from "./AccountHealthBar";
 import ChannelLogo from "./ChannelLogo";
 import ModelLogo from "./ModelLogo";
@@ -184,6 +184,7 @@ export interface AccountDetailSheetProps {
   account: AccountRow | null;
   groups: AccountGroup[];
   healthBuckets?: AccountHealthBucket[];
+  latestRequest?: AccountHealthLatestRequest;
   sequence?: number;
   usageSlot?: ReactNode;
   providerSlot?: ReactNode;
@@ -218,6 +219,7 @@ export default function AccountDetailSheet({
   account,
   groups,
   healthBuckets,
+  latestRequest,
   sequence,
   usageSlot,
   providerSlot,
@@ -518,7 +520,7 @@ export default function AccountDetailSheet({
                   <div className="text-[10px] text-muted-foreground/80">
                     {t("accounts.healthBarLabel")}
                   </div>
-                  <AccountHealthBar buckets={healthBuckets} />
+                  <AccountHealthBar buckets={healthBuckets} latestRequest={latestRequest} />
                 </div>
 
                 {account.status === "error" && account.error_message ? (

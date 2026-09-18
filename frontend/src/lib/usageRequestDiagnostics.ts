@@ -15,6 +15,18 @@ export function diagnosticRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+export function accessProgramsDiagnosticValue(value: unknown): { state: string; text?: string } {
+  const item = diagnosticRecord(value)
+  if (item.state === 'present' && Object.prototype.hasOwnProperty.call(item, 'value')) {
+    return { state: 'present', text: JSON.stringify(item.value, null, 2) }
+  }
+  if (item.state === 'too_large') {
+    return { state: 'too_large', text: JSON.stringify({ bytes: item.bytes, sha256: item.sha256 }, null, 2) }
+  }
+  if (item.state === 'absent' || item.state === 'invalid_json') return { state: item.state }
+  return { state: 'not_recorded' }
+}
+
 export interface TurnStateDiagnosticRow {
   kind: 'received' | 'upstream' | 'real' | 'alias' | 'hash'
   value: string

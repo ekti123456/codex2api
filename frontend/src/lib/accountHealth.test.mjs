@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { ACCOUNT_HEALTH_BLOCK_COUNT, ACCOUNT_HEALTH_BLOCK_MINUTES, accountHealthOverloadSummary } from './accountHealth.ts'
+import { ACCOUNT_HEALTH_BLOCK_COUNT, ACCOUNT_HEALTH_BLOCK_MINUTES, accountHealthOverloadSummary, accountLatestTurnStateValue } from './accountHealth.ts'
+
+test('latest request value preserves zero/null and never invents an older token', () => {
+  assert.equal(accountLatestTurnStateValue(undefined), null)
+  for (const length of [217, 292, 500]) {
+    assert.deepEqual(accountLatestTurnStateValue({ turn_state_length: length }), { state: 'received', length })
+  }
+  assert.deepEqual(accountLatestTurnStateValue({ turn_state_length: 0 }), { state: 'missing' })
+  for (const length of [null, undefined, -1, NaN, '292']) {
+    assert.deepEqual(accountLatestTurnStateValue({ turn_state_length: length }), { state: 'notRecorded' })
+  }
+})
 
 test('plan warning only uses the explicit 500 overload count, not other failures', () => {
   for (const buckets of [undefined, [], [{ success: 1, failed: 10 }], [{ success: 1, failed: 10, overloaded_500: 0 }]]) {

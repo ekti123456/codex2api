@@ -112,8 +112,12 @@ func (observer *TransportObserver) ResponsesInput(body []byte, headers http.Head
 	}
 	shape := diagnoseResponsesInput(body, headers, endpoint)
 	outbound := captureOutboundIdentityBody(body)
+	accessPrograms := captureAccessPrograms(body)
+	turnState := captureUsageOutboundTurnState(body, headers)
 	observer.update(func(diagnostic *UpstreamTransportDiagnostic) {
 		diagnostic.ResponsesInput = shape
+		diagnostic.AccessPrograms = accessPrograms
+		diagnostic.RequestTurnState = turnState
 	})
 	observer.updateOutboundIdentity(func(identity *outboundIdentityDiagnostic) {
 		identity.Body = outbound

@@ -279,6 +279,7 @@ func TestTurnStateOfficialEnvelopeRestorationAndDiagnosticValues(t *testing.T) {
 	require.NotEqual(t, real, alias)
 	for _, sent := range []string{alias, real, "c2ts_v1_" + strings.Repeat("A", 43)} {
 		request, body, _ := aliasRequest(t, h, 101, "turn", sent, false)
+		beginUsageSelectionAttempt(request, 1)
 		body = normalizeTurnStateIngress(request, body)
 		out, headers := PrepareCodexTurnStateOutbound(request.Request.Context(), a, body, request.Request.Header)
 		attachUpstreamTrace(request, h.store)
@@ -286,16 +287,22 @@ func TestTurnStateOfficialEnvelopeRestorationAndDiagnosticValues(t *testing.T) {
 		observer := UpstreamTransportObserver(request.Request.Context())
 		observer.OutboundHTTPIdentity(headers)
 		observer.ResponsesInput(out, headers, "/responses")
+		observer.Phase("after_payload")
 		usage := database.UsageLogInput{AccountID: a.ID()}
 		populateUpstreamTrace(request, &usage)
 		populateUsageRequestDiagnostics(request, &usage)
 		require.Equal(t, sent, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.received").String())
 		if sent == alias {
+			require.NotNil(t, usage.TurnStateLength)
+			require.Equal(t, len(real), *usage.TurnStateLength)
+			require.Equal(t, 217, *usage.TurnStateDecodedBytes)
 			require.Equal(t, real, headers.Get(codexTurnStateHeader))
 			require.Equal(t, real, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.real").String())
 			require.Equal(t, real, gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.http.headers.X-Codex-Turn-State").String())
 			require.Equal(t, real, gjson.Get(usage.RequestDiagnostics, "upstream.outbound_identity.body.client_metadata.x-codex-turn-state").String())
 		} else {
+			require.NotNil(t, usage.TurnStateLength)
+			require.Zero(t, *usage.TurnStateLength, "cleared ingress must not contribute a displayed length")
 			require.Empty(t, headers.Get(codexTurnStateHeader))
 			require.False(t, gjson.GetBytes(out, "client_metadata.x-codex-turn-state").Exists())
 			require.False(t, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.real").Exists())
