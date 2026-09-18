@@ -33,7 +33,7 @@ policy target/key, for the same request, user and channel. It validates version,
 unique integer headers, bounds and ordering, then strips these private headers.
 `other.frt` remains the actual NewAPI first-frame latency. The new
 `other.upstream_first_response` object contains `source`, `mode`, `ms` and
-`attempt_ms`; the list displays it as **Upstream first response**, with observed
-first-frame timing in its title and in request details. TPS, billing and existing
+`attempt_ms`; the list keeps the compact **First token** label. The admin view
+has an actual-first-frame hover and additional timing details, without provider/mode wording. TPS, billing and existing
 aggregate metrics keep their original timing semantics. Old/missing/invalid
 reports use the original display. Historical logs are not rewritten.
