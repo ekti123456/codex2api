@@ -102,8 +102,9 @@ func TestUsageLogExportPagesEmptyInvalidAndUnconfirmed(test *testing.T) {
 func TestUsageLogExportPageByteLimitDoesNotSkipTheNextRecord(test *testing.T) {
 	handler := &Handler{db: newTestAdminDB(test)}
 	userAgent := strings.Repeat("a", 96*1024)
+	diagnostic := fmt.Sprintf(`{"incoming":{"headers":{"User-Agent":%q}}}`, userAgent)
 	for index := 0; index < 55; index++ {
-		require.NoError(test, handler.db.InsertUsageLog(test.Context(), &database.UsageLogInput{StatusCode: 200, RequestID: fmt.Sprintf("large-%d", index), ClientUserAgent: userAgent}))
+		require.NoError(test, handler.db.InsertUsageLog(test.Context(), &database.UsageLogInput{StatusCode: 200, RequestID: fmt.Sprintf("large-%d", index), RequestDiagnostics: diagnostic}))
 	}
 	handler.db.FlushUsageLogs()
 	query := url.Values{"scope": {"all"}, "confirmed": {"true"}, "paged": {"true"}}
@@ -123,9 +124,11 @@ func TestUsageLogExportPageByteLimitDoesNotSkipTheNextRecord(test *testing.T) {
 		bytes := 0
 		for _, raw := range page.Records {
 			var record struct {
-				ID int64 `json:"id"`
+				ID          int64           `json:"id"`
+				Diagnostics json.RawMessage `json:"diagnostics"`
 			}
 			require.NoError(test, json.Unmarshal([]byte(raw), &record))
+			require.JSONEq(test, diagnostic, string(record.Diagnostics))
 			require.False(test, seen[record.ID])
 			seen[record.ID] = true
 			bytes += len(raw)

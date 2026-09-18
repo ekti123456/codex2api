@@ -84,8 +84,8 @@ func TestUsageRequestDiagnosticsIngressPrivacyAndBounds(test *testing.T) {
 	state.Incoming["oversize"] = map[string]string{"value": strings.Repeat("x", 20000)}
 	populateUsageRequestDiagnostics(requestContext, input)
 	snapshot = readUsageDiagnosticSnapshot(test, input)
-	if len(input.RequestDiagnostics) > database.MaxUsageRequestDiagnosticsBytes || !snapshot.Truncated || snapshot.Incoming != nil {
-		test.Fatal("snapshot size was not bounded")
+	if len(input.RequestDiagnostics) <= 12*1024 || snapshot.Truncated || snapshot.Incoming["oversize"]["value"] != state.Incoming["oversize"]["value"] || snapshot.Incoming["client_metadata.x-codex-turn-metadata"]["thread_id"] != testLeafSessionA || snapshot.Incoming["turn_metadata_header"]["session_id"] != testRootSessionA {
+		test.Fatal("large snapshot lost original ingress fields")
 	}
 }
 

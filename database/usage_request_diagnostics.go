@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-const MaxUsageRequestDiagnosticsBytes = 12 * 1024
-
 func normalizeUsageWindowNumber(value string) string {
 	number, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
@@ -42,18 +40,18 @@ func (db *DB) GetUsageRequestDiagnostics(ctx context.Context, id int64) (*UsageR
 	if err != nil {
 		return nil, err
 	}
-	if len(payload) > 0 && len(payload) <= MaxUsageRequestDiagnosticsBytes && json.Valid([]byte(payload)) {
+	if len(payload) > 0 && json.Valid([]byte(payload)) {
 		result.Diagnostics = json.RawMessage(payload)
 	}
 	return result, nil
 }
 
-func boundedUsageRequestDiagnostics(payload string) string {
+// Preserve the complete snapshot produced by the diagnostic collectors. Their
+// allowlists and per-field limits bound collection; a second size budget here
+// would silently lose fields that have already been captured.
+func normalizeUsageRequestDiagnostics(payload string) string {
 	if payload == "" {
 		return `{"version":1,"capture_status":"not_available"}`
-	}
-	if len(payload) > MaxUsageRequestDiagnosticsBytes {
-		return ""
 	}
 	return payload
 }

@@ -26,8 +26,9 @@ func (db *DB) ensureSessionAutoLockSchema(ctx context.Context) error {
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS session_auto_lock_settings (id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL, threshold INTEGER NOT NULL, revision BIGINT NOT NULL)`,
 		`INSERT INTO session_auto_lock_settings(id,enabled,threshold,revision) VALUES(1,0,3,1) ON CONFLICT(id) DO NOTHING`,
-		`CREATE TABLE IF NOT EXISTS session_500_streaks (session_key TEXT PRIMARY KEY, failures INTEGER NOT NULL, revision BIGINT NOT NULL, updated_at BIGINT NOT NULL)`,
-		`CREATE INDEX IF NOT EXISTS idx_session_500_streaks_updated ON session_500_streaks(updated_at)`,
+		// Keep the narrower policy separate from legacy all-500 counters.
+		`CREATE TABLE IF NOT EXISTS session_overload_streaks (session_key TEXT PRIMARY KEY, failures INTEGER NOT NULL, revision BIGINT NOT NULL, updated_at BIGINT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_overload_streaks_updated ON session_overload_streaks(updated_at)`,
 	} {
 		if _, err := db.conn.ExecContext(ctx, statement); err != nil {
 			return err
@@ -61,7 +62,7 @@ func (db *DB) SetSessionAutoLockSettings(ctx context.Context, next SessionAutoLo
 		if err := tx.QueryRowContext(ctx, `UPDATE session_auto_lock_settings SET enabled=$1,threshold=$2,revision=revision+1 WHERE id=1 RETURNING revision`, enabled, next.Threshold).Scan(&next.Revision); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `DELETE FROM session_500_streaks`)
+		_, err := tx.ExecContext(ctx, `DELETE FROM session_overload_streaks`)
 		return err
 	})
 	if err == nil {
@@ -72,7 +73,7 @@ func (db *DB) SetSessionAutoLockSettings(ctx context.Context, next SessionAutoLo
 
 // Observe one final request result, never an internal retry. Completion order
 // defines consecutive results. Counters and locks persist across restarts.
-func (db *DB) ObserveSessionFinalStatus(ctx context.Context, identity SessionErrorIdentity, status int, started time.Time, settings SessionAutoLockSettings) (bool, error) {
+func (db *DB) ObserveSessionFinalStatus(ctx context.Context, identity SessionErrorIdentity, status int, errorCode string, started time.Time, settings SessionAutoLockSettings) (bool, error) {
 	if !settings.Enabled || !ValidSessionOperationKey(identity.Key) || identity.UserID == "" || status < 100 {
 		return false, nil
 	}
@@ -106,12 +107,12 @@ func (db *DB) ObserveSessionFinalStatus(ctx context.Context, identity SessionErr
 		if err == nil && (existing == 1 || started.UnixMilli() <= updated) {
 			return nil
 		}
-		if status != 500 {
-			_, err = tx.ExecContext(ctx, `DELETE FROM session_500_streaks WHERE session_key=$1`, identity.Key)
+		if status != 500 || errorCode != "server_is_overloaded" {
+			_, err = tx.ExecContext(ctx, `DELETE FROM session_overload_streaks WHERE session_key=$1`, identity.Key)
 			return err
 		}
 		var failures int
-		err = tx.QueryRowContext(ctx, `INSERT INTO session_500_streaks(session_key,failures,revision,updated_at) VALUES($1,1,$2,$3) ON CONFLICT(session_key) DO UPDATE SET failures=CASE WHEN session_500_streaks.revision=excluded.revision THEN session_500_streaks.failures+1 ELSE 1 END,revision=excluded.revision,updated_at=excluded.updated_at RETURNING failures`, identity.Key, revision, time.Now().UnixMilli()).Scan(&failures)
+		err = tx.QueryRowContext(ctx, `INSERT INTO session_overload_streaks(session_key,failures,revision,updated_at) VALUES($1,1,$2,$3) ON CONFLICT(session_key) DO UPDATE SET failures=CASE WHEN session_overload_streaks.revision=excluded.revision THEN session_overload_streaks.failures+1 ELSE 1 END,revision=excluded.revision,updated_at=excluded.updated_at RETURNING failures`, identity.Key, revision, time.Now().UnixMilli()).Scan(&failures)
 		if err != nil || failures < settings.Threshold {
 			return err
 		}

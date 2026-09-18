@@ -93,7 +93,7 @@ func TestPreserveInputPairingDiagnosticsBounded(t *testing.T) {
 	require.NotContains(t, string(encoded), "secret")
 }
 
-func TestPreserveInputPairingUsageBudgetRetainsCounts(t *testing.T) {
+func TestPreserveInputPairingLargeUsageRetainsCollectedItems(t *testing.T) {
 	request := promptSessionLimitTestContext(testRootSessionA)
 	state := usageRequestDiagnosticState(request)
 	// Escaping control characters expands JSON substantially, even when each
@@ -112,12 +112,17 @@ func TestPreserveInputPairingUsageBudgetRetainsCounts(t *testing.T) {
 	usage := &database.UsageLogInput{}
 	populateUsageRequestDiagnostics(request, usage)
 	require.NotEmpty(t, usage.RequestDiagnostics)
-	require.LessOrEqual(t, len(usage.RequestDiagnostics), database.MaxUsageRequestDiagnosticsBytes)
-	require.True(t, gjson.Get(usage.RequestDiagnostics, "truncated").Bool())
+	require.Greater(t, len(usage.RequestDiagnostics), 12*1024)
+	require.False(t, gjson.Get(usage.RequestDiagnostics, "truncated").Bool())
 	pairing := gjson.Get(usage.RequestDiagnostics, "account_failover.context_cleanup.tool_pairing")
 	require.EqualValues(t, 12, pairing.Get("missing_call_count").Int())
 	require.EqualValues(t, 12, len(pairing.Get("missing_calls").Array())+int(pairing.Get("omitted_items").Int()))
-	require.NotEmpty(t, pairing.Get("missing_calls").Array())
+	require.Len(t, pairing.Get("missing_calls").Array(), 8)
+	require.EqualValues(t, 4, pairing.Get("omitted_items").Int())
+	expected, err := json.Marshal(cleanup.ToolPairing)
+	require.NoError(t, err)
+	require.JSONEq(t, string(expected), pairing.Raw)
+	require.JSONEq(t, string(expected), gjson.Get(usage.RequestDiagnostics, "session_continuity.account_failover.context_cleanup.tool_pairing").Raw)
 	require.Len(t, state.AccountFailover.ContextCleanup.ToolPairing.MissingCalls, 8)
 	require.Equal(t, 4, state.AccountFailover.ContextCleanup.ToolPairing.OmittedItems)
 }

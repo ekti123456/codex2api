@@ -19,7 +19,7 @@ func TestUsageRequestDiagnosticsPersistenceAndLightweightLists(test *testing.T) 
 		test.Fatal(err)
 	}
 	test.Cleanup(func() { _ = db.Close() })
-	const payload = `{"version":1,"selected_account_id":17,"incoming":{"client_metadata":{"thread_source":"guardian_review"}}}`
+	payload := fmt.Sprintf(`{"version":1,"selected_account_id":17,"incoming":{"client_metadata":{"thread_source":"guardian_review","captured_value":%q}}}`, strings.Repeat("诊断值", 16*1024))
 	if err := db.InsertUsageLog(test.Context(), &UsageLogInput{Endpoint: "/v1/responses", Model: "gpt-5.6-sol", StatusCode: 200, RequestType: "related_internal", RequestDiagnostics: payload, UpstreamResponseModel: "gpt-5.6-luna", SessionIDPrefix: "01a09012", WindowNumberOriginal: "47", WindowNumberOutbound: "0"}); err != nil {
 		test.Fatal(err)
 	}
@@ -72,6 +72,29 @@ func TestUsageRequestDiagnosticsPersistenceAndLightweightLists(test *testing.T) 
 	}
 	if _, err := db.GetUsageRequestDiagnostics(test.Context(), 999999); !errors.Is(err, sql.ErrNoRows) {
 		test.Fatalf("missing row error: %v", err)
+	}
+	// Both export paths must return the same complete snapshot as the detail API.
+	snapshotID, err := db.UsageLogExportSnapshot(test.Context())
+	if err != nil {
+		test.Fatal(err)
+	}
+	for _, paged := range []bool{false, true} {
+		count := 0
+		visit := func(entry *UsageLogExportEntry) error {
+			count++
+			if string(entry.Diagnostics) != payload {
+				test.Fatal("export lost diagnostic content")
+			}
+			return nil
+		}
+		if paged {
+			err = db.WalkUsageLogExportPage(test.Context(), &filter, &UsageLogExportCursor{SnapshotID: snapshotID}, visit)
+		} else {
+			err = db.WalkUsageLogsForExport(test.Context(), &filter, visit)
+		}
+		if err != nil || count != 1 {
+			test.Fatalf("paged=%t count=%d err=%v", paged, count, err)
+		}
 	}
 }
 
@@ -147,7 +170,7 @@ func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	length, decoded := 292, 217
 	batch := []usageLogEntry{
 		{RequestType: "user", RequestDiagnostics: `{"version":1}`, NewAPIUserName: "window-user", RequestID: "request-1", UpstreamRequestID: "upstream-1", UpstreamProxyID: 12, UpstreamProxyName: "proxy-1", ImageInputTokens: 7, ImageOutputTokens: 11, CachedImageInputTokens: 3, SessionIDPrefix: "01a09012"},
-		{RequestType: "compaction", RequestDiagnostics: `{"version":1,"attempt":2}`, RequestID: "request-2", UpstreamRequestID: "upstream-2", WindowNumberOriginal: "18446744073709551615", WindowNumberOutbound: "0"},
+		{RequestType: "compaction", RequestDiagnostics: fmt.Sprintf(`{"version":1,"attempt":2,"incoming":{"headers":{"User-Agent":%q}}}`, strings.Repeat("x", 64*1024)), RequestID: "request-2", UpstreamRequestID: "upstream-2", WindowNumberOriginal: "18446744073709551615", WindowNumberOutbound: "0"},
 	}
 	batch[0].TurnStateLength, batch[0].TurnStateDecodedBytes = &length, &decoded
 	if err := db.batchInsertLogsChunk(test.Context(), capture, batch); err != nil {
@@ -180,9 +203,15 @@ func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	}
 }
 
-func TestUsageRequestDiagnosticsBoundsAndLoggingModes(test *testing.T) {
-	if boundedUsageRequestDiagnostics(strings.Repeat("x", MaxUsageRequestDiagnosticsBytes+1)) != "" || !json.Valid([]byte(boundedUsageRequestDiagnostics(""))) {
-		test.Fatal("invalid size or missing-capture handling")
+func TestUsageRequestDiagnosticsPreservationAndLoggingModes(test *testing.T) {
+	for _, size := range []int{12*1024 - 1, 12 * 1024, 12*1024 + 1, 256 * 1024, 1024 * 1024} {
+		payload := fmt.Sprintf(`{"version":1,"incoming":{"headers":{"value":%q}}}`, strings.Repeat("x", size))
+		if normalizeUsageRequestDiagnostics(payload) != payload {
+			test.Fatalf("normalization discarded %d-byte snapshot", len(payload))
+		}
+	}
+	if !json.Valid([]byte(normalizeUsageRequestDiagnostics(""))) {
+		test.Fatal("invalid missing-capture handling")
 	}
 	db, err := New("sqlite", filepath.Join(test.TempDir(), "mode.db"))
 	if err != nil {

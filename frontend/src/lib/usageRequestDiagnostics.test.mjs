@@ -1,6 +1,27 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
+import { compactionMetadataDiagnosticValue, diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticOutboundIdentity, diagnosticRecord, diagnosticValueText, hasOmittedIncomingDiagnostic, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, usageRequestTypes } from './usageRequestDiagnostics.ts'
+
+test('legacy omitted ingress is distinguished from absent or partially captured fields', () => {
+  assert.equal(hasOmittedIncomingDiagnostic({ truncated: true, incoming: null }), true)
+  for (const value of [null, undefined, {}, { incoming: null }, { truncated: true }, { truncated: true, incoming: {} }, { truncated: true, incoming: { headers: { 'Session-Id': 'original' } } }]) {
+    assert.equal(hasOmittedIncomingDiagnostic(value), false)
+  }
+})
+
+test('compaction metadata distinguishes absent, historical, malformed and separate carrier values', () => {
+  for (const value of [undefined, null, {}, 'invalid']) {
+    assert.deepEqual(compactionMetadataDiagnosticValue(value), { state: 'not_recorded', fields: {}, invalidFields: [] })
+  }
+  for (const state of ['absent', 'invalid_metadata', 'invalid_type', 'too_large']) {
+    assert.equal(compactionMetadataDiagnosticValue({ state }).state, state)
+  }
+  const header = Object.freeze({ state: 'present', implementation: 'local', trigger: 'auto', extra: 'do not show' })
+  const body = Object.freeze({ state: 'present', implementation: 'responses_compaction_v2', trigger: 42, invalid_fields: ['trigger', 'untrusted'] })
+  assert.deepEqual(compactionMetadataDiagnosticValue(header), { state: 'present', fields: { implementation: 'local', trigger: 'auto' }, invalidFields: [] })
+  assert.deepEqual(compactionMetadataDiagnosticValue(body), { state: 'present', fields: { implementation: 'responses_compaction_v2' }, invalidFields: ['trigger'] })
+  assert.equal(body.trigger, 42)
+})
 
 test('turn-state comparison separates ingress, mapping, issued alias and actual wire values', () => {
   const alias = 'gAAAA' + 'A'.repeat(285) + '=='

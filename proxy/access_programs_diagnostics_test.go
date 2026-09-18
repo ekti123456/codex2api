@@ -121,25 +121,27 @@ func TestAccessProgramsAttemptsAndFrameIsolation(t *testing.T) {
 	require.Nil(t, detail.AccessPrograms.Outbound)
 }
 
-func TestAccessProgramsSurvivesDiagnosticBudget(t *testing.T) {
+func TestAccessProgramsLargeDiagnosticPreservesIngressAndEgress(t *testing.T) {
 	request := transportTestContext()
 	body := []byte(`{"access_programs":{"cyber":"daybreak_blue"},"input":[]}`)
 	captureUsageRequestIngress(request, body)
-	usageRequestDiagnosticState(request).Incoming["oversized"] = map[string]string{"value": strings.Repeat("x", database.MaxUsageRequestDiagnosticsBytes)}
+	largeValue := strings.Repeat("x", 12*1024)
+	usageRequestDiagnosticState(request).Incoming["oversized"] = map[string]string{"value": largeValue}
 	beginUpstreamTrace(request.Request.Context(), &auth.Account{DBID: 17}, "", true)
 	observer := UpstreamTransportObserver(request.Request.Context())
 	observer.ResponsesInput(body, nil, "")
 	observer.updateOutboundIdentity(func(identity *outboundIdentityDiagnostic) {
-		identity.HTTP = &OutboundHeaderDiagnostic{Headers: map[string]string{"User-Agent": strings.Repeat("x", database.MaxUsageRequestDiagnosticsBytes)}}
+		identity.HTTP = &OutboundHeaderDiagnostic{Headers: map[string]string{"User-Agent": largeValue}}
 	})
 	usage := &database.UsageLogInput{AccountID: 17}
 	populateUpstreamTrace(request, usage)
 	populateUsageRequestDiagnostics(request, usage)
-	require.LessOrEqual(t, len(usage.RequestDiagnostics), database.MaxUsageRequestDiagnosticsBytes)
+	require.Greater(t, len(usage.RequestDiagnostics), 24*1024)
 	detail := readUsageDiagnosticSnapshot(t, usage)
-	require.True(t, detail.Truncated)
-	require.Nil(t, detail.Incoming)
-	require.True(t, detail.Upstream.OutboundIdentity.Truncated)
+	require.False(t, detail.Truncated)
+	require.Equal(t, largeValue, detail.Incoming["oversized"]["value"])
+	require.False(t, detail.Upstream.OutboundIdentity.Truncated)
+	require.Equal(t, largeValue, detail.Upstream.OutboundIdentity.HTTP.Headers["User-Agent"])
 	require.Equal(t, captureAccessPrograms(body), detail.AccessPrograms.Inbound)
 	require.Equal(t, detail.AccessPrograms.Inbound, detail.AccessPrograms.Outbound)
 }

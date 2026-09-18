@@ -450,8 +450,7 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		}
 	}
 	populateUsageOutboundTurnState(input, snapshot.Upstream)
-	// Keep this comparison outside Incoming/OutboundIdentity, whose large
-	// metadata snapshots can be dropped when the shared budget is exceeded.
+	// Keep the inbound/outbound comparison together for inspection.
 	accessPrograms := accessProgramsDiagnostic{}
 	if state.AccessPrograms != nil {
 		accessPrograms.Inbound = state.AccessPrograms.Inbound
@@ -514,63 +513,11 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		snapshot.CandidateRejections = trace.Snapshot().Reasons
 	}
 	populateUsageWindowNumbers(&snapshot, input)
+	// Collectors already constrain the fields they capture. Preserve that
+	// complete snapshot: trimming by total size hid ingress identities and
+	// actual outbound values precisely when a request needed more diagnostics.
 	payload, err := json.Marshal(snapshot)
-	if err != nil {
-		return
-	}
-	if len(payload) > database.MaxUsageRequestDiagnosticsBytes {
-		snapshot.Incoming = nil
-		snapshot.Truncated = true
-		payload, err = json.Marshal(snapshot)
-	}
-	if len(payload) > database.MaxUsageRequestDiagnosticsBytes && snapshot.Upstream != nil && snapshot.Upstream.OutboundIdentity != nil {
-		upstream := *snapshot.Upstream
-		upstream.OutboundIdentity = &outboundIdentityDiagnostic{FormatVersion: upstream.OutboundIdentity.FormatVersion, Truncated: true}
-		snapshot.Upstream = &upstream
-		payload, err = json.Marshal(snapshot)
-	}
-	// Keep both the incoming and latest outgoing state when retry diagnostics
-	// exceed the shared budget; do not discard the entire request diagnostic.
-	for len(payload) > database.MaxUsageRequestDiagnosticsBytes && snapshot.TurnState != nil && len(snapshot.TurnState.Events) > 2 {
-		snapshot.TurnState.Events = append(snapshot.TurnState.Events[:1], snapshot.TurnState.Events[2:]...)
-		snapshot.TurnState.Omitted++
-		snapshot.Truncated = true
-		payload, err = json.Marshal(snapshot)
-	}
-	if len(payload) > database.MaxUsageRequestDiagnosticsBytes && snapshot.TurnState != nil {
-		// Retain normal tokens in full. Bound unusually large comparison values
-		// before they can cause the entire diagnostic to disappear.
-		for i := range snapshot.TurnState.Events {
-			event := &snapshot.TurnState.Events[i]
-			for _, value := range []*string{&event.Received, &event.Real, &event.Alias} {
-				if len(*value) > 512 {
-					*value = strings.ToValidUTF8((*value)[:512], "") + "…[truncated]"
-					event.ValueTruncated = true
-				}
-			}
-		}
-		snapshot.Truncated = true
-		payload, err = json.Marshal(snapshot)
-	}
-	// Pairing failures can coexist with large transport diagnostics. Keep counts
-	// and the first offending item rather than losing the whole usage snapshot.
-	if failover := snapshot.AccountFailover; len(payload) > database.MaxUsageRequestDiagnosticsBytes && failover != nil && failover.ContextCleanup != nil && failover.ContextCleanup.ToolPairing != nil {
-		boundedFailover, cleanup, pairing := *failover, *failover.ContextCleanup, *failover.ContextCleanup.ToolPairing
-		boundedFailover.ContextCleanup, cleanup.ToolPairing = &cleanup, &pairing
-		snapshot.AccountFailover = &boundedFailover
-		if snapshot.Continuity != nil && snapshot.Continuity.AccountFailover == failover {
-			continuity := *snapshot.Continuity
-			continuity.AccountFailover = &boundedFailover
-			snapshot.Continuity = &continuity
-		}
-		for len(payload) > database.MaxUsageRequestDiagnosticsBytes && len(pairing.MissingCalls) > 1 {
-			pairing.MissingCalls = pairing.MissingCalls[:len(pairing.MissingCalls)-1]
-			pairing.OmittedItems++
-			snapshot.Truncated = true
-			payload, err = json.Marshal(snapshot)
-		}
-	}
-	if err == nil && len(payload) <= database.MaxUsageRequestDiagnosticsBytes {
+	if err == nil {
 		input.RequestDiagnostics = string(payload)
 	}
 }

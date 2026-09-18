@@ -22,18 +22,18 @@ func TestSessionAutoLockConsecutiveResetAndFiltering(t *testing.T) {
 	require.False(t, settings.Enabled)
 	require.Equal(t, 3, settings.Threshold)
 	for range 4 {
-		locked, err := db.ObserveSessionFinalStatus(ctx, identity, 500, time.Now(), settings)
+		locked, err := db.ObserveSessionFinalStatus(ctx, identity, 500, "server_is_overloaded", time.Now(), settings)
 		require.NoError(t, err)
 		require.False(t, locked)
 	}
 	require.NoError(t, db.SetSessionAutoLockSettings(ctx, SessionAutoLockSettings{Enabled: true, Threshold: 3}))
 	settings = db.GetSessionAutoLockSettings()
 	for _, status := range []int{500, 500, 503, 500, 200, 500, 500} {
-		locked, err := db.ObserveSessionFinalStatus(ctx, identity, status, time.Now(), settings)
+		locked, err := db.ObserveSessionFinalStatus(ctx, identity, status, "server_is_overloaded", time.Now(), settings)
 		require.NoError(t, err)
 		require.False(t, locked)
 	}
-	locked, err := db.ObserveSessionFinalStatus(ctx, identity, 500, time.Now(), settings)
+	locked, err := db.ObserveSessionFinalStatus(ctx, identity, 500, "server_is_overloaded", time.Now(), settings)
 	require.NoError(t, err)
 	require.True(t, locked)
 	owner, err := db.SessionBlacklistStatus(ctx, identity.Key, "")
@@ -54,13 +54,13 @@ func TestSessionAutoLockConsecutiveResetAndFiltering(t *testing.T) {
 	oldStarted := time.Now().Add(-time.Second)
 	require.NoError(t, db.SetSessionBlacklist(ctx, []string{identity.Key}, false))
 	for range 4 {
-		locked, err = db.ObserveSessionFinalStatus(ctx, identity, 500, oldStarted, settings)
+		locked, err = db.ObserveSessionFinalStatus(ctx, identity, 500, "server_is_overloaded", oldStarted, settings)
 		require.NoError(t, err)
 		require.False(t, locked)
 	}
 	// Requests beginning after the persisted unlock start a new streak.
 	for i := 1; i <= 3; i++ {
-		locked, err = db.ObserveSessionFinalStatus(ctx, identity, 500, time.Now().Add(time.Millisecond), settings)
+		locked, err = db.ObserveSessionFinalStatus(ctx, identity, 500, "server_is_overloaded", time.Now().Add(time.Millisecond), settings)
 		require.NoError(t, err)
 		require.Equal(t, i == 3, locked)
 	}
@@ -83,17 +83,17 @@ func TestSessionAutoLockRestartAndConcurrentResults(t *testing.T) {
 	require.NoError(t, db.SetSessionAutoLockSettings(ctx, SessionAutoLockSettings{Enabled: true, Threshold: 3}))
 	identity := autoLockIdentity("c")
 	settings := db.GetSessionAutoLockSettings()
-	_, err = db.ObserveSessionFinalStatus(ctx, identity, 500, time.Now(), settings)
+	_, err = db.ObserveSessionFinalStatus(ctx, identity, 500, "server_is_overloaded", time.Now(), settings)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	db, err = New("sqlite", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.Equal(t, settings, db.GetSessionAutoLockSettings())
-	locked, err := db.ObserveSessionFinalStatus(ctx, identity, 500, time.Now(), settings)
+	locked, err := db.ObserveSessionFinalStatus(ctx, identity, 500, "server_is_overloaded", time.Now(), settings)
 	require.NoError(t, err)
 	require.False(t, locked)
-	locked, err = db.ObserveSessionFinalStatus(ctx, identity, 500, time.Now(), settings)
+	locked, err = db.ObserveSessionFinalStatus(ctx, identity, 500, "server_is_overloaded", time.Now(), settings)
 	require.NoError(t, err)
 	require.True(t, locked)
 	require.NoError(t, db.SetSessionAutoLockSettings(ctx, SessionAutoLockSettings{Enabled: true, Threshold: 20}))
@@ -105,7 +105,7 @@ func TestSessionAutoLockRestartAndConcurrentResults(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := db.ObserveSessionFinalStatus(ctx, other, 500, time.Now(), settings)
+			_, err := db.ObserveSessionFinalStatus(ctx, other, 500, "server_is_overloaded", time.Now(), settings)
 			errs <- err
 		}()
 	}
@@ -119,7 +119,37 @@ func TestSessionAutoLockRestartAndConcurrentResults(t *testing.T) {
 	require.Equal(t, other.Key, owner)
 	oldSettings := settings
 	require.NoError(t, db.SetSessionAutoLockSettings(ctx, SessionAutoLockSettings{Enabled: true, Threshold: 1}))
-	locked, err = db.ObserveSessionFinalStatus(ctx, autoLockIdentity("e"), 500, time.Now(), oldSettings)
+	locked, err = db.ObserveSessionFinalStatus(ctx, autoLockIdentity("e"), 500, "server_is_overloaded", time.Now(), oldSettings)
 	require.NoError(t, err)
 	require.False(t, locked)
+}
+
+func TestSessionAutoLockRejectsOther500AndLegacyCounters(t *testing.T) {
+	db := newGrokStateTestDB(t)
+	ctx := t.Context()
+	require.NoError(t, db.SetSessionAutoLockSettings(ctx, SessionAutoLockSettings{Enabled: true, Threshold: 3}))
+	settings := db.GetSessionAutoLockSettings()
+	identity := autoLockIdentity("f")
+	// An upgraded installation may retain arbitrary failures from the old policy.
+	_, err := db.conn.ExecContext(ctx, `CREATE TABLE session_500_streaks (session_key TEXT PRIMARY KEY, failures INTEGER NOT NULL, revision BIGINT NOT NULL, updated_at BIGINT NOT NULL)`)
+	require.NoError(t, err)
+	_, err = db.conn.ExecContext(ctx, `INSERT INTO session_500_streaks VALUES($1,99,$2,$3)`, identity.Key, settings.Revision, time.Now().UnixMilli())
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		status int
+		code   string
+		locked bool
+	}{
+		{500, "server_is_overloaded", false}, {500, "server_is_overloaded", false},
+		{500, "internal_error", false}, // Reset, not increment or skip.
+		{500, "server_is_overloaded", false}, {500, "server_is_overloaded", false},
+		{500, "", false},
+		{500, "server_is_overloaded", false}, {503, "server_is_overloaded", false},
+		{500, "server_is_overloaded", false}, {500, "server_is_overloaded", false},
+		{500, "server_is_overloaded", true},
+	} {
+		locked, err := db.ObserveSessionFinalStatus(ctx, identity, tc.status, tc.code, time.Now(), settings)
+		require.NoError(t, err)
+		require.Equal(t, tc.locked, locked)
+	}
 }

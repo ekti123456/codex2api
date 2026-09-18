@@ -9,21 +9,22 @@ import (
 )
 
 type responsesInputDiagnostic struct {
-	Tools                      *database.SessionToolSummary `json:"tools,omitempty"`
-	Mode                       string                       `json:"mode"`
-	JSONBytes                  int                          `json:"json_bytes"`
-	InputKind                  string                       `json:"input_kind"`
-	InputItems                 int                          `json:"input_items"`
-	MetadataCompaction         bool                         `json:"metadata_compaction"`
-	ProtocolTriggerCount       int                          `json:"protocol_trigger_count"`
-	TriggerAtEnd               bool                         `json:"trigger_at_end"`
-	CompactionItems            int                          `json:"compaction_items"`
-	EncryptedCompactionItems   int                          `json:"encrypted_compaction_items"`
-	EncryptedCompactionBytes   int                          `json:"encrypted_compaction_bytes"`
-	CompactionItemsWithID      int                          `json:"compaction_items_with_id"`
-	PreviousResponseIDPresent  bool                         `json:"previous_response_id_present"`
-	SummaryPrefixItems         int                          `json:"summary_prefix_items"`
-	ToolOutputPlaceholderItems int                          `json:"tool_output_placeholder_items"`
+	CompactionMetadata         *compactionMetadataDiagnostic `json:"compaction_metadata,omitempty"`
+	Tools                      *database.SessionToolSummary  `json:"tools,omitempty"`
+	Mode                       string                        `json:"mode"`
+	JSONBytes                  int                           `json:"json_bytes"`
+	InputKind                  string                        `json:"input_kind"`
+	InputItems                 int                           `json:"input_items"`
+	MetadataCompaction         bool                          `json:"metadata_compaction"`
+	ProtocolTriggerCount       int                           `json:"protocol_trigger_count"`
+	TriggerAtEnd               bool                          `json:"trigger_at_end"`
+	CompactionItems            int                           `json:"compaction_items"`
+	EncryptedCompactionItems   int                           `json:"encrypted_compaction_items"`
+	EncryptedCompactionBytes   int                           `json:"encrypted_compaction_bytes"`
+	CompactionItemsWithID      int                           `json:"compaction_items_with_id"`
+	PreviousResponseIDPresent  bool                          `json:"previous_response_id_present"`
+	SummaryPrefixItems         int                           `json:"summary_prefix_items"`
+	ToolOutputPlaceholderItems int                           `json:"tool_output_placeholder_items"`
 }
 
 func diagnoseResponsesInput(body []byte, headers http.Header, endpoint string) *responsesInputDiagnostic {
@@ -102,6 +103,10 @@ func diagnoseResponsesInput(body []byte, headers http.Header, endpoint string) *
 		shape.Mode = "metadata_only"
 	case shape.CompactionItems > 0:
 		shape.Mode = "history_only"
+	}
+	compaction := captureCompactionMetadata(root, headers)
+	if metadataCompaction || compactEndpoint || shape.ProtocolTriggerCount > 0 || compaction.Header.State != "absent" || compaction.Body.State != "absent" {
+		shape.CompactionMetadata = compaction
 	}
 	return shape
 }

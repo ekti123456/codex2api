@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { UsageLog } from '../types'
-import { accessProgramsDiagnosticValue, diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
+import { accessProgramsDiagnosticValue, compactionMetadataDiagnosticValue, compactionMetadataFields, diagnosticClientInfo, diagnosticEntries, diagnosticJSONDisplay, diagnosticRecord, diagnosticValueText, hasOmittedIncomingDiagnostic, splitOutboundIdentityDiagnostic, turnStateDiagnosticRows, usageRequestTypeLabelKey, type UsageRequestDiagnosticDetail } from '../lib/usageRequestDiagnostics'
 import { useToast } from '../hooks/useToast'
 import Modal from './Modal'
 import { Button } from './ui/button'
@@ -15,11 +15,11 @@ export function UsageRequestTypeButton({ log, onClick }: { log: UsageLog; onClic
   </button>
 }
 
-function DiagnosticFields({ value, includeMissing = false }: { value: unknown; includeMissing?: boolean }) {
+function DiagnosticFields({ value, includeMissing = false, compact = false }: { value: unknown; includeMissing?: boolean; compact?: boolean }) {
   const { t } = useTranslation()
   const entries = diagnosticEntries(value, includeMissing)
   if (!entries.length) return <p className="text-xs text-muted-foreground">{t('usage.diagnostics.missing')}</p>
-  return <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+  return <dl className={`grid gap-x-4 gap-y-2 text-xs ${compact ? 'grid-cols-[minmax(0,90px)_minmax(0,1fr)]' : 'sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)]'}`}>
     {entries.map(([key, item]) => {
       const text = diagnosticValueText(item)
       return <div key={key} className="contents">
@@ -43,6 +43,37 @@ function AccessProgramsDiagnostics({ value }: { value: unknown }) {
           <h4 className="text-xs font-semibold">{t(`usage.diagnostics.accessPrograms.${direction}`)}</h4>
           {item.state !== 'present' && <p className="text-xs text-muted-foreground">{t(`usage.diagnostics.accessPrograms.${item.state}`)}</p>}
           {item.text !== undefined && <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/40 p-2 text-xs select-text" tabIndex={0}>{item.text}</pre>}
+        </div>
+      })}
+    </div>
+  </section>
+}
+
+function CompactionDiagnostics({ inbound, outbound }: { inbound: unknown; outbound: unknown }) {
+  const { t } = useTranslation()
+  return <section className="rounded-lg border p-3">
+    <h3 className="mb-3 text-sm font-semibold">{t('usage.diagnostics.compaction.title')}</h3>
+    <p className="mb-3 text-xs text-muted-foreground">{t('usage.diagnostics.compaction.hint')}</p>
+    <div className="grid gap-4 sm:grid-cols-2">
+      {([['inbound', inbound], ['outbound', outbound]] as const).map(([direction, value]) => {
+        const shape = diagnosticRecord(value)
+        const metadata = diagnosticRecord(shape.compaction_metadata)
+        const tools = diagnosticRecord(shape.tools)
+        return <div key={direction} className="min-w-0 space-y-3">
+          <h4 className="text-xs font-semibold">{t(`usage.diagnostics.accessPrograms.${direction}`)}</h4>
+          <DiagnosticFields compact value={{ mode: shape.mode, tools: Object.keys(tools).length ? { functions: tools.functions, custom: tools.custom, namespaces: tools.namespaces } : undefined, tools_digest: tools.digest }} />
+          {(['header', 'body'] as const).map(carrier => {
+            const item = compactionMetadataDiagnosticValue(metadata[carrier])
+            return <div key={carrier} className="space-y-2 rounded-md bg-muted/40 p-2 text-xs">
+              <h5 className="font-semibold">{t(`usage.diagnostics.compaction.${carrier}`)}</h5>
+              {item.state !== 'present' ? <p className="text-muted-foreground">{t(`usage.diagnostics.compaction.states.${item.state}`)}</p> : <dl className="space-y-1">
+                {compactionMetadataFields.map(field => <div key={field} className="flex flex-wrap justify-between gap-x-2">
+                  <dt className="text-muted-foreground">{t(`usage.diagnostics.compaction.fields.${field}`)}</dt>
+                  <dd className="break-all font-mono select-text">{item.invalidFields.includes(field) ? t('usage.diagnostics.compaction.states.invalid_type') : item.fields[field] || t('usage.diagnostics.compaction.states.absent')}</dd>
+                </div>)}
+              </dl>}
+            </div>
+          })}
         </div>
       })}
     </div>
@@ -101,6 +132,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
   }, [id, reload])
 
   const data = detail?.diagnostics
+  const incomingOmitted = hasOmittedIncomingDiagnostic(data)
   const { outbound_identity: outboundIdentity, ...upstream } = diagnosticRecord(data?.upstream)
   const accountMapping = diagnosticRecord(diagnosticRecord(outboundIdentity).account_mapping)
   const outbound = splitOutboundIdentityDiagnostic(outboundIdentity)
@@ -141,6 +173,7 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
       {data.classification_changed === true && <p role="alert" className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">{t('usage.diagnostics.changed')}</p>}
       {data.truncated === true && <p className="text-xs text-amber-600">{t('usage.diagnostics.truncated')}</p>}
       <AccessProgramsDiagnostics value={data.access_programs} />
+      {(detail?.request_type === 'compaction' || Boolean(diagnosticRecord(data.responses_input).compaction_metadata || diagnosticRecord(upstream.responses_input).compaction_metadata)) && <CompactionDiagnostics inbound={data.responses_input} outbound={upstream.responses_input} />}
       <TurnStateDiagnostics value={data.turn_state} outbound={outboundIdentity} />
       {sections.map(([title, value]) => <section key={title} className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{title === 'continuity' ? t('sessionContinuity.title') : t(`usage.diagnostics.sections.${title}`)}</h3>
@@ -150,11 +183,11 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
           {title === 'outboundDiagnostics' && String(accountMapping.status || '').startsWith('mapped') && <p className="mb-3 rounded-md bg-primary/10 p-2 text-xs">{t('usage.diagnostics.accountMapped')}</p>}
           {title === 'outboundDiagnostics' && String(accountMapping.status || '').startsWith('preserved') && <p className="mb-3 rounded-md bg-muted p-2 text-xs">{t('usage.diagnostics.accountMappingPreserved')}</p>}
           <pre className="max-h-[560px] overflow-auto rounded-md bg-muted/40 p-3 text-xs font-mono select-text" tabIndex={0}>{JSON.stringify(diagnosticJSONDisplay(value ?? null, decodeMetadata), null, 2)}</pre>
-        </> : <DiagnosticFields value={value} />}
+        </> : title === 'client' && incomingOmitted ? <p className="text-xs text-amber-600">{t('usage.diagnostics.incomingOmitted')}</p> : <DiagnosticFields value={value} />}
       </section>)}
       <section className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{t('usage.diagnostics.sections.incoming')}</h3>
-        {[...new Set(['headers', 'turn_metadata_header', 'client_metadata', 'signed_newapi', ...Object.keys(diagnosticRecord(data.incoming))])].map((source) => <div key={source} className="mt-3 border-t pt-3 first:mt-0 first:border-0 first:pt-0">
+        {incomingOmitted ? <p className="text-xs text-amber-600">{t('usage.diagnostics.incomingOmitted')}</p> : [...new Set(['headers', 'turn_metadata_header', 'client_metadata', 'signed_newapi', ...Object.keys(diagnosticRecord(data.incoming))])].map((source) => <div key={source} className="mt-3 border-t pt-3 first:mt-0 first:border-0 first:pt-0">
           <h4 className="mb-2 font-mono text-xs font-semibold">{source}</h4>
           <DiagnosticFields value={diagnosticRecord(data.incoming)[source]} includeMissing={source !== 'headers'} />
         </div>)}

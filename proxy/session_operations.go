@@ -169,6 +169,8 @@ func (handler *Handler) recordSessionErrorResult(ctx *gin.Context, status int, a
 		return
 	}
 	apiError, diagnostics := sessionErrorDetails(ctx, state, status, apiError)
+	eligible := status == http.StatusInternalServerError && sessionAutoLockErrorCode(state, status) == overloadErrorCode
+	diagnostics.AutoLockEligible = &eligible
 	diagnostics.UsageLogMode = string(handler.db.GetUsageLogMode())
 	trace := snapshotUpstreamTrace(ctx.Request.Context())
 	event := database.SessionErrorEvent{Identity: identity, CreatedAt: time.Now().UTC(), RequestID: diagnosticRequestID(trace.RequestID), AccountID: trace.accountID,
@@ -279,7 +281,32 @@ func (handler *Handler) finishSessionAutoLock(ctx *gin.Context) {
 	}
 	operation, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := handler.db.ObserveSessionFinalStatus(operation, identity, status, state.started, settings); err != nil {
+	if _, err := handler.db.ObserveSessionFinalStatus(operation, identity, status, sessionAutoLockErrorCode(state, status), state.started, settings); err != nil {
 		log.Printf("session_auto_lock persistence_failed: %v", err)
 	}
+}
+
+// Only an explicit code from the final result can count. A prior retry's error
+// must not turn an unclassified failure or a later handshake timeout into overload.
+func sessionAutoLockErrorCode(state *serviceErrorAudit, status int) string {
+	state.usageMu.Lock()
+	defer state.usageMu.Unlock()
+	if state.finalUsageStatus != 0 {
+		if state.finalUsageStatus == status {
+			if failure := parseSessionErrorMessage(state.finalUsageMessage, true); failure != nil {
+				return string(failure.Code)
+			}
+		}
+		return ""
+	}
+	if state.responseStatus != 0 {
+		if state.responseStatus == status && state.responseError != nil {
+			return string(state.responseError.Code)
+		}
+		return ""
+	}
+	if state.observedStatus == status && state.observedError != nil {
+		return string(state.observedError.Code)
+	}
+	return ""
 }

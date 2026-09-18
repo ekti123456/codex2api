@@ -48,7 +48,7 @@ func TestRequestSessionIDPrefixUsesOnlyUnambiguousInboundSession(test *testing.T
 	}
 }
 
-func TestSessionIDPrefixSurvivesOutboundRewriteAndDiagnosticTruncation(test *testing.T) {
+func TestSessionIDPrefixSurvivesOutboundRewriteAndLargeDiagnostic(test *testing.T) {
 	request, _ := gin.CreateTestContext(httptest.NewRecorder())
 	request.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	body := []byte(`{"client_metadata":{"session_id":"01a09012-b9de-7b40-a04b-612ef4dc3d7d"}}`)
@@ -56,7 +56,7 @@ func TestSessionIDPrefixSurvivesOutboundRewriteAndDiagnosticTruncation(test *tes
 	request.Request.Header.Set("Session-Id", "01944eab-8fbf-7d77-a1b4-590ec2955b53")
 	state := usageRequestDiagnosticState(request)
 	state.Resolved = &usageRequestResolution{RootID: "signed-root-fingerprint", RootState: "resolved", ThreadSource: "thread_title"}
-	state.Incoming["large"] = map[string]string{"value": strings.Repeat("x", database.MaxUsageRequestDiagnosticsBytes)}
+	state.Incoming["large"] = map[string]string{"value": strings.Repeat("x", 12*1024)}
 	input := &database.UsageLogInput{}
 	populateUsageRequestDiagnostics(request, input)
 	if input.SessionIDPrefix != "01a09012" {
@@ -66,8 +66,8 @@ func TestSessionIDPrefixSurvivesOutboundRewriteAndDiagnosticTruncation(test *tes
 	if err := json.Unmarshal([]byte(input.RequestDiagnostics), &snapshot); err != nil {
 		test.Fatal(err)
 	}
-	if !snapshot.Truncated || snapshot.SessionIDPrefix != input.SessionIDPrefix {
-		test.Fatalf("truncation lost prefix: %+v", snapshot)
+	if snapshot.Truncated || snapshot.SessionIDPrefix != input.SessionIDPrefix || snapshot.Incoming["client_metadata"]["session_id"] != "01a09012-b9de-7b40-a04b-612ef4dc3d7d" {
+		test.Fatal("large snapshot lost original session identity")
 	}
 }
 

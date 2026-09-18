@@ -44,6 +44,7 @@ type SessionErrorEvent struct {
 // UsageCaptured means the usage logging path ran, not that its asynchronous
 // database write succeeded. Older events have no diagnostics.
 type SessionErrorDiagnostics struct {
+	AutoLockEligible  *bool               `json:"auto_lock_eligible,omitempty"`
 	StatusCode        int                 `json:"status_code"`
 	StatusSource      string              `json:"status_source"`
 	ErrorSource       string              `json:"error_source"`
@@ -274,7 +275,7 @@ func (db *DB) SetSessionBlacklist(ctx context.Context, keys []string, locked boo
 			if _, err := tx.ExecContext(ctx, `INSERT INTO session_blacklist(session_key,user_id,session_id,identity_data,locked,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(session_key) DO UPDATE SET locked=excluded.locked, updated_at=excluded.updated_at, lock_source='manual'`, key, userID, sessionID, payload, lockValue, time.Now().UnixMilli()); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM session_500_streaks WHERE session_key=$1`, key); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM session_overload_streaks WHERE session_key=$1`, key); err != nil {
 				return err
 			}
 		}

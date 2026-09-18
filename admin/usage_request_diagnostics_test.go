@@ -16,7 +16,9 @@ import (
 
 func TestUsageRequestDiagnosticsEndpointRequiresAdmin(test *testing.T) {
 	db := newTestAdminDB(test)
-	if err := db.InsertUsageLog(test.Context(), &database.UsageLogInput{StatusCode: 200, Endpoint: "/v1/responses", RequestType: "user", RequestDiagnostics: `{"version":1,"selected_account_id":17}`}); err != nil {
+	largeValue := strings.Repeat("captured-metadata", 4096)
+	payload := fmt.Sprintf(`{"version":1,"selected_account_id":17,"incoming":{"client_metadata":{"value":%q}}}`, largeValue)
+	if err := db.InsertUsageLog(test.Context(), &database.UsageLogInput{StatusCode: 200, Endpoint: "/v1/responses", RequestType: "user", RequestDiagnostics: payload}); err != nil {
 		test.Fatal(err)
 	}
 	db.FlushUsageLogs()
@@ -48,6 +50,9 @@ func TestUsageRequestDiagnosticsEndpointRequiresAdmin(test *testing.T) {
 		}
 		if strings.Contains(recorder.Body.String(), "selected_account_id") != (item.status == http.StatusOK) {
 			test.Fatalf("unexpected detail visibility: %s", recorder.Body.String())
+		}
+		if item.status == http.StatusOK && gjson.Get(recorder.Body.String(), "diagnostics.incoming.client_metadata.value").String() != largeValue {
+			test.Fatal("detail endpoint lost the large ingress snapshot")
 		}
 	}
 }

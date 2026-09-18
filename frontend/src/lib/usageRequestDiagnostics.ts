@@ -15,6 +15,13 @@ export function diagnosticRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+export function hasOmittedIncomingDiagnostic(value: unknown): boolean {
+  const record = diagnosticRecord(value)
+  // Legacy size limiting explicitly replaced the complete ingress map with null.
+  // An empty map or a nesting-limit flag alone does not prove that happened.
+  return record.truncated === true && record.incoming === null
+}
+
 export function accessProgramsDiagnosticValue(value: unknown): { state: string; text?: string } {
   const item = diagnosticRecord(value)
   if (item.state === 'present' && Object.prototype.hasOwnProperty.call(item, 'value')) {
@@ -25,6 +32,22 @@ export function accessProgramsDiagnosticValue(value: unknown): { state: string; 
   }
   if (item.state === 'absent' || item.state === 'invalid_json') return { state: item.state }
   return { state: 'not_recorded' }
+}
+
+export const compactionMetadataFields = ['implementation', 'trigger', 'reason', 'phase', 'strategy'] as const
+
+export function compactionMetadataDiagnosticValue(value: unknown): { state: string; fields: Record<string, string>; invalidFields: string[] } {
+  const item = diagnosticRecord(value)
+  const state = typeof item.state === 'string' && ['present', 'absent', 'invalid_metadata', 'invalid_type', 'too_large'].includes(item.state) ? item.state : 'not_recorded'
+  const fields: Record<string, string> = {}
+  if (state === 'present') {
+    for (const field of compactionMetadataFields) {
+      if (typeof item[field] === 'string' && item[field]) fields[field] = item[field]
+    }
+  }
+  const invalid = item.invalid_fields
+  const invalidFields = Array.isArray(invalid) ? compactionMetadataFields.filter(field => invalid.includes(field)) : []
+  return { state, fields, invalidFields }
 }
 
 export interface TurnStateDiagnosticRow {

@@ -24,6 +24,8 @@ func TestUsageLogExportConfirmsScopeAndKeepsDiagnosticsWithoutCredentials(test *
 	}, "")
 	require.NoError(test, err)
 	diagnostic := `{"incoming":{"headers":{"Session-Id":"01a09012-0000-7000-8000-000000000001","Authorization":"Bearer secret-auth","X-Codex-Turn-Metadata":"{\"session_id\":\"01a09012-0000-7000-8000-000000000001\",\"refresh_token\":\"secret-nested\"}"}},"upstream":{"send_phase":"after_payload","outbound_identity":{"body":{"client_metadata":{"session_id":"01a09012-0000-7000-8000-000000000001"}}}},"request_body":"secret-prompt","counter":9007199254740993}`
+	largeValue := strings.Repeat("captured-data", 4096)
+	diagnostic = strings.TrimSuffix(diagnostic, "}") + `,"captured_value":"` + largeValue + `"}`
 	for _, requestType := range []string{"user", "compaction"} {
 		require.NoError(test, db.InsertUsageLog(test.Context(), &database.UsageLogInput{
 			AccountID: accountID, StatusCode: 500, ErrorMessage: "server_is_overloaded · Bearer secret-text", Endpoint: "/v1/responses",
@@ -62,6 +64,9 @@ func TestUsageLogExportConfirmsScopeAndKeepsDiagnosticsWithoutCredentials(test *
 		}
 		require.Equal(test, wantCount, result.Total)
 		require.Len(test, result.Logs, wantCount)
+		for _, record := range result.Logs {
+			require.Contains(test, string(record), largeValue)
+		}
 		for _, forbidden := range []string{"never-export-this", "secret-auth", "secret-nested", "secret-text", "secret-prompt"} {
 			require.NotContains(test, response.Body.String(), forbidden)
 		}

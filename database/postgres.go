@@ -4599,7 +4599,7 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 		ParentRequestID:          clampUsageLogText(log.ParentRequestID, usageLogRequestIDMaxLen),
 		RequestType:              usageRequestType(log.RequestType, log.InternalReason),
 		SessionIDPrefix:          normalizeUsageSessionIDPrefix(log.SessionIDPrefix),
-		RequestDiagnostics:       boundedUsageRequestDiagnostics(log.RequestDiagnostics),
+		RequestDiagnostics:       normalizeUsageRequestDiagnostics(log.RequestDiagnostics),
 		TurnStateLength:          cloneUsageTurnStateInt(log.TurnStateLength),
 		TurnStateDecodedBytes:    cloneUsageTurnStateInt(log.TurnStateDecodedBytes),
 		WindowNumberOriginal:     normalizeUsageWindowNumber(log.WindowNumberOriginal),

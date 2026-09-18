@@ -95,8 +95,8 @@ func TestUsageRequestDiagnosticsDevicePrivacyAndBounds(test *testing.T) {
 			test.Errorf("leaked %q", secret)
 		}
 	}
-	if len(input.RequestDiagnostics) > database.MaxUsageRequestDiagnosticsBytes || !json.Valid([]byte(input.RequestDiagnostics)) {
-		test.Fatal("device diagnostics escaped snapshot bounds")
+	if !json.Valid([]byte(input.RequestDiagnostics)) {
+		test.Fatal("device diagnostics are not valid JSON")
 	}
 	snapshot := readUsageDiagnosticSnapshot(test, input)
 	if len(snapshot.Incoming["headers"]["User-Agent"]) > 600 || snapshot.Incoming["client_metadata"]["turn_started_at_unix_ms"] != "invalid_type" {

@@ -101,7 +101,7 @@ func TestSessionAutoLockExcludesAPIRelay(t *testing.T) {
 				} else {
 					r.Set(apiRelaySessionExemptContextKey, true)
 				}
-				rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: 500, ErrorMessage: "test failure"})
+				rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: 500, ErrorMessage: "server_is_overloaded · test failure"})
 				finish()
 			}
 			owner, err := h.db.SessionBlacklistStatus(t.Context(), identity.Key, "")
@@ -109,7 +109,7 @@ func TestSessionAutoLockExcludesAPIRelay(t *testing.T) {
 			require.Empty(t, owner)
 			// One later eligible failure is still below threshold: relay failures
 			// must not silently accumulate a streak even when not enforced.
-			locked, err := h.db.ObserveSessionFinalStatus(t.Context(), identity, 500, time.Now(), h.db.GetSessionAutoLockSettings())
+			locked, err := h.db.ObserveSessionFinalStatus(t.Context(), identity, 500, "server_is_overloaded", time.Now(), h.db.GetSessionAutoLockSettings())
 			require.NoError(t, err)
 			require.False(t, locked)
 		})
@@ -137,9 +137,9 @@ func TestSessionAutoLockFinalRequestsAndWebSocketFrames(t *testing.T) {
 				for range 5 {
 					rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: 500, IsRetryAttempt: true})
 				}
-				rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: status, ErrorMessage: map[bool]string{true: "upstream_error", false: ""}[status == 500]})
+				rememberSessionErrorUsage(r, &database.UsageLogInput{StatusCode: status, ErrorMessage: map[bool]string{true: "server_is_overloaded · failure", false: ""}[status == 500]})
 				if status == 500 {
-					h.recordObservedError(r, 500, api.NewAPIError("upstream_error", "failure", api.ErrorTypeServer))
+					h.recordObservedError(r, 500, api.NewAPIError("server_is_overloaded", "failure", api.ErrorTypeServer))
 				}
 				if ws {
 					h.finishSessionErrorAudit(r)

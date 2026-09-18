@@ -1,11 +1,13 @@
 # Session error auto-lock
 
 `/session-errors` exposes a disabled-by-default policy with a default threshold of
-3 (configurable from 1 to 10000). Only final HTTP 500 results count. SSE and
+3 (configurable from 1 to 10000). Only final HTTP 500 results with the explicit error code
+`server_is_overloaded` count. SSE and
 WebSocket requests use their terminal usage/error status, not their successful
 HTTP handshake. Internal attempts do not count separately. Results are ordered
 by completion within the existing user/platform/root-session identity; any
-non-500 result resets the streak. Requests without a reliable session identity
+other result resets the streak, including handshake timeouts, DNS/TLS failures,
+connection errors, unclassified HTTP 500 responses and other internal errors. Requests without a reliable session identity
 cannot be locked by this feature.
 
 Main requests and related background requests (including Guardian) share this
@@ -34,3 +36,16 @@ The disabled path performs no counter database work; the enabled path uses
 indexed per-session updates instead of scanning logs. Lock attribution queries
 are limited to the current page. Persistence failure is logged and never changes
 the already completed model response.
+
+Final error classification prefers terminal usage, then the final HTTP response,
+then the error observer. Missing codes in final usage never borrow an overload
+code from an earlier internal retry. HTTP 500 alone is not proof of upstream
+overload. Other final 500 errors remain in statistics while auto-lock is enabled.
+`diagnostics.auto_lock_eligible` describes the error classification only; it does
+not mean the setting was enabled, a counter was incremented, or a lock occurred.
+The list's `count` remains cumulative errors, not the current streak.
+
+The narrowed policy uses `session_overload_streaks` rather than inheriting legacy
+`session_500_streaks` counters. Existing settings and locks remain unchanged.
+Historical automatic locks require administrator review and manual unlock:
+the latest error alone cannot reliably establish which results caused a lock.

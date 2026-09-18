@@ -338,18 +338,23 @@ func TestTurnStateProvenanceDistinguishesIdenticalEnvelopeShapes(t *testing.T) {
 	require.False(t, known("turn_state", alias.Alias))
 }
 
-func TestTurnStateLargeDiagnosticRemainsBounded(t *testing.T) {
+func TestTurnStateLargeDiagnosticPreservesCollectedEvents(t *testing.T) {
 	h := newWindowAuthorizationHandler(t)
 	c, _, _ := aliasRequest(t, h, 101, "turn", "", false)
 	s := turnStateSessionFrom(c.Request.Context())
 	for i := 0; i < 24; i++ {
 		s.log("restored", "request_header", strings.Repeat("alias", 1000), strings.Repeat("real", 1000), 71, 0, nil)
 	}
+	expected, err := json.Marshal(turnStateDiagnostic(c.Request.Context()))
+	require.NoError(t, err)
 	var usage database.UsageLogInput
 	populateUsageRequestDiagnostics(c, &usage)
 	require.NotEmpty(t, usage.RequestDiagnostics)
-	require.LessOrEqual(t, len(usage.RequestDiagnostics), database.MaxUsageRequestDiagnosticsBytes)
-	require.True(t, gjson.Get(usage.RequestDiagnostics, "truncated").Bool())
+	require.Greater(t, len(usage.RequestDiagnostics), 12*1024)
+	require.False(t, gjson.Get(usage.RequestDiagnostics, "truncated").Bool())
+	require.JSONEq(t, string(expected), gjson.Get(usage.RequestDiagnostics, "turn_state").Raw)
+	require.Len(t, gjson.Get(usage.RequestDiagnostics, "turn_state.events").Array(), 24)
+	require.EqualValues(t, 0, gjson.Get(usage.RequestDiagnostics, "turn_state.omitted").Int())
 	require.True(t, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.value_truncated").Bool())
 	require.Contains(t, usage.RequestDiagnostics, "[truncated]")
 	require.NotEmpty(t, gjson.Get(usage.RequestDiagnostics, "turn_state.events.0.real_hash").String())

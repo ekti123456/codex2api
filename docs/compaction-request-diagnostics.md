@@ -12,6 +12,12 @@
 - `diagnostics.upstream.responses_input`：本次出站尝试的结构，在上游诊断中展示。HTTP 在发送前采集编码前的最终 JSON，WS 在环境改写后、写业务帧前采集；发送状态仍以 `send_phase` 为准。WS 建连失败、未进入写帧时可能没有此项。
 - 历史日志不能补采。统计结果只包含固定分类、字节数、计数和布尔值，不保存提示词、工具内容、摘要、加密载荷、凭据或原始响应 ID。
 
+请求详情中的“压缩路径诊断”并排展示入站和出站的 `mode`、工具数量、工具哈希，以及 `compaction_metadata.header` / `compaction_metadata.body`。两个来源分别采集原始 `X-Codex-Turn-Metadata` 和 `client_metadata.x-codex-turn-metadata` 内的 `compaction` 对象，不合并冲突值，也不从缓存命中推断客户端实现。
+
+分类仅保存 `implementation`、`trigger`、`reason`、`phase`、`strategy` 五个有界标签。`state=absent` 表示本次采集未提供该对象；`present` 表示提供了对象；`invalid_metadata`、`invalid_type`、`too_large` 分别标记无效元数据、对象类型错误和超过长度限制。单个字段类型或格式错误记入 `invalid_fields`。历史日志缺少整个诊断块时显示“未记录”，不能解读为客户端没传。
+
+先对齐同一会话、账号和模型下压缩前的主请求，比较工具哈希、缓存键及 Turn-State，再看客户端报告的实现方式和阶段。工具哈希只证明工具内容是否相同，不证明整个提示前缀相同，也不能保证缓存命中。此采集不改变请求体、压缩路径或 Turn-State，不额外调用上游。
+
 | 字段 | 含义 |
 | --- | --- |
 | `mode` | `protocol_trigger`：有直接输入级触发项；`compact_endpoint`：专用压缩端点；`metadata_only`：仅元数据标记压缩；`history_only`：只有压缩历史；`ordinary`：以上信号均未命中。按此顺序判定，不从提示词推断用途 |

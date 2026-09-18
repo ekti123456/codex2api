@@ -1,10 +1,10 @@
 {
   "sessionErrors": {
     "autoLocked": "Automatically locked",
-    "autoLockTitle": "Auto-lock sessions after consecutive HTTP 500 errors",
-    "autoLockThreshold": "Consecutive errors",
+    "autoLockTitle": "Auto-lock sessions after consecutive overload errors",
+    "autoLockThreshold": "Consecutive overload errors",
     "autoLockSaved": "Settings saved",
-    "autoLockHint": "Off by default; default threshold: 3. API relay requests are excluded. Counts final results per session in completion order. Non-500 results reset the streak; internal retries do not count separately. Saving resets pending streaks. Disabling does not remove existing locks; unlock them manually.",
+    "autoLockHint": "Off by default; default threshold: 3. API relay requests are excluded. Counts only final HTTP 500 results with code server_is_overloaded per session, in completion order. Handshake timeouts, connection failures and all other results reset the streak without incrementing it. Internal retries do not count separately. Saving resets pending streaks. Disabling does not remove existing locks; unlock them manually.",
     "activityHint": "Only current-page activity refreshes every 15 seconds; the list is not reloaded automatically. Main requests within 30 minutes count as recent. Auxiliary activity is separate. In-flight counts cover this instance only; client windows and local tool execution cannot be observed.",
     "activityLimited": "The activity cache is at capacity; some session states cannot be confirmed.",
     "activityUnknownTime": "No record",
@@ -2312,6 +2312,7 @@
       "title": "Request diagnostics",
       "open": "Inspect request classification, root identity and account selection",
       "missing": "Not provided / not recorded",
+      "compaction": {"title": "Compaction path diagnostics", "hint": "Compare client-reported compaction metadata and tool summaries at ingress and at the outbound boundary. Missing metadata is not inferred from tools or cache hits. Compare the tool digest with the preceding main request; use the send phase to confirm transmission.", "header": "Compaction metadata in request header", "body": "Compaction metadata in request body", "fields": {"implementation": "Implementation", "trigger": "Trigger", "reason": "Reason", "phase": "Phase", "strategy": "Strategy"}, "states": {"present": "Provided", "absent": "Not provided", "not_recorded": "Not recorded (older log or capture stage not reached)", "invalid_metadata": "Invalid turn metadata", "invalid_type": "Invalid field type or format", "too_large": "Too large to record"}},
       "accessPrograms": {
         "hint": "Compare the original inbound value with the final request body for this attempt, preserving JSON types. An outbound snapshot does not prove receipt if sending failed. Historical logs cannot be backfilled.",
         "inbound": "Inbound (client → gateway)",
@@ -2327,7 +2328,8 @@
       "unavailable": "No diagnostic snapshot exists for this log. Historical request types are not inferred.",
       "hint": "Snapshots reflect actual decision points. Missing fields do not imply an exemption; fingerprints do not authenticate an official client. UUIDs are preserved; other custom identities appear as hash: digests. Candidate rejection reasons cover the selection attempt, not necessarily the final account. Timestamps are UTC.",
       "changed": "Classification changed between identity resolution, content inspection or dispatch. Compare the snapshots.",
-      "truncated": "The snapshot reached its size or nesting limit. Some ingress fields were omitted; decision information was preserved.",
+      "truncated": "Some diagnostic content was omitted in this record. Missing fields do not prove the client did not provide them.",
+      "incomingOmitted": "This historical ingress snapshot was omitted by the former size limit. It cannot show whether the client provided these fields; the discarded content cannot be recovered.",
       "copy": "Copy redacted diagnostics",
       "copied": "Redacted diagnostics copied",
       "decodeMetadata": "Decode metadata JSON strings (display only; displayed/copied types then differ from the wire)",
