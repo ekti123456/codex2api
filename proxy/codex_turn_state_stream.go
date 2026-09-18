@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -33,7 +32,7 @@ func finishTurnStateResponse(ctx context.Context, account *auth.Account, respons
 // frames converted to SSE. It never invents a metadata event or token.
 func maskTurnStateResponse(ctx context.Context, account *auth.Account, response *http.Response) error {
 	s := turnStateSessionFrom(ctx)
-	if response == nil || s == nil {
+	if response == nil || (s == nil && responseIdentityFrom(ctx) == nil) {
 		return nil
 	}
 	observeUsageTurnState(ctx, "")
@@ -46,7 +45,7 @@ func maskTurnStateResponse(ctx context.Context, account *auth.Account, response 
 		}
 	}
 	deleteTurnStateHeader(response.Header)
-	if real != "" {
+	if real != "" && s != nil {
 		alias, err := s.issue(ctx, account, real, "response_header")
 		if err != nil {
 			return err
@@ -59,8 +58,63 @@ func maskTurnStateResponse(ctx context.Context, account *auth.Account, response 
 		response.Body = &turnStateStream{body: response.Body, reader: bufio.NewReaderSize(response.Body, 32*1024), ctx: ctx, account: account, state: s}
 		response.ContentLength = -1
 		response.Header.Del("Content-Length")
+	} else if response.Body != nil {
+		// Lazy reads keep response/header timing and the handler's cancellation
+		// watchdog intact, even when an upstream omits Content-Type.
+		response.Body = &responsePrivacyBody{body: response.Body, ctx: ctx, account: account}
+		response.ContentLength = -1
+		response.Header.Del("Content-Length")
 	}
 	return nil
+}
+
+type responsePrivacyBody struct {
+	body    io.ReadCloser
+	ctx     context.Context
+	account *auth.Account
+	reader  io.Reader
+	err     error
+}
+
+func (r *responsePrivacyBody) Close() error { return r.body.Close() }
+func (r *responsePrivacyBody) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if r.err != nil {
+		return 0, r.err
+	}
+	if r.reader == nil {
+		buffer := bufio.NewReader(r.body)
+		first, err := buffer.Peek(1)
+		for skipped := 0; err == nil && bytes.ContainsAny(first, " \r\n\t"); skipped++ {
+			if skipped >= 4096 {
+				r.err = errors.New("invalid upstream response prefix")
+				return 0, r.err
+			}
+			_, _ = buffer.Discard(1)
+			first, err = buffer.Peek(1)
+		}
+		if err != nil {
+			r.err = err
+			return 0, err
+		}
+		if first[0] == ':' || first[0] == 'd' || first[0] == 'e' || first[0] == 'i' {
+			// A mislabeled SSE stream is still processed incrementally.
+			r.reader = &turnStateStream{body: r.body, reader: buffer, ctx: r.ctx, account: r.account, state: turnStateSessionFrom(r.ctx)}
+		} else {
+			original, err := io.ReadAll(buffer)
+			if err == nil && gjson.ValidBytes(original) {
+				original, err = maskResponsePayload(r.ctx, r.account, original, true)
+			}
+			if err != nil {
+				r.err = err
+				return 0, err
+			}
+			r.reader = bytes.NewReader(original)
+		}
+	}
+	return r.reader.Read(p)
 }
 
 // stageTurnStateMetadataHeader promotes the first masked metadata token into
@@ -102,9 +156,8 @@ func stageTurnStateMetadataHeader(ctx context.Context, headers http.Header, even
 	})
 }
 
-// Buffer one SSE event, not the response. Parse response.metadata and its
-// transport-prefixed variants; keep other events byte-for-byte, including
-// comments, ids and multiline data fields.
+// Buffer one SSE event, not the response. Mask protocol IDs and header
+// dictionaries; leave unrelated events and generated content unchanged.
 // The limit also bounds malformed streams without an event separator.
 type turnStateStream struct {
 	body     io.ReadCloser
@@ -185,56 +238,12 @@ func (r *turnStateStream) maskFrame(frame []byte) ([]byte, error) {
 			data = append(data, part...)
 		}
 	}
-	// Parse only the event discriminator on the common path. JSON escapes in
-	// either the discriminator or header name must not bypass token masking.
-	switch strings.TrimSpace(gjson.GetBytes(data, "type").String()) {
-	case "response.metadata", "codex.response.metadata", "responsesapi.response.metadata":
-	default:
-		return frame, nil
-	}
-	var event map[string]json.RawMessage
-	if err := json.Unmarshal(data, &event); err != nil {
-		return nil, errors.New("invalid upstream turn-state event")
-	}
-	var headers map[string]json.RawMessage
-	if len(event["headers"]) == 0 || string(event["headers"]) == "null" {
-		return frame, nil
-	}
-	if err := json.Unmarshal(event["headers"], &headers); err != nil {
-		return nil, errors.New("invalid upstream turn-state headers")
-	}
-	for key, raw := range headers {
-		if !strings.EqualFold(key, codexTurnStateHeader) {
-			continue
-		}
-		var real string
-		array := false
-		if err := json.Unmarshal(raw, &real); err != nil {
-			var values []string
-			if json.Unmarshal(raw, &values) != nil || len(values) != 1 {
-				delete(headers, key)
-				continue
-			}
-			real, array = values[0], true
-		}
-		alias, err := r.state.issue(r.ctx, r.account, real, "response_metadata")
-		if err != nil {
-			return nil, err
-		}
-		if alias == "" {
-			delete(headers, key)
-			continue
-		}
-		if array {
-			headers[key], _ = json.Marshal([]string{alias})
-		} else {
-			headers[key], _ = json.Marshal(alias)
-		}
-	}
-	event["headers"], _ = json.Marshal(headers)
-	encoded, err := json.Marshal(event)
+	encoded, err := maskResponsePayload(r.ctx, r.account, data, false)
 	if err != nil {
 		return nil, err
+	}
+	if bytes.Equal(encoded, data) {
+		return frame, nil
 	}
 	var output []byte
 	replaced := false

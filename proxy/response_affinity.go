@@ -29,6 +29,7 @@ type responseAccountAffinity struct {
 	CreatedAt       time.Time `json:"created_at"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	OutboundSegment string    `json:"outbound_segment,omitempty"`
+	LocalAlias      bool      `json:"local_alias,omitempty"`
 }
 
 // responseIDFromPayload accepts both SSE event envelopes (response.id) and
@@ -87,6 +88,9 @@ func (h *Handler) recordResponseAccountAffinity(owner, responseID string, accoun
 	}
 	now := time.Now()
 	record := responseAccountAffinity{AccountID: accountID, Owner: owner, AffinityKey: strings.TrimSpace(affinityKey), Model: strings.TrimSpace(model), UpstreamType: strings.TrimSpace(upstreamType), CreatedAt: now, ExpiresAt: now.Add(responseAccountAffinityTTL)}
+	if h != nil && h.db != nil {
+		record.LocalAlias = h.db.IsManagedCodexResponseID(responseID)
+	}
 	if len(contexts) > 0 {
 		record.OutboundSegment = outboundEpochFromContext(contexts[0]).identityKey()
 	}

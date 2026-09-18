@@ -69,6 +69,7 @@ type usageRecentAccountDiagnostic struct {
 }
 
 type usageRequestDiagnostics struct {
+	ResponseIdentity       []responseIdentityEvent                  `json:"response_identity,omitempty"`
 	AccessPrograms         *accessProgramsDiagnostic                `json:"access_programs,omitempty"`
 	TurnState              *database.TurnStateDiagnostic            `json:"turn_state,omitempty"`
 	InitialSession         *initialSessionDiagnostic                `json:"initial_session,omitempty"`
@@ -435,6 +436,7 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 	}
 	snapshot := *state
 	snapshot.TurnState = turnStateDiagnostic(c.Request.Context())
+	snapshot.ResponseIdentity = responseIdentityDiagnostic(c.Request.Context())
 	input.SessionIDPrefix = snapshot.SessionIDPrefix
 	snapshot.Request = usageRequestInfoSnapshot(c, input)
 	if input.UpstreamDiagnostics != "" {

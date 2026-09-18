@@ -203,6 +203,7 @@ func TestSessionContextProvenanceNativeWebsocketFlow(test *testing.T) {
 	require.NoError(test, err)
 	test.Cleanup(func() { _ = connection.Close() })
 	atomic.StoreInt32(&target.Disabled, 1)
+	var previousAlias string
 	for step := 0; step < 3; step++ {
 		if step == 1 {
 			atomic.StoreInt32(&owner.Disabled, 1)
@@ -213,7 +214,7 @@ func TestSessionContextProvenanceNativeWebsocketFlow(test *testing.T) {
 		body, _ = sjson.SetBytes(body, "type", "response.create")
 		if step == 1 {
 			body, _ = sjson.SetRawBytes(body, "input", []byte(`[{"type":"reasoning","encrypted_content":"gAAAAold-restart-reasoning"},{"type":"compaction","encrypted_content":"gAAAAold-restart-compaction"},{"role":"user","content":"continue current task"}]`))
-			body, _ = sjson.SetBytes(body, "previous_response_id", "old-restart-response")
+			body, _ = sjson.SetBytes(body, "previous_response_id", previousAlias)
 			body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", "old-restart-state")
 		}
 		if step == 2 {
@@ -229,6 +230,8 @@ func TestSessionContextProvenanceNativeWebsocketFlow(test *testing.T) {
 			require.NotEqual(test, "error", kind, "step=%d payload=%s", step, payload)
 			require.NotEqual(test, "response.failed", kind, "step=%d payload=%s", step, payload)
 			if kind == "response.completed" {
+				previousAlias = gjson.GetBytes(payload, "response.id").String()
+				require.True(test, handler.db.IsManagedCodexResponseID(previousAlias))
 				break
 			}
 		}

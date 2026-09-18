@@ -4111,6 +4111,10 @@ func (h *Handler) Responses(c *gin.Context) {
 	h.primeNewAPIPolicyContext(c, ingressRequestBody(c, rawBody))
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, rawBody)
 	rawBody = normalizeTurnStateIngress(c, rawBody)
+	if err := validateResponseIdentityIngress(c, rawBody); err != nil {
+		ErrorToGinResponse(c, err)
+		return
+	}
 	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/responses", model) {
 		return
 	}
@@ -6312,6 +6316,10 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	h.primeNewAPIPolicyContext(c, ingressRequestBody(c, rawBody))
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, rawBody)
 	rawBody = normalizeTurnStateIngress(c, rawBody)
+	if err := validateResponseIdentityIngress(c, rawBody); err != nil {
+		ErrorToGinResponse(c, err)
+		return
+	}
 	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/responses/compact", model) {
 		return
 	}
@@ -7298,6 +7306,10 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	h.primeNewAPIPolicyContext(c, ingressRequestBody(c, rawBody))
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, codexBody)
 	codexBody = normalizeTurnStateIngress(c, codexBody)
+	if err := validateResponseIdentityIngress(c, codexBody); err != nil {
+		ErrorToGinResponse(c, err)
+		return
+	}
 	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/chat/completions", model) {
 		return
 	}

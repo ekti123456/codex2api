@@ -140,6 +140,7 @@ type SessionToolSummary struct {
 }
 
 type ServiceErrorEvent struct {
+	ResponseIdentity       []ResponseIdentityEvent           `json:"response_identity,omitempty"`
 	TurnState              *TurnStateDiagnostic              `json:"turn_state,omitempty"`
 	ID                     string                            `json:"id"`
 	CreatedAt              time.Time                         `json:"created_at"`

@@ -399,6 +399,11 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	}
 	sessionIdentity := h.resolveRequestSessionIdentityForContext(c, rawBody)
 	rawBody = normalizeTurnStateIngress(c, rawBody)
+	if err := validateResponseIdentityIngress(c, rawBody); err != nil {
+		apiErr = api.NewAPIError(api.ErrorCode("previous_response_not_found"), invalidPreviousResponse().Message, api.ErrorTypeInvalidRequest)
+		_ = writeAuditedResponsesWSError(c, conn, apiErr)
+		return nil
+	}
 	auditEndpoint := "/v1/responses"
 	if options != nil {
 		if configured := strings.TrimSpace(options.auditEndpoint); configured != "" {

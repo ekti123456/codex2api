@@ -37,6 +37,9 @@ func (handler *Handler) sessionContextVerifier(request *gin.Context, record data
 	}
 	known, cancel := handler.sessionContextVerifierForScope(request.Request.Context(), scope)
 	return func(kind, value string) bool {
+		if kind == "previous_response_id" && trustedResponseIdentity(request.Request.Context(), record, value) {
+			return true
+		}
 		return kind == "turn_state" && trustedMappedTurnState(request.Request.Context(), record, value) || known(kind, value)
 	}, cancel
 }

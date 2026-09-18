@@ -257,7 +257,7 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool, preserve ..
 	// created root ID under initial-session admission.
 	threadID, err := uuid.NewV7()
 	require.NoError(test, err)
-	var lastSession string
+	var lastSession, previousAlias string
 	for _, expected := range []*auth.Account{owner, target} {
 		if expected == target {
 			atomic.StoreInt32(&owner.Disabled, 1)
@@ -269,7 +269,7 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool, preserve ..
 		if expected == target {
 			body, _ = sjson.SetRawBytes(body, "input", []byte(`[{"type":"reasoning","encrypted_content":"gAAAAold-restart-reasoning"},{"type":"compaction","encrypted_content":"gAAAAold-restart-compaction"},{"role":"user","content":[{"type":"input_file","file_id":"old-restart-file"},{"type":"input_text","text":"current plaintext"}]}]`))
 			if !keepInput {
-				body, _ = sjson.SetBytes(body, "previous_response_id", "old-restart-response")
+				body, _ = sjson.SetBytes(body, "previous_response_id", previousAlias)
 			}
 			body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-state", "old-restart-turn-state")
 		}
@@ -303,6 +303,13 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool, preserve ..
 			require.Contains(test, recorder.Body.String(), "new-compaction")
 		} else {
 			require.Contains(test, recorder.Body.String(), "response.completed")
+			for _, line := range strings.Split(recorder.Body.String(), "\n") {
+				payload := strings.TrimPrefix(line, "data: ")
+				if gjson.Get(payload, "type").String() == "response.completed" {
+					previousAlias = gjson.Get(payload, "response.id").String()
+					require.True(test, handler.db.IsManagedCodexResponseID(previousAlias))
+				}
+			}
 		}
 		require.NotEmpty(test, seen)
 		headers := <-seen

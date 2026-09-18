@@ -175,6 +175,10 @@ export default function UsageRequestDiagnostics({ log, onClose }: { log: UsageLo
       <AccessProgramsDiagnostics value={data.access_programs} />
       {(detail?.request_type === 'compaction' || Boolean(diagnosticRecord(data.responses_input).compaction_metadata || diagnosticRecord(upstream.responses_input).compaction_metadata)) && <CompactionDiagnostics inbound={data.responses_input} outbound={upstream.responses_input} />}
       <TurnStateDiagnostics value={data.turn_state} outbound={outboundIdentity} />
+      {Array.isArray(data.response_identity) && data.response_identity.length > 0 && <section className="rounded-lg border p-3">
+        <h3 className="mb-3 text-sm font-semibold">Response ID</h3>
+        <pre className="max-h-80 overflow-auto rounded-md bg-muted/40 p-2 text-xs select-text" tabIndex={0}>{JSON.stringify(data.response_identity, null, 2)}</pre>
+      </section>}
       {sections.map(([title, value]) => <section key={title} className="rounded-lg border p-3">
         <h3 className="mb-3 text-sm font-semibold">{title === 'continuity' ? t('sessionContinuity.title') : t(`usage.diagnostics.sections.${title}`)}</h3>
         {title === 'client' && <p className="mb-3 text-xs leading-5 text-muted-foreground">{t('usage.diagnostics.clientHint')}</p>}

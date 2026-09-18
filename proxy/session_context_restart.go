@@ -196,6 +196,9 @@ func (epoch *sessionOutboundEpoch) restartContextVerifier(ctx context.Context) (
 		if kind != "previous_response_id" {
 			return known(kind, value)
 		}
+		if trustedResponseIdentity(ctx, epoch.record, value) {
+			return true
+		}
 		lookup, stop := context.WithTimeout(ctx, time.Second)
 		defer stop()
 		affinity, found := lookupResponseAccountAffinity(lookup, epoch.handler.cache, epoch.owner, value)
@@ -203,7 +206,14 @@ func (epoch *sessionOutboundEpoch) restartContextVerifier(ctx context.Context) (
 	}, cancel
 }
 
-func PrepareSessionRestartOutbound(ctx context.Context, account *auth.Account, body []byte, headers http.Header) ([]byte, http.Header, error) {
+func PrepareSessionRestartOutbound(ctx context.Context, account *auth.Account, body []byte, headers http.Header) (out []byte, outgoing http.Header, err error) {
+	// Restore only after all context cleanup. A second executor boundary accepts
+	// the already restored original, but must recheck account and generation.
+	defer func() {
+		if err == nil {
+			out, err = prepareResponseIdentityOutbound(ctx, account, out)
+		}
+	}()
 	var initialErr error
 	body, headers, initialErr = PrepareInitialSessionOutbound(ctx, account, body, headers)
 	if initialErr != nil {

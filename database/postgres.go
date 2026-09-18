@@ -199,11 +199,12 @@ type sqlExecer interface {
 
 // DB PostgreSQL 数据库操作
 type DB struct {
-	turnStateCipher cipher.AEAD
-	turnStateKey    []byte
-	turnStateWrites atomic.Uint64
-	conn            *sql.DB
-	driver          string
+	turnStateCipher  cipher.AEAD
+	responseIDWrites atomic.Uint64
+	turnStateKey     []byte
+	turnStateWrites  atomic.Uint64
+	conn             *sql.DB
+	driver           string
 
 	promptFilterAudit *promptFilterAuditQueue
 	serviceErrors     *serviceErrorQueue

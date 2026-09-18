@@ -1591,6 +1591,7 @@ func (h *Handler) resolveRequestSessionIdentityWithBase(c *gin.Context, body []b
 	h.captureUsageRequestResolution(c, body, identity, rootIdentity, policyContext, status)
 	h.captureSessionOperationsIdentity(c, body, rootIdentity, policyContext, verifiedPolicy)
 	h.bindTurnStateSession(c, body, identity)
+	h.bindResponseIdentity(c, identity)
 	return identity
 }
 
