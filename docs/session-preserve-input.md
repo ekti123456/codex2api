@@ -19,3 +19,20 @@
 原有 `lossy_context_restart` 是历史内部流程标记，新模式仍通过该重建入口进行身份/状态处理；实际清理模式以 `context_cleanup.mode: preserve_input` 和 `preserve_restart_input` 为准。诊断继续记录 `tools_before`、`tools_after`、`tool_preservation`，不记录工具正文或加密原文。
 
 已知历史缺失或上游拒绝时，返回明确错误。完整保留 input 不代表补回客户端未发送的工具和历史，也不保证切号后模型不会失忆。
+
+### 工具结果配对失败
+
+校验失败时，使用日志和错误日志的 `account_failover.block_reason` 为 `incomplete_tool_context`，`trigger_reason` 仍保留最初切号原因。`phase=after_switch`、账号和代次来自已有绑定，表示切号后的续接校验，不代表本次又切了一次账号。HTTP 400、原错误码、原提示和停止重试语义保持不变。
+
+`context_cleanup.tool_pairing` 记录：
+
+- `scope=input_top_level`：只检查本次 input 顶层协议项，不扫描工具结果正文，也不查询旧请求历史。
+- `input_items`、`call_items`、`output_items`：输入项、调用项、结果项数量。调用项沿用 `_call` 后缀识别，结果包括 `_call_output` 和 `tool_search_output`。
+- `missing_call_count`：找不到配对调用的结果项总数，重复结果分别计数。
+- `missing_calls`：前 8 条失败项，包含从 0 开始的 `index`、字段 `path`、结果 `item_type`、参考调用类型 `expected_call_type`、原始 `call_id` 和 `call_id_state`。状态区分 `present`、`missing`、`null`、`empty`、`non_string`；参考类型用于定位，不新增类型匹配限制。
+- `omitted_items`：未展开的失败项数；使用日志超出总大小预算时也会压缩明细，并设置外层 `truncated`。保留总数和首条明细。
+- `value_truncated`：单项字段超出长度限制，`call_id` 最多保留 128 字节，类型最多 64 字节；普通标识原样保留以便核对。
+
+例如 `missing_calls[0]` 为 `{"index":12,"path":"input[12].call_id","item_type":"function_call_output","expected_call_type":"function_call","call_id":"call_abc","call_id_state":"present"}`，表示本次第 13 个输入项的结果找不到可配对调用；不能据此断定调用由客户端还是中间层丢失。
+
+失败时仍记录 `tools_before`，方便区分“工具定义缺失”和“历史调用缺失”。不记录参数、执行输出或加密内容，不改动 input，不补造调用，也不删除结果。已验证的当前段 `previous_response_id` 仍按原规则接受增量输入；服务端工具搜索结果的既有豁免保持不变。旧日志不能补出当时未采集的配对明细。

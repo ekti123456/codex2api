@@ -107,16 +107,17 @@ type SessionFailoverCandidate struct {
 }
 
 type SessionContextCleanup struct {
-	Mode             string                  `json:"mode"`
-	Phase            string                  `json:"phase"`
-	Removed          map[string]int          `json:"removed"`
-	Items            []SessionContextRemoval `json:"items,omitempty"`
-	OmittedItems     int                     `json:"omitted_items,omitempty"`
-	Pass             int                     `json:"pass,omitempty"`
-	DetailsPass      int                     `json:"details_pass,omitempty"`
-	ToolsBefore      *SessionToolSummary     `json:"tools_before,omitempty"`
-	ToolsAfter       *SessionToolSummary     `json:"tools_after,omitempty"`
-	ToolPreservation string                  `json:"tool_preservation,omitempty"`
+	Mode             string                        `json:"mode"`
+	Phase            string                        `json:"phase"`
+	Removed          map[string]int                `json:"removed"`
+	Items            []SessionContextRemoval       `json:"items,omitempty"`
+	OmittedItems     int                           `json:"omitted_items,omitempty"`
+	Pass             int                           `json:"pass,omitempty"`
+	DetailsPass      int                           `json:"details_pass,omitempty"`
+	ToolsBefore      *SessionToolSummary           `json:"tools_before,omitempty"`
+	ToolsAfter       *SessionToolSummary           `json:"tools_after,omitempty"`
+	ToolPreservation string                        `json:"tool_preservation,omitempty"`
+	ToolPairing      *SessionToolPairingDiagnostic `json:"tool_pairing,omitempty"`
 }
 
 type SessionContextRemoval struct {
@@ -357,6 +358,7 @@ func normalizeServiceError(event ServiceErrorEvent) ServiceErrorEvent {
 		if failover.ContextCleanup != nil {
 			cleanup := *failover.ContextCleanup
 			cleanup.Mode, cleanup.Phase = serviceErrorString(cleanup.Mode, 64), serviceErrorString(cleanup.Phase, 64)
+			cleanup.ToolPairing = NormalizeSessionToolPairingDiagnostic(cleanup.ToolPairing)
 			cleanup.Removed = make(map[string]int)
 			for kind, count := range failover.ContextCleanup.Removed {
 				if len(cleanup.Removed) >= 32 {

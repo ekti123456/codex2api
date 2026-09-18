@@ -21,6 +21,11 @@ type sessionAccountFailoverContextKey struct{}
 type sessionAccountFailoverDiagnostic = database.SessionAccountFailoverDiagnostic
 
 func sessionFailoverContextError(request *gin.Context, diagnostic *sessionAccountFailoverDiagnostic, block string) *api.APIError {
+	if block == "missing_request_context" {
+		if blockers := preservedToolPairingBlockers(diagnostic.ContextCleanup); len(blockers) > 0 {
+			block, diagnostic.ContextBlockers = "incomplete_tool_context", blockers
+		}
+	}
 	continuityRestart := strings.HasPrefix(diagnostic.TriggerReason, "continuity_") || strings.HasPrefix(diagnostic.Reason, "continuity_")
 	diagnostic.Result, diagnostic.Reason, diagnostic.BlockReason = "blocked", block, block
 	state := usageRequestDiagnosticState(request)
@@ -98,7 +103,7 @@ func (handler *Handler) validateMigratedSessionContext(request *gin.Context, bod
 			if failure := sessionToolPreservationAPIError(err, report); failure != nil {
 				return failure
 			}
-			diagnostic := &sessionAccountFailoverDiagnostic{Phase: "after_switch", PreviousAccountID: record.PreviousAccountID, AccountID: record.AccountID, Generation: record.FailoverCount, ContextCleanup: report}
+			diagnostic := &sessionAccountFailoverDiagnostic{Phase: "after_switch", TriggerReason: record.LastFailoverReason, PreviousAccountID: record.PreviousAccountID, AccountID: record.AccountID, Generation: record.FailoverCount, ContextCleanup: report}
 			failure := sessionFailoverContextError(request, diagnostic, "missing_request_context")
 			failure.Message = err.Error()
 			if typed, ok := err.(*Error); ok {

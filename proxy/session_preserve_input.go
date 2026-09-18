@@ -66,18 +66,13 @@ func preserveSessionRestartInput(payload map[string]json.RawMessage, headers htt
 		return nil, headers, report, preserveInputError("完整保留 input 模式需要客户端提供完整输入数组或文本，不能仅依赖旧账号的续写状态。")
 	}
 	if input.IsArray() && !hasPrevious {
-		calls := make(map[string]bool)
-		for _, item := range input.Array() {
-			if strings.HasSuffix(item.Get("type").String(), "_call") {
-				calls[item.Get("call_id").String()] = true
-			}
-		}
-		for _, item := range input.Array() {
-			if strings.HasSuffix(item.Get("type").String(), "_call_output") && !calls[item.Get("call_id").String()] {
+		pairing, missingOutput := inspectPreservedToolPairing(input)
+		if pairing != nil {
+			report.ToolPairing = pairing
+			report.ToolsBefore = summarizeSessionTools(original)
+			if missingOutput {
 				return nil, headers, report, preserveInputError("完整保留 input 模式发现工具结果缺少对应调用，请恢复完整历史后重试；不会删除工具结果重试。")
 			}
-		}
-		if missingToolSearchCall(input) >= 0 {
 			return nil, headers, report, preserveInputError("完整保留 input 模式缺少动态工具搜索结果对应的调用，请恢复完整历史后重试。")
 		}
 	}

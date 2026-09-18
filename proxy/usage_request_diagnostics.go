@@ -535,6 +535,24 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 		snapshot.Truncated = true
 		payload, err = json.Marshal(snapshot)
 	}
+	// Pairing failures can coexist with large transport diagnostics. Keep counts
+	// and the first offending item rather than losing the whole usage snapshot.
+	if failover := snapshot.AccountFailover; len(payload) > database.MaxUsageRequestDiagnosticsBytes && failover != nil && failover.ContextCleanup != nil && failover.ContextCleanup.ToolPairing != nil {
+		boundedFailover, cleanup, pairing := *failover, *failover.ContextCleanup, *failover.ContextCleanup.ToolPairing
+		boundedFailover.ContextCleanup, cleanup.ToolPairing = &cleanup, &pairing
+		snapshot.AccountFailover = &boundedFailover
+		if snapshot.Continuity != nil && snapshot.Continuity.AccountFailover == failover {
+			continuity := *snapshot.Continuity
+			continuity.AccountFailover = &boundedFailover
+			snapshot.Continuity = &continuity
+		}
+		for len(payload) > database.MaxUsageRequestDiagnosticsBytes && len(pairing.MissingCalls) > 1 {
+			pairing.MissingCalls = pairing.MissingCalls[:len(pairing.MissingCalls)-1]
+			pairing.OmittedItems++
+			snapshot.Truncated = true
+			payload, err = json.Marshal(snapshot)
+		}
+	}
 	if err == nil && len(payload) <= database.MaxUsageRequestDiagnosticsBytes {
 		input.RequestDiagnostics = string(payload)
 	}
