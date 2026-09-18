@@ -423,6 +423,13 @@
     "claudeMaxToolSchemaBytesDesc": "0 表示不設閘道 Schema 上限；請求體仍受系統大小與上游限制。"
   },
   "promptFilter": {
+    "builtinRestored": "已還原內建預設規則",
+    "builtinSaved": "內建規則已儲存並生效",
+    "builtinModified": "已修改",
+    "restoreBuiltinRule": "還原預設",
+    "editBuiltinRuleDesc": "可修改正則、權重、分類和嚴格模式。規則識別碼不變；內建的組合條件、排除條件及稽核型分類繼續保留。儲存後生效。",
+    "editBuiltinRule": "編輯內建規則",
+    "rulesCatalogDesc": "內建規則支援啟停和編輯；修改會儲存為覆寫設定，也可還原預設。",
     "groupDisplay": "重複記錄",
     "groupViews": {
       "grouped": "合併相同記錄",
@@ -1465,6 +1472,22 @@
     "cyberRiskSubjectEvents": "{{count}} 筆事件"
   },
   "usage": {
+    "turnState": {
+      "column": "Turn-State",
+      "all": "全部狀態",
+      "received": "已取得",
+      "missing": "未取得",
+      "notRecorded": "未記錄",
+      "characters": "{{count}} 字元",
+      "decodedBytes": "解碼後 {{count}} 位元組",
+      "exactLength": "精確字元數",
+      "apply": "篩選",
+      "exactApplied": "已篩選：{{count}} 字元",
+      "hint": "本次上游嘗試首次回傳的真實 X-Codex-Turn-State 長度。",
+      "missingHint": "已檢查上游回應，未取得此欄位。",
+      "notRecordedHint": "舊記錄或此請求未執行採集，無法據此判斷上游是否回傳。",
+      "clickFilter": "點擊篩選相同狀態或長度"
+    },
     "responseModel": "上游自報",
     "responseModelHint": "上游回應中聲明的模型，僅供記錄，不參與計費。",
     "exportFiltered": "按篩選下載",

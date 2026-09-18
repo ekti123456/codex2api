@@ -2272,6 +2272,22 @@
     "reason7dUrgency": "7d 快重置"
   },
   "usage": {
+    "turnState": {
+      "column": "Turn-State",
+      "all": "全部状态",
+      "received": "已获取",
+      "missing": "未获取",
+      "notRecorded": "未记录",
+      "characters": "{{count}} 字符",
+      "decodedBytes": "解码后 {{count}} 字节",
+      "exactLength": "精确字符数",
+      "apply": "筛选",
+      "exactApplied": "已筛选：{{count}} 字符",
+      "hint": "本次上游尝试首次返回的真实 X-Codex-Turn-State 长度。",
+      "missingHint": "已检查上游响应，未获取到此字段。",
+      "notRecordedHint": "旧日志或此请求未执行采集，不能据此判断上游是否返回。",
+      "clickFilter": "点击筛选相同状态或长度"
+    },
     "responseModel": "上游自报",
     "responseModelHint": "上游响应中声明的模型，仅供记录，不参与计费。",
     "exportFiltered": "按筛选下载",
@@ -2544,6 +2560,12 @@
     "channelAll": "全部"
   },
   "promptFilter": {
+    "builtinRestored": "已恢复内置默认规则",
+    "builtinSaved": "内置规则已保存并生效",
+    "builtinModified": "已修改",
+    "restoreBuiltinRule": "恢复默认",
+    "editBuiltinRuleDesc": "可修改正则、权重、分类和严格模式。规则标识保持不变；内置的组合条件、排除条件和审计型分类继续保留。保存后生效。",
+    "editBuiltinRule": "编辑内置规则",
     "groupDisplay": "重复记录",
     "groupViews": {
       "grouped": "合并相同记录",
@@ -3637,7 +3659,7 @@
       "reviewCleared": "审查判定通过"
     },
     "rulesCatalogTitle": "内置规则",
-    "rulesCatalogDesc": "这些规则来自后端内置规则集，可单独开启或关闭。",
+    "rulesCatalogDesc": "内置规则支持启停和编辑；修改会保存为覆盖配置，也可恢复默认。",
     "ruleHelp": "规则说明",
     "ruleHelpTitle": "如何添加规范规则",
     "ruleHelpDesc": "自定义规则会和内置规则一起参与打分。",

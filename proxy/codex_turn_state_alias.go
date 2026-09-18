@@ -273,6 +273,7 @@ func trustedMappedTurnState(ctx context.Context, record database.SessionContinui
 }
 
 func (s *turnStateSession) issue(ctx context.Context, account *auth.Account, real, carrier string) (string, error) {
+	observeUsageTurnState(ctx, real)
 	if real == "" {
 		return "", nil
 	}

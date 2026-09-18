@@ -8888,6 +8888,9 @@ func promptFilterConfigFromSettings(settings *database.SystemSettings) (promptfi
 	cfg.LogMatches = settings.PromptFilterLogMatches
 	cfg.MaxTextLength = settings.PromptFilterMaxTextLength
 	cfg.SensitiveWords = settings.PromptFilterSensitiveWords
+	if overrides, err := promptfilter.ParseBuiltinPatternOverrides(settings.PromptFilterBuiltinOverrides); err == nil {
+		cfg.BuiltinOverrides = overrides
+	}
 	if patterns, err := promptfilter.ParseCustomPatterns(settings.PromptFilterCustomPatterns); err == nil {
 		cfg.CustomPatterns = patterns
 	}

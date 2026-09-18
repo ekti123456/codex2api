@@ -1,3 +1,4 @@
+import { UsageTurnState } from '../components/UsageTurnState'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
@@ -1520,10 +1521,11 @@ function EmptyPanel({ accent, icon, text }: { accent: PanelAccentKey; icon: Reac
   )
 }
 
-type UsageTableColumn = 'requestType' | 'sessionIDPrefix' | 'status' | 'error' | 'model' | 'account' | 'apiKey' | 'newapiUser' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
+type UsageTableColumn = 'turnState' | 'requestType' | 'sessionIDPrefix' | 'status' | 'error' | 'model' | 'account' | 'apiKey' | 'newapiUser' | 'clientIp' | 'userAgent' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'wsAcquire' | 'tokensPerSec' | 'timing' | 'time'
 
 const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string }> = [
   { key: 'status', labelKey: 'usage.tableStatus' },
+  { key: 'turnState', labelKey: 'usage.turnState.column' },
   { key: 'model', labelKey: 'usage.tableModel' },
   { key: 'requestType', labelKey: 'usage.diagnostics.column' },
   { key: 'sessionIDPrefix', labelKey: 'usage.sessionIDPrefix' },
@@ -1553,6 +1555,7 @@ const DEFAULT_USAGE_VISIBLE_COLUMNS: Record<UsageTableColumn, boolean> = {
   requestType: true,
   sessionIDPrefix: true,
   status: true,
+  turnState: true,
   error: true,
   model: true,
   account: true,
@@ -1796,6 +1799,9 @@ export default function Usage() {
   const [searchScope, setSearchScope] = useState<UsageSearchScope>('all')
   const [filterStatus, setFilterStatus] = useState<UsageStatusFilter>('')
   const [filterRequestType, setFilterRequestType] = useState('')
+  const [filterTurnState, setFilterTurnState] = useState('')
+  const [filterTurnStateLength, setFilterTurnStateLength] = useState('')
+  const [turnStateLengthInput, setTurnStateLengthInput] = useState('')
   const [filterModel, setFilterModel] = useState('')
   const [filterEndpoint, setFilterEndpoint] = useState('')
   const [filterApiKeyId, setFilterApiKeyId] = useState('')
@@ -1889,6 +1895,8 @@ export default function Usage() {
       q: searchQuery || undefined,
       searchScope,
       requestType: filterRequestType || undefined,
+      turnState: filterTurnState || undefined,
+      turnStateLength: filterTurnStateLength || undefined,
       model: filterModel || undefined,
       endpoint: filterEndpoint || undefined,
       apiKeyId: filterApiKeyId || undefined,
@@ -1904,7 +1912,7 @@ export default function Usage() {
       retry: filterRetry || undefined,
       viaWebsocket: filterTransport === 'ws' ? 'true' : filterTransport === 'http' ? 'false' : undefined,
     }
-  }, [timeRange, customRange, searchQuery, searchScope, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterType, channel, filterStatus, filterRequestType, filterErrorKind, filterRetry, filterTransport])
+  }, [timeRange, customRange, searchQuery, searchScope, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterType, channel, filterStatus, filterRequestType, filterTurnState, filterTurnStateLength, filterErrorKind, filterRetry, filterTransport])
 
   const downloadLogs = async (scope: 'filtered' | 'all') => {
     if (exportController.current) return
@@ -2102,6 +2110,8 @@ export default function Usage() {
   ].filter(Boolean).length
   const hasActiveFilters = Boolean(
     searchInput
+    || filterTurnState
+    || filterTurnStateLength
     || filterStatus
     || filterRequestType
     || filterModel
@@ -2137,6 +2147,14 @@ export default function Usage() {
   const rangeRequestsLabel = t('usage.rangeRequestsCard', { range: rangeLabel })
   const rangeTokensLabel = t('usage.rangeTokensCard', { range: rangeLabel })
   const rangeCostLabel = t('usage.rangeCostCard', { range: rangeLabel })
+  const filterByTurnState = (log: UsageLog) => {
+    const length = log.turn_state_length
+    setFilterTurnState(length == null ? 'not_recorded' : length === 0 ? 'missing' : 'received')
+    const exact = length != null && length > 0 ? String(length) : ''
+    setFilterTurnStateLength(exact)
+    setTurnStateLengthInput(exact)
+    setPage(1)
+  }
   const resetLogFilters = () => {
     if (searchTimer.current) clearTimeout(searchTimer.current)
     setSearchScope('all')
@@ -2144,6 +2162,9 @@ export default function Usage() {
     setSearchQuery('')
     setFilterStatus('')
     setFilterRequestType('')
+    setFilterTurnState('')
+    setFilterTurnStateLength('')
+    setTurnStateLengthInput('')
     setFilterModel('')
     setFilterEndpoint('')
     setFilterApiKeyId('')
@@ -2455,6 +2476,32 @@ export default function Usage() {
               ) : null}
             </div>
 
+            <form className="mb-3 flex flex-wrap items-center gap-2" onSubmit={(event) => {
+              event.preventDefault()
+              setFilterTurnStateLength(turnStateLengthInput)
+              if (turnStateLengthInput !== '') setFilterTurnState(Number(turnStateLengthInput) === 0 ? 'missing' : 'received')
+              setPage(1)
+            }}>
+              <span className="text-xs font-medium text-muted-foreground" title={t('usage.turnState.hint')}>Turn-State</span>
+              <Select compact className="w-36 shrink-0" value={filterTurnState} onValueChange={(value) => {
+                setFilterTurnState(value)
+                setFilterTurnStateLength('')
+                setTurnStateLengthInput('')
+                setPage(1)
+              }} options={[
+                { value: '', label: t('usage.turnState.all') },
+                { value: 'received', label: t('usage.turnState.received') },
+                { value: 'missing', label: t('usage.turnState.missing') },
+                { value: 'not_recorded', label: t('usage.turnState.notRecorded') },
+              ]} />
+              <Input type="number" min={0} max={2147483647} step={1} value={turnStateLengthInput}
+                onChange={(event) => setTurnStateLengthInput(event.target.value)}
+                className="h-8 w-40 text-xs" aria-label={t('usage.turnState.exactLength')}
+                placeholder={t('usage.turnState.exactLength')} />
+              <Button type="submit" variant="outline" size="sm">{t('usage.turnState.apply')}</Button>
+              {filterTurnStateLength !== '' && <span className="text-xs text-primary">{t('usage.turnState.exactApplied', { count: Number(filterTurnStateLength) })}</span>}
+            </form>
+
             {/* 错误摘要：不受上方状态按钮影响，便于在各错误类别之间快速切换 */}
             {errorSummary && errorSummary.total_errors > 0 ? (
               <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
@@ -2724,6 +2771,7 @@ export default function Usage() {
                               <StatusCodeBadge log={log} />
                             </button>
                           )}
+                          {visibleColumns.turnState && <UsageTurnState log={log} onClick={() => filterByTurnState(log)} />}
                           {log.upstream_error_kind === 'cyber_policy' ? <CyberPolicyDetailButton log={log} /> : null}
                           {visibleColumns.type && log.via_websocket ? (
                             <Badge
@@ -2895,6 +2943,7 @@ export default function Usage() {
                   <TableHeader>
                     <TableRow>
                       {visibleColumns.status && <TableHead className={usageTableHeadClass}>{t('usage.tableStatus')}</TableHead>}
+                      {visibleColumns.turnState && <TableHead className={usageTableHeadClass} title={t('usage.turnState.hint')}>Turn-State</TableHead>}
                       {visibleColumns.model && <TableHead className={usageTableHeadClass}>{t('usage.tableModel')}</TableHead>}
                       {visibleColumns.requestType && <TableHead className={usageTableHeadClass}>{t('usage.diagnostics.column')}</TableHead>}
                       {visibleColumns.sessionIDPrefix && <TableHead className={usageTableHeadClass} title={t('usage.sessionIDPrefixHint')}>{t('usage.sessionIDPrefix')}</TableHead>}
@@ -2950,6 +2999,7 @@ export default function Usage() {
                             {log.upstream_error_kind === 'cyber_policy' ? <CyberPolicyDetailButton log={log} /> : null}
                           </div>
                         </TableCell>}
+                        {visibleColumns.turnState && <TableCell><UsageTurnState log={log} onClick={() => filterByTurnState(log)} /></TableCell>}
                         {visibleColumns.model && <TableCell>
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {log.via_websocket && (

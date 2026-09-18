@@ -23,7 +23,7 @@ import { formatBeijingTime, formatRelativeTime } from '../utils/time'
 import { getErrorMessage } from '../utils/error'
 import { getPromptFilterScoreBand, normalizePromptFilterScore } from '../lib/promptFilterScore'
 import { parseAdvancedConfigDocument, patchAdvancedConfigDocument, readAdvancedConfigPath } from '../types'
-import type { AdvancedConfigObject, AdvancedConfigPatch, PromptFilterLog, PromptFilterMatch, PromptFilterRule, PromptFilterRulesResponse, PromptFilterTestResponse, PromptGuardConfig, PromptGuardLayer, PromptGuardMode, PromptGuardProfile, PromptGuardProvider, PromptIdentityUpdateMode, PromptIntelligenceAIAnalysisResponse, PromptIntelligenceAIProvider, PromptIntelligenceCandidate, PromptIntelligenceEvidenceResponse, PromptIntelligenceGatewayKey, PromptIntelligenceRun, PromptPolicyAuditHealth, PromptPolicyIncident, PromptPolicyIncidentDetailResponse, PromptReviewAPIKeyDescriptor, PromptReviewKeyTestResult, PromptReviewProfile, PromptReviewTestResponse, PromptRiskProfile, PromptRiskProfileDetailResponse, PromptRiskSessionWindow, SystemSettings, PromptLogRetention, PromptRiskIncidentSubject, PromptIntelligenceDraftSuggestion } from '../types'
+import type { BuiltinPromptRuleFields, AdvancedConfigObject, AdvancedConfigPatch, PromptFilterLog, PromptFilterMatch, PromptFilterRule, PromptFilterRulesResponse, PromptFilterTestResponse, PromptGuardConfig, PromptGuardLayer, PromptGuardMode, PromptGuardProfile, PromptGuardProvider, PromptIdentityUpdateMode, PromptIntelligenceAIAnalysisResponse, PromptIntelligenceAIProvider, PromptIntelligenceCandidate, PromptIntelligenceEvidenceResponse, PromptIntelligenceGatewayKey, PromptIntelligenceRun, PromptPolicyAuditHealth, PromptPolicyIncident, PromptPolicyIncidentDetailResponse, PromptReviewAPIKeyDescriptor, PromptReviewKeyTestResult, PromptReviewProfile, PromptReviewTestResponse, PromptRiskProfile, PromptRiskProfileDetailResponse, PromptRiskSessionWindow, SystemSettings, PromptLogRetention, PromptRiskIncidentSubject, PromptIntelligenceDraftSuggestion } from '../types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -5031,8 +5031,9 @@ function RulesView({
   const [infoOpen, setInfoOpen] = useState(false)
   const [previewRule, setPreviewRule] = useState<PromptFilterRule | null>(null)
   const [previewPatternCopied, setPreviewPatternCopied] = useState(false)
-  const [customDialogMode, setCustomDialogMode] = useState<'create' | 'edit' | null>(null)
+  const [customDialogMode, setCustomDialogMode] = useState<'create' | 'edit' | 'builtin' | null>(null)
   const [editingCustomOriginalFingerprint, setEditingCustomOriginalFingerprint] = useState<string | null>(null)
+  const [editingBuiltin, setEditingBuiltin] = useState<PromptFilterRule | null>(null)
   const [customDialogDraft, setCustomDialogDraft] = useState<CustomRuleDraft>(defaultCustomRuleDraft)
   const [savingRule, setSavingRule] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('')
@@ -5165,6 +5166,41 @@ function RulesView({
     })
   }
 
+  const builtinRuleFields = (rule: PromptFilterRule): BuiltinPromptRuleFields => ({
+    name: rule.name, pattern: rule.pattern, weight: rule.weight, category: rule.category || '', strict: !!rule.strict,
+  })
+
+  const startEditBuiltinRule = (rule: PromptFilterRule) => {
+    setEditingBuiltin(rule)
+    setCustomDialogMode('builtin')
+    setCustomDialogDraft(customRuleDraftFromRule(rule))
+  }
+
+  const saveBuiltinRule = async (restore: boolean) => {
+    if (!editingBuiltin) return
+    const weight = parseRuleWeight(customDialogDraft.weight)
+    if (!restore && weight === null) return
+    setSavingRule('rules')
+    try {
+      const nextRules = await api.updateBuiltinPromptRule(editingBuiltin.name, builtinRuleFields(editingBuiltin), restore ? null : {
+        name: editingBuiltin.name, pattern: customDialogDraft.pattern, weight: weight!, category: customDialogDraft.category.trim(), strict: customDialogDraft.strict,
+      })
+      onRulesUpdated(nextRules)
+      closeCustomRuleDialog()
+      showToast(t(restore ? 'promptFilter.builtinRestored' : 'promptFilter.builtinSaved'))
+    } catch (error) {
+      if (error instanceof AdminAPIError && error.status === 409) {
+        try {
+          const [latestRules, latestSettings] = await Promise.all([api.getPromptFilterRules(), api.getSettings()])
+          onRulesUpdated(latestRules, latestSettings)
+        } catch { /* keep the current draft available */ }
+        showToast(t('promptFilter.ruleSaveConflict'), 'warning')
+      } else {
+        showToast(`${t('promptFilter.saveFailed')}: ${getErrorMessage(error)}`, 'error')
+      }
+    } finally { setSavingRule('') }
+  }
+
   const startCreateCustomRule = () => {
     setCustomDialogMode('create')
     setEditingCustomOriginalFingerprint(null)
@@ -5180,12 +5216,14 @@ function RulesView({
   }
 
   const closeCustomRuleDialog = () => {
+    setEditingBuiltin(null)
     setCustomDialogMode(null)
     setEditingCustomOriginalFingerprint(null)
     setCustomDialogDraft(defaultCustomRuleDraft)
   }
 
   const saveCustomRuleDialog = async () => {
+    if (customDialogMode === 'builtin') { await saveBuiltinRule(false); return }
     const name = customDialogDraft.name.trim()
     const pattern = customDialogDraft.pattern
     const weight = parseRuleWeight(customDialogDraft.weight)
@@ -5313,6 +5351,7 @@ function RulesView({
                     onSelect={() => toggleSelectRule(rule.name)}
                     onPreview={() => openRulePreview(rule)}
                     onToggle={() => void toggleBuiltin(rule)}
+                    onEdit={() => startEditBuiltinRule(rule)}
                     busy={saving || savingRule !== ''}
                   />
                 ))}
@@ -5386,12 +5425,12 @@ function RulesView({
       <Dialog open={customDialogMode !== null} onOpenChange={(open) => { if (!open) closeCustomRuleDialog() }}>
         <DialogContent className="max-h-[calc(100vh-2rem)] max-w-2xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{customDialogMode === 'create' ? t('promptFilter.addCustomRule') : t('promptFilter.editCustomRule')}</DialogTitle>
-            <DialogDescription>{customDialogMode === 'create' ? t('promptFilter.addCustomRuleDesc') : t('promptFilter.editCustomRuleDesc')}</DialogDescription>
+            <DialogTitle>{customDialogMode === 'builtin' ? t('promptFilter.editBuiltinRule') : customDialogMode === 'create' ? t('promptFilter.addCustomRule') : t('promptFilter.editCustomRule')}</DialogTitle>
+            <DialogDescription>{customDialogMode === 'builtin' ? t('promptFilter.editBuiltinRuleDesc') : customDialogMode === 'create' ? t('promptFilter.addCustomRuleDesc') : t('promptFilter.editCustomRuleDesc')}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-[minmax(160px,0.8fr)_minmax(0,1.2fr)]">
             <Field label={t('promptFilter.ruleName')}>
-              <Input value={customDialogDraft.name} onChange={(event) => setCustomDialogDraft((current) => ({ ...current, name: event.target.value }))} placeholder="custom_rule" />
+              <Input readOnly={customDialogMode === 'builtin'} value={customDialogDraft.name} onChange={(event) => setCustomDialogDraft((current) => ({ ...current, name: event.target.value }))} placeholder="custom_rule" />
             </Field>
             <Field label={t('promptFilter.ruleCategory')}>
               <Input value={customDialogDraft.category} onChange={(event) => setCustomDialogDraft((current) => ({ ...current, category: event.target.value }))} />
@@ -5410,8 +5449,9 @@ function RulesView({
             </Field>
           </div>
           <DialogFooter>
+            {customDialogMode === 'builtin' && editingBuiltin?.overridden && <Button variant="outline" onClick={() => void saveBuiltinRule(true)} disabled={savingRule !== ''}>{t('promptFilter.restoreBuiltinRule')}</Button>}
             <Button variant="outline" onClick={closeCustomRuleDialog} disabled={savingRule !== ''}>{t('common.cancel')}</Button>
-            <Button onClick={() => void saveCustomRuleDialog()} disabled={savingRule !== '' || !customDialogDraft.name.trim() || !customDialogDraft.pattern.trim() || parseRuleWeight(customDialogDraft.weight) === null}>
+            <Button onClick={() => void saveCustomRuleDialog()} disabled={savingRule !== '' || !customDialogDraft.name.trim() || (customDialogMode !== 'builtin' && !customDialogDraft.pattern.trim()) || parseRuleWeight(customDialogDraft.weight) === null}>
               <Save className="size-4" />
               {savingRule !== '' ? t('common.saving') : t('common.save')}
             </Button>
@@ -5631,6 +5671,7 @@ function RuleRow({
         </button>
         <div className="mt-1 flex gap-1">
           {rule.builtin ? <Badge variant="secondary">{t('promptFilter.builtinRule')}</Badge> : <Badge variant="outline">{t('promptFilter.customRule')}</Badge>}
+          {rule.overridden ? <Badge variant="outline">{t('promptFilter.builtinModified')}</Badge> : null}
           {rule.strict ? <Badge variant="destructive">{t('promptFilter.ruleStrict')}</Badge> : null}
           <Badge variant={enabled ? 'default' : 'outline'}>{enabled ? t('common.enabled') : t('common.disabled')}</Badge>
         </div>
@@ -5660,7 +5701,7 @@ function RuleRow({
             </Button>
           )}
           {onEdit ? (
-            <Button size="icon-sm" variant="ghost" onClick={onEdit} disabled={busy} aria-label={t('promptFilter.editCustomRule')} title={t('promptFilter.editCustomRule')}>
+            <Button size="icon-sm" variant="ghost" onClick={onEdit} disabled={busy} aria-label={t(rule.builtin ? 'promptFilter.editBuiltinRule' : 'promptFilter.editCustomRule')} title={t(rule.builtin ? 'promptFilter.editBuiltinRule' : 'promptFilter.editCustomRule')}>
               <Pencil className="size-3.5" />
             </Button>
           ) : null}

@@ -36,6 +36,7 @@ func maskTurnStateResponse(ctx context.Context, account *auth.Account, response 
 	if response == nil || s == nil {
 		return nil
 	}
+	observeUsageTurnState(ctx, "")
 	response.Header = response.Header.Clone()
 	var real string
 	for key, values := range response.Header {

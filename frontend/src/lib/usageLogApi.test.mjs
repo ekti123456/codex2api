@@ -10,6 +10,8 @@ test("usage log search params include diagnostic and traffic filters", () => {
     q: "rate limit",
     searchScope: "error",
     requestType: "related_internal",
+    turnState: "received",
+    turnStateLength: "217",
     model: "gpt-5.6-sol",
     endpoint: "/v1/responses",
     apiKeyId: "12",
@@ -33,6 +35,8 @@ test("usage log search params include diagnostic and traffic filters", () => {
     q: "rate limit",
     search_scope: "error",
     request_type: "related_internal",
+    turn_state: "received",
+    turn_state_length: "217",
     model: "gpt-5.6-sol",
     endpoint: "/v1/responses",
     api_key_id: "12",
@@ -60,12 +64,20 @@ test("usage log search params omit empty optional filters", () => {
     status: "",
     retry: "",
     requestType: "",
+    turnState: "",
+    turnStateLength: "",
   });
 
   assert.deepEqual(Object.fromEntries(params), {
     start: "2026-08-05T00:00:00Z",
     end: "2026-08-05T01:00:00Z",
   });
+});
+
+test("turn-state zero means inspected but absent, not unrecorded", () => {
+  const params = buildUsageLogSearchParams({ turnState: "missing", turnStateLength: "0" });
+  assert.equal(params.get("turn_state_length"), "0");
+  assert.equal(buildUsageLogSearchParams({ turnState: "not_recorded" }).has("turn_state_length"), false);
 });
 
 test("session prefix search uses the shared server-side log filters", () => {

@@ -2981,7 +2981,17 @@ export function patchAdvancedConfigDocument(
   }
 }
 
+export interface BuiltinPromptRuleFields {
+  name: string
+  pattern: string
+  weight: number
+  category: string
+  strict: boolean
+}
+
 export interface PromptFilterRule {
+  overridden?: boolean
+  default?: BuiltinPromptRuleFields
   name: string
   pattern: string
   weight: number
@@ -3490,6 +3500,8 @@ export interface APIKeyAccountStatsResponse {
 }
 
 export interface UsageLog {
+  turn_state_length?: number | null
+  turn_state_decoded_bytes?: number | null
   upstream_response_model?: string
 	window_number_original?: string
 	window_number_outbound?: string

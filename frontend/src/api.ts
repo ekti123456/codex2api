@@ -1,3 +1,4 @@
+import type { BuiltinPromptRuleFields } from './types'
 import type { ServiceErrorPage, ServiceErrorQuery } from './lib/serviceErrors'
 import type { SessionErrorPage, SessionErrorQuery, SessionActivityPage } from './lib/sessionErrors'
 import type {
@@ -490,6 +491,8 @@ function buildOpsErrorSearchParams(params: {
 }
 
 export type UsageLogQueryParams = {
+  turnState?: string
+  turnStateLength?: string
 	searchScope?: import('./lib/usageSearchScope').UsageSearchScope
   requestType?: string
   start: string
@@ -531,6 +534,8 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   if (params.hasCompactionHistory) search.set('has_compaction_history', params.hasCompactionHistory)
   if (params.channel) search.set('channel', params.channel)
   if (params.status) search.set('status', params.status)
+  if (params.turnState) search.set('turn_state', params.turnState)
+  if (params.turnStateLength) search.set('turn_state_length', params.turnStateLength)
   if (params.errorOnly) search.set('error_only', params.errorOnly)
   if (params.errorKind) search.set('error_kind', params.errorKind)
   if (params.retry) search.set('retry', params.retry)
@@ -1502,6 +1507,8 @@ export const api = {
     request<{ ok: boolean }>(`/prompt-filter/review/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   testPromptFilterRulePattern: (data: { pattern: string; text: string }) =>
     request<PromptFilterRulePatternTestResponse>('/prompt-filter/rules/test', { method: 'POST', body: JSON.stringify(data) }),
+  updateBuiltinPromptRule: (name: string, expected: BuiltinPromptRuleFields, rule: BuiltinPromptRuleFields | null) =>
+    request<PromptFilterRulesResponse>(`/prompt-filter/rules/builtin/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ expected, rule }) }),
   getPromptFilterRules: () =>
     request<PromptFilterRulesResponse>('/prompt-filter/rules'),
   runPromptIntelligence: () =>

@@ -163,6 +163,19 @@ func TestTurnStateAliasHTTPAndNativeWebsocketFailover(t *testing.T) {
 					require.Equal(t, aliasB, returned)
 				}
 			}
+			require.Eventually(t, func() bool {
+				h.db.FlushUsageLogs()
+				logs, err := h.db.ListRecentUsageLogs(t.Context(), 20)
+				if err != nil || len(logs) < 5 {
+					return false
+				}
+				for _, entry := range logs {
+					if entry.TurnStateLength == nil || *entry.TurnStateLength <= 0 {
+						return false
+					}
+				}
+				return true
+			}, 3*time.Second, 10*time.Millisecond, "HTTP/WS attempts must persist their upstream turn-state length")
 		})
 	}
 }

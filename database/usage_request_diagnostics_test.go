@@ -144,10 +144,12 @@ func (capture *usageDiagnosticSQLCapture) ExecContext(_ context.Context, query s
 func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	capture := &usageDiagnosticSQLCapture{}
 	db := &DB{}
+	length, decoded := 292, 217
 	batch := []usageLogEntry{
 		{RequestType: "user", RequestDiagnostics: `{"version":1}`, NewAPIUserName: "window-user", RequestID: "request-1", UpstreamRequestID: "upstream-1", UpstreamProxyID: 12, UpstreamProxyName: "proxy-1", ImageInputTokens: 7, ImageOutputTokens: 11, CachedImageInputTokens: 3, SessionIDPrefix: "01a09012"},
 		{RequestType: "compaction", RequestDiagnostics: `{"version":1,"attempt":2}`, RequestID: "request-2", UpstreamRequestID: "upstream-2", WindowNumberOriginal: "18446744073709551615", WindowNumberOutbound: "0"},
 	}
+	batch[0].TurnStateLength, batch[0].TurnStateDecodedBytes = &length, &decoded
 	if err := db.batchInsertLogsChunk(test.Context(), capture, batch); err != nil {
 		test.Fatal(err)
 	}
@@ -163,6 +165,7 @@ func TestUsageRequestDiagnosticsPostgresBatchShape(test *testing.T) {
 	}
 	for index, entry := range batch {
 		for name, expected := range map[string]interface{}{
+			"turn_state_length": entry.TurnStateLength, "turn_state_decoded_bytes": entry.TurnStateDecodedBytes,
 			"session_id_prefix":      entry.SessionIDPrefix,
 			"window_number_original": entry.WindowNumberOriginal, "window_number_outbound": entry.WindowNumberOutbound,
 			"request_type": entry.RequestType, "request_diagnostics": entry.RequestDiagnostics, "newapi_user_name": entry.NewAPIUserName,

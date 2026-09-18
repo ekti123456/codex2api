@@ -413,6 +413,7 @@ func recordUsageRootAccount(c *gin.Context, accountID int64, found bool) {
 }
 
 func beginUsageSelectionAttempt(c *gin.Context, attempt int) {
+	beginUsageTurnStateAttempt(c)
 	if state := usageRequestDiagnosticState(c); state != nil {
 		state.Attempt = attempt
 		state.UserWindow, state.AccountWindow = "not_reached", "not_reached"
@@ -425,6 +426,7 @@ func populateUsageRequestDiagnostics(c *gin.Context, input *database.UsageLogInp
 	if input == nil {
 		return
 	}
+	populateUsageTurnState(c, input)
 	state := usageRequestDiagnosticState(c)
 	if state == nil {
 		return

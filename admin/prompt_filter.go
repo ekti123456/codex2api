@@ -422,13 +422,15 @@ type promptFilterRulePatternTestResponse struct {
 }
 
 type promptFilterRuleItem struct {
-	Name     string `json:"name"`
-	Pattern  string `json:"pattern"`
-	Weight   int    `json:"weight"`
-	Category string `json:"category,omitempty"`
-	Strict   bool   `json:"strict,omitempty"`
-	Enabled  bool   `json:"enabled"`
-	Builtin  bool   `json:"builtin"`
+	Overridden bool                                 `json:"overridden"`
+	Default    *promptfilter.BuiltinPatternOverride `json:"default,omitempty"`
+	Name       string                               `json:"name"`
+	Pattern    string                               `json:"pattern"`
+	Weight     int                                  `json:"weight"`
+	Category   string                               `json:"category,omitempty"`
+	Strict     bool                                 `json:"strict,omitempty"`
+	Enabled    bool                                 `json:"enabled"`
+	Builtin    bool                                 `json:"builtin"`
 }
 
 type promptFilterRulesResponse struct {
@@ -1173,21 +1175,41 @@ func (h *Handler) TestPromptFilterRulePattern(c *gin.Context) {
 
 func (h *Handler) GetPromptFilterRules(c *gin.Context) {
 	cfg := h.store.GetPromptFilterConfig()
+	// Read authoritative edits for administrator conflict detection, including
+	// edits made on another replica before its runtime synchronization fires.
+	if h.db != nil {
+		settings, err := h.db.GetSystemSettings(c.Request.Context())
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "读取内置规则配置失败")
+			return
+		}
+		if settings != nil {
+			cfg.BuiltinOverrides, err = promptfilter.ParseBuiltinPatternOverrides(settings.PromptFilterBuiltinOverrides)
+			if err != nil {
+				writeError(c, http.StatusInternalServerError, "内置规则配置无效")
+				return
+			}
+		}
+	}
 	disabled := map[string]bool{}
 	for _, name := range cfg.DisabledPatterns {
 		disabled[strings.ToLower(strings.TrimSpace(name))] = true
 	}
-	builtin := promptfilter.BuiltinPatternConfigs()
+	defaults := promptfilter.BuiltinPatternConfigs()
+	builtin := promptfilter.EffectiveBuiltinPatternConfigs(cfg.BuiltinOverrides)
 	items := make([]promptFilterRuleItem, 0, len(builtin))
-	for _, pattern := range builtin {
+	for i, pattern := range builtin {
+		original := promptfilter.BuiltinPatternFields(defaults[i])
 		items = append(items, promptFilterRuleItem{
-			Name:     pattern.Name,
-			Pattern:  pattern.Pattern,
-			Weight:   pattern.Weight,
-			Category: pattern.Category,
-			Strict:   pattern.Strict,
-			Enabled:  !disabled[strings.ToLower(strings.TrimSpace(pattern.Name))],
-			Builtin:  true,
+			Default:    &original,
+			Overridden: promptfilter.BuiltinPatternFields(pattern) != original,
+			Name:       pattern.Name,
+			Pattern:    pattern.Pattern,
+			Weight:     pattern.Weight,
+			Category:   pattern.Category,
+			Strict:     pattern.Strict,
+			Enabled:    !disabled[strings.ToLower(strings.TrimSpace(pattern.Name))],
+			Builtin:    true,
 		})
 	}
 	c.JSON(http.StatusOK, promptFilterRulesResponse{
