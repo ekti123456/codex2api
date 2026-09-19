@@ -187,10 +187,11 @@ func TestExecuteRequestKeepsFingerprintCarriersAligned(test *testing.T) {
 	SetResinConfig(&ResinConfig{BaseURL: server.URL, PlatformName: "metadata-test"})
 	for _, mode := range []string{auth.CodexFingerprintModeOff, auth.CodexFingerprintModeDevice, auth.CodexFingerprintModeSession, auth.CodexFingerprintModeFull} {
 		test.Run(mode, func(test *testing.T) {
-			account := &auth.Account{DBID: 1902, AccessToken: "dummy-token", CodexFingerprintMode: mode}
+			account := &auth.Account{DBID: 1902, AccessToken: "dummy-token", CodexFingerprintMode: mode, CodexInstallationID: "account-device"}
 			headers, body := fingerprintMetadataFixture(test, "root", "child", "parent", "fork", 4)
 			expected := NewCodexTransportFingerprint(account, headers, body, "isolated-cache").ApplyBody(body)
 			expectedMetadata, _ := sjson.Set(gjson.GetBytes(expected, "client_metadata.x-codex-turn-metadata").String(), "analytics_enabled", false)
+			expectedMetadata, _ = sjson.Set(expectedMetadata, "installation_id", "account-device")
 			expected, _ = sjson.SetBytes(expected, "client_metadata.x-codex-turn-metadata", expectedMetadata)
 			response, err := ExecuteRequest(context.Background(), account, body, "isolated-cache", "", "key", nil, headers, false)
 			if err != nil {

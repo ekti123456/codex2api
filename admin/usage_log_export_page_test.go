@@ -15,12 +15,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func waitUsageExportFixtureRows(test *testing.T, db *database.DB, count int) {
+	test.Helper()
+	// The background writer may already own a dequeued batch when the explicit
+	// flush sees an empty queue. Start the export only after all fixture rows
+	// are durable; export snapshots intentionally exclude later commits.
+	require.Eventually(test, func() bool {
+		rows, err := db.ListRecentUsageLogs(test.Context(), count+1)
+		return err == nil && len(rows) == count
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
 func TestUsageLogExportPagesFreezeSnapshotAndKeepExactDiagnosticNumbers(test *testing.T) {
 	handler := &Handler{db: newTestAdminDB(test)}
 	for index := 0; index < 250; index++ {
 		require.NoError(test, handler.db.InsertUsageLog(test.Context(), &database.UsageLogInput{StatusCode: 200, RequestType: "user", NewAPIUserName: "paged-user", RequestID: fmt.Sprintf("original-%d", index), RequestDiagnostics: `{"counter":9007199254740993,"Authorization":"Bearer never-export"}`}))
 	}
 	handler.db.FlushUsageLogs()
+	waitUsageExportFixtureRows(test, handler.db, 250)
 	query := url.Values{"scope": {"all"}, "confirmed": {"true"}, "paged": {"true"}}
 	seen := make(map[int64]bool)
 	metadata := ""
@@ -63,6 +75,7 @@ func TestUsageLogExportPagesFreezeSnapshotAndKeepExactDiagnosticNumbers(test *te
 		if pageIndex == 0 {
 			require.NoError(test, handler.db.InsertUsageLog(test.Context(), &database.UsageLogInput{StatusCode: 200, RequestID: "new-during-export"}))
 			handler.db.FlushUsageLogs()
+			waitUsageExportFixtureRows(test, handler.db, 251)
 		}
 	}
 	require.Len(test, seen, 250)
@@ -107,6 +120,7 @@ func TestUsageLogExportPageByteLimitDoesNotSkipTheNextRecord(test *testing.T) {
 		require.NoError(test, handler.db.InsertUsageLog(test.Context(), &database.UsageLogInput{StatusCode: 200, RequestID: fmt.Sprintf("large-%d", index), RequestDiagnostics: diagnostic}))
 	}
 	handler.db.FlushUsageLogs()
+	waitUsageExportFixtureRows(test, handler.db, 55)
 	query := url.Values{"scope": {"all"}, "confirmed": {"true"}, "paged": {"true"}}
 	seen := make(map[int64]bool)
 	for pageIndex := 0; pageIndex < 5; pageIndex++ {

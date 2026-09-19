@@ -126,10 +126,12 @@ func TestSessionFailoverCapacityGuidanceIsDistinctFromModelUnavailable(t *testin
 		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), sessionAccountFailoverContextKey{}, plan))
 		failure := sessionFailoverUnavailableAPIError(c)
 		require.Equal(t, api.ErrCodeNoAvailableAccount, failure.Code)
-		require.Contains(t, failure.Message, "请稍后手动重试")
-		require.NotContains(t, failure.Message, "新建对话")
+		if reason == "account_session_capacity_full" {
+			require.Equal(t, sessionFailoverCapacityMessage, failure.Message)
+		} else {
+			require.Equal(t, sessionFailoverUnavailableMessage, failure.Message)
+		}
 		require.NotContains(t, failure.Message, "gpt-5.6")
-		require.Equal(t, reason == "account_session_capacity_full", strings.Contains(failure.Message, "处理容量暂时不足"))
 	}
 }
 

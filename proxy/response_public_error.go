@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/codex2api/api"
@@ -12,6 +13,24 @@ import (
 )
 
 const publicUpstreamFailureMessage = "上游请求失败，请稍后重试。"
+
+var publicErrorParam = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.\[\]]{0,127}$`)
+
+func publicProtocolError(c *gin.Context, raw json.RawMessage) json.RawMessage {
+	body, _ := json.Marshal(map[string]json.RawMessage{"error": raw})
+	apiErr := publicUpstreamAPIError(c, body, 502, "upstream_error")
+	value := gjson.ParseBytes(raw)
+	encoded, _ := json.Marshal(apiErr)
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(encoded, &fields)
+	if param := value.Get("param"); param.Type == gjson.String && publicErrorParam.MatchString(param.String()) {
+		fields["param"], _ = json.Marshal(param.String())
+	} else if param.Exists() && param.Type == gjson.Null {
+		fields["param"] = json.RawMessage("null")
+	}
+	encoded, _ = json.Marshal(fields)
+	return encoded
+}
 
 // Only fixed, protocol-relevant codes/messages are public. Provider prose,
 // details and unknown codes can all contain private identifiers or credentials.
@@ -49,7 +68,32 @@ func publicErrorMessage(code string) (string, bool) {
 	return "", false
 }
 
-func publicUpstreamAPIError(c *gin.Context, body []byte, status int, fallbackCode string) *api.APIError {
+func publicUpstreamAPIError(c *gin.Context, body []byte, status int, fallbackCode string) (result *api.APIError) {
+	defer func() {
+		if result == nil {
+			return
+		}
+		for _, path := range []string{"error", "response.error", "response.status_details.error", "detail", ""} {
+			value := gjson.ParseBytes(body)
+			if path != "" {
+				value = value.Get(path)
+			}
+			if !value.IsObject() || !value.Get("message").Exists() {
+				continue
+			}
+			switch value.Get("type").String() {
+			case "invalid_request_error", "authentication_error", "permission_error", "not_found_error", "rate_limit_error", "server_error", "service_unavailable_error":
+				if result.Code != "server_is_overloaded" && result.Code != "slow_down" {
+					result.Type = api.ErrorType(value.Get("type").String())
+				}
+			}
+			if param := value.Get("param"); param.Type == gjson.String && publicErrorParam.MatchString(param.String()) {
+				name := param.String()
+				result.Param = &name
+			}
+			break
+		}
+	}()
 	// These constructors produce gateway-owned messages and details. Never
 	// accept a provider's alleged "codex2api_safety" object as trusted metadata.
 	if isUpstreamPromptSafetyRefusal(body) {
@@ -139,20 +183,43 @@ func publicResponseErrorPayload(c *gin.Context, data []byte) []byte {
 			}
 			return raw
 		}
-		if gjson.GetBytes(raw, "type").String() == "error" {
-			errObj, _ := json.Marshal(publicUpstreamAPIError(c, raw, 502, "upstream_error"))
-			out, _ := json.Marshal(map[string]json.RawMessage{"type": json.RawMessage(`"error"`), "error": errObj})
+		if depth == 0 && gjson.GetBytes(raw, "type").String() == "error" {
+			errorValue := object["error"]
+			flat := len(errorValue) == 0
+			if len(errorValue) == 0 {
+				errorValue = raw
+			}
+			result := map[string]json.RawMessage{"type": json.RawMessage(`"error"`), "error": publicProtocolError(c, errorValue)}
+			if flat {
+				var fields map[string]json.RawMessage
+				_ = json.Unmarshal(result["error"], &fields)
+				delete(result, "error")
+				for _, key := range []string{"code", "message", "param"} {
+					if v, ok := fields[key]; ok {
+						result[key] = v
+					}
+				}
+			}
+			for _, key := range []string{"stream_id", "status", "sequence_number"} {
+				v := gjson.ParseBytes(object[key])
+				if key == "stream_id" && v.Type == gjson.String && len(v.String()) <= 256 || key == "status" && v.Type == gjson.Number && v.Int() >= 400 && v.Int() <= 599 || key == "sequence_number" && v.Type == gjson.Number && v.Int() >= 0 {
+					result[key] = object[key]
+				}
+			}
+			out, _ := json.Marshal(result)
 			return out
 		}
 		var kind string
 		_ = json.Unmarshal(object["type"], &kind)
 		for key, v := range object {
-			if !control && responseOpaquePayloadField(kind, key) {
+			if !control && (responseOpaquePayloadField(kind, key) || ResponseToolErrorField(kind, key)) {
 				continue
 			}
+			if !control && key == "moderation" {
+				continue
+			} // its input/output error union is not a transport event
 			if privacyField(key) == "error" && string(v) != "null" {
-				body, _ := json.Marshal(map[string]json.RawMessage{"error": v})
-				object[key], _ = json.Marshal(publicUpstreamAPIError(c, body, 502, "upstream_error"))
+				object[key] = publicProtocolError(c, v)
 				continue
 			}
 			field := privacyField(key)

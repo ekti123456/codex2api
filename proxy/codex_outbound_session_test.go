@@ -145,15 +145,16 @@ func TestCodexOutboundSessionHTTPAndCompactFinalBytes(test *testing.T) {
 				require.Equal(test, upstream, gjson.GetBytes(sent.body, "prompt_cache_key").String())
 				require.Equal(test, gjson.GetBytes(originalBody, "input").Raw, gjson.GetBytes(sent.body, "input").Raw)
 				identity := &outboundIdentityDiagnostic{HTTP: CaptureOutboundIdentityHeaders(sent.headers), Body: captureOutboundIdentityBody(sent.body)}
-				if mode == "aligned" {
+				{
 					require.Equal(test, "root", sent.headers.Get(codexSessionIDHeader))
 					require.Empty(test, sent.headers.Get(codexLegacySessionIDHeader))
 					require.Empty(test, sent.headers.Get(codexConversationIDHeader))
-					require.Equal(test, "matched", outboundSessionConsistency(identity))
-				} else {
-					require.Equal(test, "custom-session", sent.headers.Get(codexSessionIDHeader))
-					require.Equal(test, "root", gjson.GetBytes(sent.body, "client_metadata.session_id").String())
-					require.Equal(test, "mismatched", outboundSessionConsistency(identity))
+					if endpoint == "compact" {
+						require.False(test, gjson.GetBytes(sent.body, "client_metadata").Exists())
+						require.Equal(test, "root", gjson.Get(sent.headers.Get(codexTurnMetadataHeader), "session_id").String())
+					} else {
+						require.Equal(test, "matched", outboundSessionConsistency(identity))
+					}
 				}
 				require.Equal(test, originalBody, body)
 				require.Equal(test, originalHeaders, headers)

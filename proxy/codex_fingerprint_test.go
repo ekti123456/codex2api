@@ -617,13 +617,16 @@ func TestExecuteCompactRequestConvergesBodyAndHeaders(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
+	if gjson.GetBytes(capturedBody, "client_metadata").Exists() {
+		t.Fatal("compact must not send client_metadata")
+	}
 	for _, tc := range []struct{ path, want string }{
-		{"client_metadata.x-codex-installation-id", ids.installationID},
-		{"client_metadata.session_id", "client-session"},
-		{"client_metadata.thread_id", "client-thread"},
-		{"client_metadata.x-codex-window-id", "client-window:0"},
+		{"installation_id", ids.installationID},
+		{"session_id", "client-session"},
+		{"thread_id", "client-thread"},
+		{"window_id", "client-window:0"},
 	} {
-		if got := gjson.GetBytes(capturedBody, tc.path).String(); got != tc.want {
+		if got := gjson.Get(capturedHeader.Get(codexTurnMetadataHeader), tc.path).String(); got != tc.want {
 			t.Fatalf("outbound %s = %q, want converged %q", tc.path, got, tc.want)
 		}
 	}
@@ -631,7 +634,7 @@ func TestExecuteCompactRequestConvergesBodyAndHeaders(t *testing.T) {
 	if got := capturedHeader.Get(codexInstallationIDHeader); got != ids.installationID {
 		t.Fatalf("outbound %s = %q, want %q", codexInstallationIDHeader, got, ids.installationID)
 	}
-	if got := gjson.GetBytes(capturedBody, "client_metadata.x-codex-installation-id").String(); got != capturedHeader.Get(codexInstallationIDHeader) {
+	if got := gjson.Get(capturedHeader.Get(codexTurnMetadataHeader), "installation_id").String(); got != capturedHeader.Get(codexInstallationIDHeader) {
 		t.Fatalf("header/body installation id disagree: body=%q header=%q", got, capturedHeader.Get(codexInstallationIDHeader))
 	}
 }

@@ -164,7 +164,9 @@ func TestSessionAccountFailoverDispatchAndRestore(test *testing.T) {
 		session := request.Header.Get("Session-Id")
 		require.NotEqual(test, continuityTestThread, session)
 		require.Equal(test, session, request.Header.Get("Thread-Id"))
-		require.Equal(test, session, gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata.session_id").String())
+		metadata := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata")
+		require.Equal(test, gjson.String, metadata.Type)
+		require.Equal(test, session, gjson.Parse(metadata.String()).Get("session_id").String())
 		require.Equal(test, target.AccountID, request.Header.Get("Chatgpt-Account-Id"))
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(writer, `{"id":"new-response"}`)
@@ -234,7 +236,14 @@ func runSessionAccountFailoverIngress(test *testing.T, compact bool, preserve ..
 			require.Contains(test, string(body), "current plaintext")
 			require.Empty(test, request.Header.Get("X-Codex-Turn-State"))
 		}
-		headers.Set("test-body-session", gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata.session_id").String())
+		if strings.HasSuffix(request.URL.Path, "/responses/compact") {
+			require.False(test, gjson.GetBytes(body, "client_metadata").Exists())
+			headers.Set("test-body-session", gjson.Get(request.Header.Get("X-Codex-Turn-Metadata"), "session_id").String())
+		} else {
+			metadata := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata")
+			require.Equal(test, gjson.String, metadata.Type)
+			headers.Set("test-body-session", gjson.Parse(metadata.String()).Get("session_id").String())
+		}
 		seen <- headers
 		if rejectCipher && request.Header.Get("Chatgpt-Account-Id") == target.AccountID {
 			rejected.Add(1)

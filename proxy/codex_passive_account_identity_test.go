@@ -72,10 +72,17 @@ func TestCodexAccountIdentityPassiveHTTPAndCompact(test *testing.T) {
 					require.NotEqual(test, accountIdentitySampleRoot, session)
 					require.NotEqual(test, accountIdentitySampleRoot[:13], session[:13])
 					require.Equal(test, account.AccountID, sent.headers.Get("Chatgpt-Account-Id"))
-					require.Equal(test, session, gjson.GetBytes(sent.body, "client_metadata.session_id").String())
-					require.Equal(test, thread, gjson.GetBytes(sent.body, "client_metadata.thread_id").String())
+					if source == "compaction" {
+						require.False(test, gjson.GetBytes(sent.body, "client_metadata").Exists())
+					} else {
+						require.Equal(test, session, gjson.GetBytes(sent.body, "client_metadata.session_id").String())
+						require.Equal(test, thread, gjson.GetBytes(sent.body, "client_metadata.thread_id").String())
+					}
 					require.Equal(test, thread, sent.headers.Get("X-Client-Request-Id"))
 					metadata := diagnosticMetadataObject(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata"))
+					if source == "compaction" {
+						metadata = gjson.Parse(sent.headers.Get(codexTurnMetadataHeader))
+					}
 					require.Equal(test, source, metadata.Get("thread_source").String())
 					if child {
 						require.NotEqual(test, session, thread)
@@ -83,7 +90,9 @@ func TestCodexAccountIdentityPassiveHTTPAndCompact(test *testing.T) {
 					} else {
 						require.False(test, metadata.Get("parent_thread_id").Exists())
 					}
-					require.Equal(test, "matched", outboundSessionConsistency(&outboundIdentityDiagnostic{HTTP: CaptureOutboundIdentityHeaders(sent.headers), Body: captureOutboundIdentityBody(sent.body)}))
+					if source != "compaction" {
+						require.Equal(test, "matched", outboundSessionConsistency(&outboundIdentityDiagnostic{HTTP: CaptureOutboundIdentityHeaders(sent.headers), Body: captureOutboundIdentityBody(sent.body)}))
+					}
 					if attempt == 0 {
 						sameAccountSession = session
 						require.NotEqual(test, previousSession, session)

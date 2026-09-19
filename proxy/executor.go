@@ -376,11 +376,8 @@ var codexAllowedForwardHeaders = []string{
 	"X-OpenAI-Memgen-Request",
 	"X-Codex-Beta-Features",
 	codexResponsesLiteHeader,
-	// DeviceCheck 设备认证头（上游 openai/codex#20619）。仅在下游真实 Codex
-	// 客户端携带时原样透传——本代理无法（也不该）伪造：token 是 Apple 硬件
-	// 背书、服务端向 Apple 验证，假值必然验证失败、比"不携带"更暴露特征。
-	// 缺失是合法状态（纯 CLI / 非 macOS 客户端本就不发）。
-	"X-Oai-Attestation",
+	// Attestation is deliberately absent: only account-owned credentials may
+	// be added by ApplyCodexAccountAttestation after this client allowlist.
 }
 
 func codexResponsesLiteRequested(requestBody []byte, headers http.Header) bool {
@@ -555,6 +552,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	if upstreamErr != nil {
 		return nil, upstreamErr
 	}
+	requestBody, headers = PrepareCodexOutboundMetadata(account, requestBody, headers)
 	headers = CodexRequestMetadataHeaders(headers, requestBody)
 	// lite 信号收敛：签名在 payload 规则改写后采集（规则可注入/删除 WS 标记，改写
 	// 前采集会让注入失效、删除被回填），模型也已被入口映射/规则定稿——已知不支持
@@ -643,6 +641,14 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	cacheKey = fingerprint.ScopeCacheKey(ctx, cacheKey)
 	ctx = fingerprint.withAccountIdentityDiagnostic(ctx)
 	requestBody = fingerprint.ApplyBody(requestBody)
+	requestBody, upstreamErr = PrepareCodexFunctionalFields(ctx, account, requestBody, headers, apiKey)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
+	requestBody, upstreamErr = prepareCodexHTTPControls(requestBody)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
 
 	account.Mu().RLock()
 	accessToken := account.AccessToken
@@ -695,6 +701,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 
 	endpoint := CodexBaseURL + "/responses"
 	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
+	requestBody, headers = FinalizeCodexOutboundMetadata(requestBody, headers)
 
 	// 出站字节在选客户端之前定稿：send() 会因 Agent Identity 401 重注册而重放，
 	// 两次重放必须发同一份字节。routing hint 等需要读字段的改写点继续用明文
@@ -719,6 +726,8 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		// ==================== 请求头（伪装 Codex CLI） ====================
 		applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers, fingerprint)
 		ApplyCodexAnalyticsHeader(req.Header, requestBody)
+		_, req.Header = FinalizeCodexOutboundMetadata(requestBody, req.Header)
+		ApplyCodexAccountAttestation(req.Header, account)
 		// Content-Encoding 在通用头装配之后设置：真实客户端也是在编码完成时才补这个头
 		// （codex-rs/http-client/src/request.rs prepare_encoded_json），且账号自定义头
 		// 不该有能力声明一个与实际字节不符的编码。
@@ -733,6 +742,9 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 			req.Header.Set("X-Resin-Account", ResinAccountID(account))
 		}
 		logCodexFingerprintDebug("http", account, proxyURL, req.Header)
+		if err := ValidateCodexOutboundMetadata(requestBody, req.Header); err != nil {
+			return nil, err
+		}
 
 		if err := ValidateSessionOutboundRequest(ctx, account, requestBody); err != nil {
 			UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
@@ -780,6 +792,18 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	requestBody, headers, upstreamErr = prepareRelayOutboundPrivacy(ctx, account, requestBody, headers)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
+	requestBody, upstreamErr = PrepareCodexFunctionalFields(ctx, account, requestBody, headers, "")
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
+	requestBody, upstreamErr = prepareCodexHTTPControls(requestBody)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
 	resetUpstreamUserAgentAudit(ctx)
 	resetWsAcquireAudit(ctx)
 	var encryptedAttempt *encryptedContentAttempt
@@ -820,6 +844,7 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 	send := func(body []byte) (*http.Response, error) {
 		body = StripCodexProjectMetadata(body)
 		body, headers = PrepareCodexTurnStateOutbound(ctx, account, body, headers)
+		body, _ = FinalizeCodexOutboundMetadata(body, headers)
 		if err := ValidateSessionOutboundRequest(ctx, account, body); err != nil {
 			return nil, err
 		}
@@ -828,6 +853,10 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 			return nil, ErrInternalError("创建请求失败", err)
 		}
 		applyOpenAIResponsesRequestHeaders(req, account, apiKey, headers)
+		req.Header = finalizeRelayOutboundHeaders(body, req.Header)
+		if err := ValidateCodexOutboundMetadata(body, req.Header); err != nil {
+			return nil, err
+		}
 		if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(body, "model").String()); err != nil {
 			return nil, err
 		}
@@ -896,10 +925,7 @@ func ensureCodexClientInstallationMetadata(requestBody []byte, account *auth.Acc
 	}
 
 	seed := ""
-	if headers != nil {
-		seed = strings.TrimSpace(headers.Get("Authorization"))
-	}
-	if seed == "" && account != nil {
+	if account != nil {
 		baseURL, apiKey := account.OpenAIResponsesCredentials()
 		seed = fmt.Sprintf("%d|%s|%s", account.ID(), baseURL, apiKey)
 	}
@@ -945,6 +971,17 @@ func isCodexAccessRestrictedResponse(resp *http.Response) bool {
 // 上游自己的 compact 端点，从而让没有官方 Codex OAuth 账号、仅接入中转的用户也能
 // 触发上下文自动压缩（参见 issue #174）。compact 始终为非流式。
 func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Account, requestBody []byte, proxyOverride string, headers http.Header) (upstreamResponse *http.Response, upstreamErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestBody, headers, upstreamErr = prepareRelayOutboundPrivacy(ctx, account, requestBody, headers)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
+	requestBody, upstreamErr = PrepareCodexFunctionalFields(ctx, account, requestBody, headers, "")
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
 	defer func() { finishTurnStateResponse(ctx, account, &upstreamResponse, &upstreamErr) }()
 	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
 	if ctx == nil {
@@ -972,6 +1009,8 @@ func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Acc
 	endpoint := auth.OpenAIResponsesEndpoint(baseURL, "/v1/responses/compact")
 	requestBody = StripCodexProjectMetadata(requestBody)
 	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
+	metadataBody := requestBody
+	requestBody = prepareCodexCompactFields(requestBody)
 	if err := ValidateSessionOutboundRequest(ctx, account, requestBody); err != nil {
 		return nil, err
 	}
@@ -980,6 +1019,10 @@ func ExecuteOpenAIResponsesCompactRequest(ctx context.Context, account *auth.Acc
 		return nil, ErrInternalError("创建请求失败", err)
 	}
 	applyOpenAIResponsesRequestHeaders(req, account, apiKey, headers)
+	req.Header = finalizeRelayOutboundHeaders(metadataBody, req.Header)
+	if err := ValidateCodexOutboundMetadata(requestBody, req.Header); err != nil {
+		return nil, err
+	}
 
 	if err := ConsumeAPIKeyModelRequestQuota(ctx, gjson.GetBytes(requestBody, "model").String()); err != nil {
 		return nil, err
@@ -1050,6 +1093,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 		cacheKey = sessionID
 	}
 	cacheKey = ScopeCodexPromptCacheKey(ctx, cacheKey)
+	requestBody, headers = PrepareCodexOutboundMetadata(account, requestBody, headers)
 	requestBody, headers = ApplyCodexAnalyticsMetadata(requestBody, headers)
 	fingerprint := NewCodexTransportFingerprint(account, headers, requestBody, cacheKey, ctx)
 	if err := fingerprint.ClaimSessionIdentity(ctx, account, apiKey); err != nil {
@@ -1059,6 +1103,10 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	cacheKey = fingerprint.ScopeCacheKey(ctx, cacheKey)
 	ctx = fingerprint.withAccountIdentityDiagnostic(ctx)
 	requestBody = fingerprint.ApplyBody(requestBody)
+	requestBody, upstreamErr = PrepareCodexFunctionalFields(ctx, account, requestBody, headers, apiKey)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
 	requestBody = ApplyCodexOutboundLocation(ctx, requestBody, proxyURL)
 
 	if cacheKey != "" {
@@ -1068,6 +1116,11 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	// compact 端点
 	endpoint := CodexBaseURL + "/responses/compact"
 	requestBody, headers = PrepareCodexTurnStateOutbound(ctx, account, requestBody, headers)
+	requestBody, headers = FinalizeCodexOutboundMetadata(requestBody, headers)
+	// Compact does not accept client_metadata; retain the sanitized mapped
+	// snapshot in headers only, never regenerate it after this boundary.
+	metadataBody := requestBody
+	requestBody = prepareCodexCompactFields(requestBody)
 
 	// Resin 反向代理模式
 	var client *http.Client
@@ -1085,6 +1138,8 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 
 	applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers, fingerprint)
 	ApplyCodexAnalyticsHeader(req.Header, requestBody)
+	_, req.Header = FinalizeCodexOutboundMetadata(metadataBody, req.Header)
+	ApplyCodexAccountAttestation(req.Header, account)
 	// routing hint 由网关按最终出站 body 合成，须在账号自定义头之后设置。
 	ApplyCodexRoutingHint(req.Header, account, requestBody)
 
@@ -1092,6 +1147,9 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 		req.Header.Set("X-Resin-Account", ResinAccountID(account))
 	}
 	logCodexFingerprintDebug("compact", account, proxyURL, req.Header)
+	if err := ValidateCodexOutboundMetadata(requestBody, req.Header); err != nil {
+		return nil, err
+	}
 
 	if err := ValidateSessionOutboundRequest(ctx, account, requestBody); err != nil {
 		UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
@@ -1316,6 +1374,8 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 	if len(fingerprints) > 0 {
 		fingerprints[0].ApplySessionHeaders(req.Header)
 	}
+	ApplyCodexAccountClientIdentity(req.Header, account, apiKey, deviceCfg, true)
+	ApplyCodexAccountAttestation(req.Header, account)
 	_, req.Header = PrepareCodexTurnStateOutbound(req.Context(), account, nil, req.Header)
 	StripCodexProjectMetadataHeaders(req.Header)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
@@ -1389,6 +1449,8 @@ func applyOpenAIResponsesRequestHeaders(req *http.Request, account *auth.Account
 	applyAccountCustomHeaders(req, account)
 	_, req.Header = PrepareCodexTurnStateOutbound(req.Context(), account, nil, req.Header)
 	StripCodexProjectMetadataHeaders(req.Header)
+	ApplyCodexAccountAttestation(req.Header, account)
+	ApplyCodexAccountClientIdentity(req.Header, account, "", nil, true)
 	RecordUpstreamUserAgent(req.Context(), req.Header.Get("User-Agent"))
 }
 

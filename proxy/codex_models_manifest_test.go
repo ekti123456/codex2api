@@ -46,6 +46,44 @@ func TestListModelsOrManifest_DispatchesByClientVersion(t *testing.T) {
 	}
 }
 
+func TestModelsManifestUsesAccountVersionInsteadOfCallerFingerprint(t *testing.T) {
+	t.Setenv("CODEX_TRANSPORT_MODE", "standard")
+	configureCodexAuxiliaryIdentity(t, "codex-tui", ClientCompatModeForce)
+	observed := make(chan http.Header, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("client_version") != "0.153.4" {
+			t.Errorf("outbound query version = %q", r.URL.RawQuery)
+		}
+		observed <- r.Header.Clone()
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	previous := codexModelsManifestURLForTest
+	codexModelsManifestURLForTest = server.URL
+	t.Cleanup(func() { codexModelsManifestURLForTest = previous })
+	store := auth.NewStore(nil, nil, nil)
+	t.Cleanup(store.Stop)
+	store.AddAccount(&auth.Account{DBID: 9819, AccessToken: "fake-account-token", Status: auth.StatusReady})
+	handler := NewHandler(store, nil, nil, nil)
+	router := gin.New()
+	router.GET("/v1/models", handler.listModelsOrManifest)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/models?client_version=0.140.0", nil)
+	request.Header.Set("User-Agent", "Codex Desktop/0.140.0 (private-machine)")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case headers := <-observed:
+		if headers.Get("Version") != "0.153.4" || strings.Contains(headers.Get("User-Agent"), "private-machine") {
+			t.Fatalf("upstream client profile=%v", headers)
+		}
+	default:
+		t.Fatal("expected an upstream manifest request")
+	}
+}
+
 func TestListModelsOrManifestServesAntigravityAsCodexManifest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2})

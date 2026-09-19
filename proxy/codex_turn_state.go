@@ -41,6 +41,7 @@ func relayCodexTurnStateResponseHeader(c *gin.Context, affinityKey string, accou
 		return
 	}
 	relayUpstreamFirstResponseHeaders(c, headers)
+	relayFunctionalResponseHeaders(c, headers)
 	token := ""
 	if headers != nil {
 		token = strings.TrimSpace(headers.Get(codexTurnStateHeader))
@@ -72,6 +73,7 @@ func (h *Handler) commitResponsesStreamAttempt(c *gin.Context, attempt *continuo
 	}
 	if c != nil && c.Writer != nil && !c.Writer.Written() {
 		relayUpstreamFirstResponseHeaders(c, headers)
+		relayFunctionalResponseHeaders(c, headers)
 		stagedHeader = true
 		if token == "" {
 			ClearCodexTurnStateHeaders(c.Writer.Header())
@@ -88,6 +90,7 @@ func (h *Handler) commitResponsesStreamAttempt(c *gin.Context, attempt *continuo
 		if stagedHeader && c != nil && c.Writer != nil && !c.Writer.Written() {
 			ClearCodexTurnStateHeaders(c.Writer.Header())
 			clearUpstreamFirstResponseHeaders(c.Writer.Header())
+			clearFunctionalResponseHeaders(c.Writer.Header())
 		}
 		return err
 	}

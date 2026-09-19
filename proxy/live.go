@@ -76,6 +76,7 @@ type liveCallRecord struct {
 	Controller            string    `json:"controller"`
 	ControllerOwner       string    `json:"controller_owner,omitempty"`
 	AttestationCiphertext string    `json:"attestation_ciphertext,omitempty"`
+	AttestationSource     string    `json:"attestation_source,omitempty"`
 	UserAgent             string    `json:"user_agent,omitempty"`
 	ClientIP              string    `json:"client_ip,omitempty"`
 	InboundEndpoint       string    `json:"inbound_endpoint,omitempty"`
@@ -240,17 +241,6 @@ func (h *Handler) LiveCreate(c *gin.Context) {
 		}
 	}()
 
-	attestation, ciphertext, err := h.prepareLiveAttestation(c.Request.Context(), c.GetHeader(liveAttestationHeader))
-	if err != nil {
-		var attErr *liveAttestationError
-		if errors.As(err, &attErr) {
-			api.SendErrorWithStatus(c, api.NewAPIError(api.ErrCodeServiceUnavailable, attErr.Error(), api.ErrorTypeServer), http.StatusServiceUnavailable)
-			return
-		}
-		api.SendErrorWithStatus(c, api.NewAPIError(api.ErrCodeServiceUnavailable, err.Error(), api.ErrorTypeServer), http.StatusServiceUnavailable)
-		return
-	}
-
 	apiKeyID := requestAPIKeyID(c)
 	apiKey := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
 	filter := applyAffinityGroupRouting(c, resolveRequestSessionIdentity(c.Request.Header, request.Session), liveAccountFilter)
@@ -272,6 +262,14 @@ func (h *Handler) LiveCreate(c *gin.Context) {
 			return
 		}
 
+		// Use the selected account's credential or this host's provider. Client
+		// attestation must never become a reusable upstream account credential.
+		attestation, ciphertext, attestationErr := h.prepareLiveAttestation(c.Request.Context(), codexAccountHeader(account, liveAttestationHeader))
+		if attestationErr != nil {
+			h.store.Release(account)
+			api.SendErrorWithStatus(c, api.NewAPIError(api.ErrCodeServiceUnavailable, attestationErr.Error(), api.ErrorTypeServer), http.StatusServiceUnavailable)
+			return
+		}
 		created, status, contentType, body, createErr := h.createUpstreamLiveCall(c.Request.Context(), account, request, attestation, c.Request.Header, apiKey)
 		if createErr != nil || created == nil {
 			excluded[account.ID()] = true
@@ -306,6 +304,7 @@ func (h *Handler) LiveCreate(c *gin.Context) {
 			ExpiresAt:             now.Add(liveMaxSessionDuration),
 			Controller:            liveControllerPending,
 			AttestationCiphertext: ciphertext,
+			AttestationSource:     "account_or_server",
 			UserAgent:             c.GetHeader("User-Agent"),
 			ClientIP:              c.ClientIP(),
 			InboundEndpoint:       liveInboundEndpoint(c),
@@ -413,6 +412,7 @@ func (h *Handler) applyLiveUpstreamHeaders(req *http.Request, account *auth.Acco
 	applyCodexAllowedForwardHeaders(req, downstream)
 	ApplyCodexFingerprintHeaders(req.Header, account, downstream)
 	applyAccountCustomHeaders(req, account)
+	ApplyCodexAccountClientIdentity(req.Header, account, apiKey, h.deviceCfg, true)
 	StripCodexProjectMetadataHeaders(req.Header)
 	req.Header.Set("OpenAI-Alpha", "quicksilver=v2")
 	req.Header.Del("OpenAI-Beta")
@@ -427,8 +427,8 @@ func (h *Handler) applyLiveUpstreamHeaders(req *http.Request, account *auth.Acco
 	}
 }
 
-func (h *Handler) prepareLiveAttestation(ctx context.Context, clientHeader string) (string, string, error) {
-	header := strings.TrimSpace(clientHeader)
+func (h *Handler) prepareLiveAttestation(ctx context.Context, accountHeader string) (string, string, error) {
+	header := strings.TrimSpace(accountHeader)
 	if header == "" {
 		generated, err := generateLiveAttestation(ctx)
 		if err != nil || strings.TrimSpace(generated) == "" {
@@ -450,6 +450,9 @@ func (h *Handler) prepareLiveAttestation(ctx context.Context, clientHeader strin
 func (h *Handler) decryptLiveAttestation(record *liveCallRecord) (string, error) {
 	if record == nil || strings.TrimSpace(record.AttestationCiphertext) == "" {
 		return "", &liveAttestationError{Reason: "the Live call has no reusable attestation"}
+	}
+	if record.AttestationSource != "account_or_server" {
+		return "", &liveAttestationError{Reason: "the Live call has no verified server-owned attestation; please create a new call"}
 	}
 	plain, err := decryptLiveAttestation(record.AttestationCiphertext, h.liveAttestationSecret())
 	if err != nil {

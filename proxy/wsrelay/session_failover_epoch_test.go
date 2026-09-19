@@ -300,7 +300,7 @@ func runWebsocketToolFailoverScenario(test *testing.T, native, keepInput, quota 
 			require.NotEqual(test, originalTurn, mappedTurn)
 			require.Equal(test, mappedTurn, meta.Get("root_turn_id").String())
 			require.Equal(test, mappedTurn, gjson.GetBytes(sent.body, "client_metadata.turn_id").String())
-			require.Equal(test, mappedTurn, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").String())
+			require.False(test, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").Exists(), "pooled handshake must not retain a per-turn snapshot")
 			mappedTurns = append(mappedTurns, mappedTurn)
 			require.False(test, gjson.GetBytes(sent.body, "account_mapping").Exists())
 			require.Equal(test, originalTurn, gjson.GetBytes(body, "client_metadata.turn_id").String())

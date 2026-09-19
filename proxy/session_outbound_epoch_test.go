@@ -112,10 +112,16 @@ func TestSessionAccountFailoverOutboundWindowsAndReturnToAccount(test *testing.T
 		session := sent.headers.Get("Session-Id")
 		sessions = append(sessions, session)
 		meta := diagnosticMetadataObject(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata"))
+		if step.compact {
+			require.False(test, gjson.GetBytes(sent.body, "client_metadata").Exists())
+			meta = gjson.Parse(sent.headers.Get(codexTurnMetadataHeader))
+		}
 		require.Equal(test, step.outbound, meta.Get("window_number").Uint())
 		require.Equal(test, fmt.Sprintf("%s:%d", session, step.outbound), meta.Get("window_id").String())
 		require.Equal(test, meta.Get("window_id").String(), sent.headers.Get("X-Codex-Window-Id"))
-		require.Equal(test, meta.Get("window_id").String(), gjson.GetBytes(sent.body, "client_metadata.x-codex-window-id").String())
+		if !step.compact {
+			require.Equal(test, meta.Get("window_id").String(), gjson.GetBytes(sent.body, "client_metadata.x-codex-window-id").String())
+		}
 		require.Equal(test, session, meta.Get("session_id").String())
 		require.Equal(test, original, body)
 		require.Equal(test, step.inbound, continuityRequest(request).Number)

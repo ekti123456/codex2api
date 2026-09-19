@@ -48,6 +48,7 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			if protocol == "ws" {
 				failure := h.dispatchUnavailableAPIError(ctx)
 				require.Equal(t, api.ErrCodeNoAvailableAccount, failure.Code)
+				require.Equal(t, sessionFailoverCapacityMessage, failure.Message)
 				require.Equal(t, 400, api.HTTPStatusCode(failure.Code))
 				require.Equal(t, websocket.ClosePolicyViolation, responsesWSTerminalCloseCode(failure, websocket.CloseTryAgainLater))
 				encoded, err := json.Marshal(failure)
@@ -66,7 +67,7 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			}
 			h.sendDispatchUnavailable(ctx, stream, protocol == "chat_sse")
 			require.Contains(t, recorder.Body.String(), "no_available_account")
-			require.Contains(t, recorder.Body.String(), "请稍后手动重试")
+			require.Contains(t, recorder.Body.String(), sessionFailoverCapacityMessage)
 			require.Contains(t, recorder.Body.String(), `"retryable":false`)
 			require.NotContains(t, recorder.Body.String(), "private-pool")
 			require.NotContains(t, recorder.Body.String(), "account_groups_mismatch")
@@ -83,6 +84,7 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			page := serviceErrorTestPage(t, h)
 			require.Len(t, page.Items, 1)
 			require.Equal(t, "no_available_account", page.Items[0].Code)
+			require.Equal(t, sessionFailoverCapacityMessage, page.Items[0].Message)
 			require.Equal(t, 400, page.Items[0].StatusCode)
 			require.Equal(t, "dispatch", page.Items[0].Stage)
 			require.NotNil(t, page.Items[0].AccountFailover.Selection)

@@ -32,6 +32,13 @@ func NewCodexTransportFingerprint(account *auth.Account, headers http.Header, bo
 	if len(contexts) > 0 && outboundEpochFromContext(contexts[0]).identityKey() != "" {
 		mode = "account"
 	}
+	// New persisted sessions use account identities by default. Explicit legacy
+	// settings and previously persisted preserve policies remain compatible.
+	if strings.TrimSpace(os.Getenv("CODEX_OUTBOUND_SESSION_MODE")) == "" && len(contexts) > 0 && contexts[0] != nil && account != nil && !account.IsRelayStyle() && account.EffectiveAccountID() != "" {
+		if _, ok := contexts[0].Value(codexIdentityClaimerContextKey{}).(CodexIdentityStore); ok {
+			mode = "account"
+		}
+	}
 	if account == nil || account.IsRelayStyle() || (mode != "preserve" && mode != "account") {
 		return fingerprint
 	}
@@ -39,6 +46,7 @@ func NewCodexTransportFingerprint(account *auth.Account, headers http.Header, bo
 	fingerprint.identityValues = codexTransportIdentityValues(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	fingerprint.accountIdentityRequested = mode == "account"
 	fingerprint.accountIdentityInputs = codexAccountIdentityInputs(fingerprint.headers, NormalizeCodexRequestMetadata(body))
+	fingerprint.accountRequestIdentityInputs = codexAccountRequestIdentityInputs(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	fingerprint.accountTurnIdentityInputs = codexAccountTurnIdentityInputs(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	fingerprint.accountIdentityReferences = codexAccountIdentityReferences(fingerprint.headers, NormalizeCodexRequestMetadata(body))
 	fingerprint.accountWindowInputs, fingerprint.accountWindowInputError = codexAccountWindowIdentities(fingerprint.headers, NormalizeCodexRequestMetadata(body))

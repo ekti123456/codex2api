@@ -77,7 +77,7 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 					}
 					return websocketResponseToHTTP(ctx, response, http.StatusOK, nil), nil
 				}
-				account := &auth.Account{DBID: 902, AccountID: "fixture", AccessToken: "dummy-token", CodexFingerprintMode: mode, DynamicConcurrencyLimit: 1}
+				account := &auth.Account{DBID: 902, AccountID: "fixture", AccessToken: "dummy-token", CodexFingerprintMode: mode, CodexInstallationID: "account-device", DynamicConcurrencyLimit: 1}
 				account.CustomHeaders = map[string]string{"X-Codex-Project-Id": "custom-project", "X-Codex-Workspace-Id": "custom-workspace"}
 				stale := make(http.Header)
 				stale.Set("Originator", "codex_cli_rs")
@@ -119,6 +119,7 @@ func TestWebsocketReusedConnectionUsesOnlyCurrentFrameMetadata(test *testing.T) 
 					}
 					expected := proxy.NewCodexTransportFingerprint(account, stale, body, sessionID).ApplyBody(body)
 					expectedMetadata, _ := sjson.Set(gjson.GetBytes(expected, codexTurnMetadataClientPath).String(), "analytics_enabled", false)
+					expectedMetadata, _ = sjson.Set(expectedMetadata, "installation_id", "account-device")
 					expected, _ = sjson.SetBytes(expected, codexTurnMetadataClientPath, expectedMetadata)
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()

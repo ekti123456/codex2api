@@ -28,7 +28,8 @@ func TestCodexHandshakeSnapshotKeepsIdentityAndBoundsMetadata(test *testing.T) {
 	require.Empty(test, headers.Get("X-Codex-Turn-State"))
 	require.LessOrEqual(test, len(headers.Get("X-Codex-Turn-Metadata")), 8192)
 	require.False(test, gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "tool_namespaces_info").Exists())
-	require.EqualValues(test, 2, gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "window_number").Int())
+	require.False(test, gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "window_number").Exists())
+	require.Empty(test, headers.Get("X-Codex-Window-Id"))
 	profile := websocketConnectionProfile(headers)
 	for _, field := range []string{"Session-Id", "Thread-Id", "X-Client-Request-Id", "X-Codex-Parent-Thread-Id", "X-Codex-Forked-From-Thread-Id", "Chatgpt-Account-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "X-Codex-Installation-Id"} {
 		changed := headers.Clone()

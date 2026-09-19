@@ -123,7 +123,11 @@ func testCodexAccountIdentitySingleAndBatchTests(test *testing.T, mode string, u
 		require.False(test, turns[turn])
 		turns[turn] = true
 		require.Equal(test, session, sent.headers.Get("X-Codex-Parent-Thread-Id"))
-		require.Equal(test, thread+":0", sent.headers.Get("X-Codex-Window-Id"))
+		if useWS {
+			require.Empty(test, sent.headers.Get("X-Codex-Window-Id"))
+		} else {
+			require.Equal(test, thread+":0", sent.headers.Get("X-Codex-Window-Id"))
+		}
 		require.Equal(test, "thread_spawn", sent.headers.Get("X-OpenAI-Subagent"))
 		require.Equal(test, "medium", gjson.GetBytes(sent.body, "reasoning.effort").String())
 		require.Empty(test, gjson.GetBytes(sent.body, "instructions").String())
@@ -135,6 +139,8 @@ func testCodexAccountIdentitySingleAndBatchTests(test *testing.T, mode string, u
 			require.NotEqual(test, session, cache)
 		}
 		metadata := gjson.Parse(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata").String())
+		require.Equal(test, thread+":0", metadata.Get("window_id").String())
+		require.Equal(test, int64(0), metadata.Get("window_number").Int())
 		require.Equal(test, "subagent", metadata.Get("thread_source").String())
 		require.Equal(test, session, metadata.Get("session_id").String())
 		require.Equal(test, thread, metadata.Get("thread_id").String())

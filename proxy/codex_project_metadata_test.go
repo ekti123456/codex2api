@@ -167,7 +167,11 @@ func TestCodexProjectMetadataStrippedFromHTTPAndCompact(test *testing.T) {
 				requireNoCodexProjectMetadata(test, sent.body, sent.headers)
 				require.Equal(test, "api-project", sent.headers.Get("OpenAI-Project"))
 				require.Equal(test, "thread", gjson.Get(sent.headers.Get(codexTurnMetadataHeader), "thread_id").String())
-				require.Equal(test, int64(71), gjson.Get(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata").String(), "window_number").Int())
+				metadata := codexTurnMetadata(sent.body, sent.headers)
+				if compact {
+					require.False(test, gjson.GetBytes(sent.body, "client_metadata").Exists())
+				}
+				require.Equal(test, int64(71), metadata.Get("window_number").Int())
 				require.Equal(test, originalBody, body)
 				require.Equal(test, originalHeaders, headers)
 			}
@@ -206,8 +210,13 @@ func TestCodexProjectMetadataStrippedFromResponsesRelay(test *testing.T) {
 		require.NoError(test, response.Body.Close())
 		sent := <-received
 		requireNoCodexProjectMetadata(test, sent.body, sent.headers)
-		require.Equal(test, "api-project", sent.headers.Get("OpenAI-Project"))
-		require.Equal(test, "thread", gjson.GetBytes(sent.body, "client_metadata.thread_id").String())
+		require.Empty(test, sent.headers.Get("OpenAI-Project"), "client project is not the upstream account project")
+		metadata := codexTurnMetadata(sent.body, sent.headers)
+		require.NotEmpty(test, metadata.Get("thread_id").String())
+		require.NotEqual(test, "thread", metadata.Get("thread_id").String())
+		if compact {
+			require.False(test, gjson.GetBytes(sent.body, "client_metadata").Exists())
+		}
 		require.Equal(test, originalHeaders, headers)
 		require.Equal(test, originalBody, body)
 	}

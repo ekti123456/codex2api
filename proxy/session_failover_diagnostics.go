@@ -11,7 +11,7 @@ import (
 )
 
 const sessionFailoverUnavailableMessage = "当前对话暂时无法继续处理请求，请稍后手动重试；若持续失败，请联系服务提供方。"
-const sessionFailoverCapacityMessage = "当前对话的处理容量暂时不足，本次请求未能继续。请稍后手动重试；若持续失败，请联系服务提供方。"
+const sessionFailoverCapacityMessage = "当前对话的账号模型容量暂时不足，切号未能找到可用账号，请新建窗口"
 
 func failoverSelectionLabels(ctx *gin.Context, groups []int64, tags []string) ([]int64, []string, bool) {
 	groups = slices.Clone(groups)

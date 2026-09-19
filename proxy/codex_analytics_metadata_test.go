@@ -139,7 +139,10 @@ func TestCodexAnalyticsHTTPAndCompactFinalTransmission(test *testing.T) {
 				require.NoError(test, err)
 				require.NoError(test, response.Body.Close())
 				sent := <-received
-				metadata := codexTurnMetadata(sent.body, nil)
+				metadata := codexTurnMetadata(sent.body, sent.headers)
+				if endpoint == "compact" {
+					require.False(test, gjson.GetBytes(sent.body, "client_metadata").Exists())
+				}
 				require.Equal(test, gjson.False, metadata.Get("analytics_enabled").Type)
 				require.JSONEq(test, metadata.Raw, sent.headers.Get(codexTurnMetadataHeader))
 				require.Equal(test, "session", metadata.Get("session_id").String())

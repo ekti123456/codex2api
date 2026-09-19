@@ -75,7 +75,9 @@ func ApplyCodexAnalyticsMetadata(body []byte, headers http.Header) ([]byte, http
 
 func ApplyCodexAnalyticsHeader(headers http.Header, body []byte) {
 	if metadata := codexTurnMetadata(body, nil); headers != nil && metadata.IsObject() {
-		headers.Set(codexTurnMetadataHeader, metadata.Raw)
+		// Official compatibility headers omit the unbounded tool inventory.
+		raw, _ := sjson.Delete(metadata.Raw, "tool_namespaces_info")
+		headers.Set(codexTurnMetadataHeader, raw)
 	}
 }
 

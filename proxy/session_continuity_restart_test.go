@@ -73,6 +73,10 @@ func TestContinuityOffRestartsOutboundIdentityAndNumbers(t *testing.T) {
 				sent := <-seen
 				assertSessionTools(t, sent.body)
 				metadata := diagnosticMetadataObject(gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata"))
+				if i%2 != 0 {
+					require.False(t, gjson.GetBytes(sent.body, "client_metadata").Exists())
+					metadata = gjson.Parse(sent.headers.Get(codexTurnMetadataHeader))
+				}
 				session := sent.headers.Get("Session-Id")
 				require.NotEmpty(t, session)
 				require.NotEqual(t, continuityTestThread, session)

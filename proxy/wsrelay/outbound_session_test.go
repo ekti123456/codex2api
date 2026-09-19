@@ -108,7 +108,7 @@ func TestWebsocketOutboundSessionFailureReuseAndHTTP(test *testing.T) {
 		metadata := gjson.GetBytes(sent.body, "client_metadata.x-codex-turn-metadata").String()
 		require.Equal(test, "client-session", gjson.Get(metadata, "session_id").String())
 		if attempt < 2 {
-			require.Equal(test, "client-thread:0", sent.headers.Get("X-Codex-Window-Id"))
+			require.Empty(test, sent.headers.Get("X-Codex-Window-Id"))
 			require.Equal(test, "client-session", gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "session_id").String())
 		}
 		require.Equal(test, "client-thread", gjson.Get(metadata, "thread_id").String())

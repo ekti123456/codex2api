@@ -11,18 +11,20 @@ import (
 )
 
 type CodexFingerprint struct {
-	ids                       *codexFingerprintIDs
-	headers                   http.Header
-	preserveSessionIDs        bool
-	identityValues            []string
-	accountIdentityRequested  bool
-	accountIdentityInputs     []string
-	accountTurnIdentityInputs map[string]codexTurnIdentityInput
-	accountIdentityReferences map[string]bool
-	accountWindowInputs       map[string]database.SessionOutboundWindowInput
-	accountWindowInputError   error
-	accountIdentity           *codexAccountIdentity
-	accountIdentityDiagnostic *codexAccountIdentityDiagnostic
+	ids                          *codexFingerprintIDs
+	headers                      http.Header
+	preserveSessionIDs           bool
+	identityValues               []string
+	accountIdentityRequested     bool
+	accountIdentityInputs        []string
+	accountRequestIdentityInputs []string
+	accountTurnIdentityInputs    map[string]codexTurnIdentityInput
+	accountIdentityReferences    map[string]bool
+	accountWindowInputs          map[string]database.SessionOutboundWindowInput
+	accountWindowInputError      error
+	accountIdentity              *codexAccountIdentity
+	accountIdentityDiagnostic    *codexAccountIdentityDiagnostic
+	privateRequestIdentity       *codexAccountIdentity
 }
 
 func NewCodexFingerprint(account *auth.Account, headers http.Header, body []byte) *CodexFingerprint {
@@ -56,6 +58,9 @@ func (fingerprint *CodexFingerprint) ApplyBody(body []byte) []byte {
 	body = applyCodexFingerprintToBody(NormalizeCodexRequestMetadata(body), fingerprint.ids)
 	if fingerprint.accountIdentity != nil {
 		body = fingerprint.accountIdentity.rewriteBody(body)
+	}
+	if fingerprint.privateRequestIdentity != nil {
+		body = fingerprint.privateRequestIdentity.rewriteBody(body)
 	}
 	return StripCodexProjectMetadata(NormalizeCodexRequestMetadata(body))
 }

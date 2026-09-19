@@ -22,7 +22,7 @@ func privateResponseField(key string) bool {
 	case "session", "thread", "conversation", "account", "device", "installation", "project":
 		return true
 	case "sessionid", "threadid", "conversationid", "parentthreadid", "forkedfromthreadid",
-		"contextwindowid", "turnid", "rootturnid", "accountid", "chatgptaccountid", "organizationid",
+		"contextwindowid", "turnid", "rootturnid", "agentname", "accountid", "chatgptaccountid", "organizationid",
 		"organization", "projectid", "installationid", "deviceid", "windowid",
 		"windownumber", "clientrequestid", "requestid", "traceid", "userid", "email", "accountemail",
 		"authorization", "proxyauthorization", "cookie", "setcookie", "accesstoken", "refreshtoken",
@@ -46,12 +46,20 @@ func responseBusinessField(key string) bool {
 // These fields are model/tool payloads only at a protocol position. Callers must
 // never apply this exemption inside metadata, errors or other control subtrees.
 // In particular, response.output is an envelope, while tool-item output is data.
-func responseOpaquePayloadField(kind, key string) bool {
+func ResponseOpaquePayloadField(kind, key string) bool {
 	field := privacyField(key)
 	if responseBusinessField(key) && field != "output" {
 		return true
 	}
 	switch kind {
+	case "program":
+		return field == "code" || field == "fingerprint"
+	case "program_output":
+		return field == "result"
+	case "image_generation_call":
+		return field == "result" || field == "revisedprompt"
+	case "mcp_approval_response":
+		return field == "reason"
 	case "reasoning":
 		return field == "summary"
 	case "computer_call", "web_search_call", "local_shell_call", "shell_call", "apply_patch_call":
@@ -64,8 +72,17 @@ func responseOpaquePayloadField(kind, key string) bool {
 		return field == "output"
 	case "response.code_interpreter_call_code.done":
 		return field == "code"
+	case "response.shell_call_command.added", "response.shell_call_command.done":
+		return field == "command"
 	}
 	return false
+}
+
+func responseOpaquePayloadField(kind, key string) bool { return ResponseOpaquePayloadField(kind, key) }
+
+// Tool errors have their own schema. They are not request/transport errors.
+func ResponseToolErrorField(kind, key string) bool {
+	return privacyField(key) == "error" && (kind == "mcp_call" || kind == "mcp_list_tools")
 }
 
 type responsePrivacyWalker struct {
@@ -150,6 +167,14 @@ func (w responsePrivacyWalker) rewrite(raw json.RawMessage, responseObject, cont
 		var out json.RawMessage
 		var err error
 		switch {
+		case !control && !errorObject && key == "moderation":
+			out, err = w.toolError(value)
+		case !control && !errorObject && ResponseToolErrorField(kind, key):
+			out, err = w.toolError(value)
+		case !control && !errorObject && field == "internalchatmessagemetadatapassthrough":
+			out, err = w.itemMetadata(value)
+		case responseObject && !errorObject && key == "conversation":
+			out, err = w.conversation(value)
 		case privateResponseField(key):
 			delete(object, key)
 			continue
@@ -161,8 +186,8 @@ func (w responsePrivacyWalker) rewrite(raw json.RawMessage, responseObject, cont
 			}
 		case field == "headers":
 			out, err = w.headers(value, errorObject, depth+1)
-		case field == "id" && responseObject || field == "responseid" || field == "previousresponseid":
-			out, err = w.reference(value, (responseObject || depth == 0) && !errorObject)
+		case field == "id" && responseObject || field == "responseid" || field == "previousresponseid" || field == "comparisonresponseid":
+			out, err = w.reference(value, field != "comparisonresponseid" && (responseObject || depth == 0) && !errorObject)
 		case !control && field == "output":
 			// Output item IDs/arguments/content are business data, but an item's
 			// metadata is still a protocol carrier and must not escape filtering.

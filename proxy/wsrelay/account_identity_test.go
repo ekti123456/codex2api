@@ -140,9 +140,11 @@ func TestWebsocketAccountIdentityReuseFailureHTTPAndAccountBoundary(test *testin
 			firstTurn = mappedTurn
 		}
 		if index == 1 {
-			require.Equal(test, firstSession+":0", sent.headers.Get("X-Codex-Window-Id"))
-			require.Equal(test, firstTurn, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").String())
 			require.NotEqual(test, firstTurn, mappedTurn)
+		}
+		if index != 2 {
+			require.Empty(test, sent.headers.Get("X-Codex-Window-Id"))
+			require.False(test, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").Exists())
 		} else {
 			require.Equal(test, mappedTurn, gjson.Get(sent.headers.Get("X-Codex-Turn-Metadata"), "turn_id").String())
 		}

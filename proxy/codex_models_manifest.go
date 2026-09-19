@@ -55,7 +55,7 @@ func (h *Handler) CodexModelsManifestHandler(c *gin.Context) {
 		c.Request.Context(),
 		account,
 		h.store.ResolveProxyForAccount(account),
-		c.Query("client_version"),
+		"", // Select the upstream account/server profile, never the caller's fingerprint.
 		ifNoneMatch,
 	)
 	if err != nil {
@@ -98,6 +98,7 @@ func (h *Handler) CodexModelsManifestHandler(c *gin.Context) {
 	if manifest.NotModified {
 		if manifest.ETag != "" {
 			c.Header("ETag", manifest.ETag)
+			h.manifestSignal(c, "", manifest.ETag)
 		}
 		c.Status(http.StatusNotModified)
 		return
@@ -213,6 +214,7 @@ func (h *Handler) writeCodexManifest(c *gin.Context, body []byte, etag string) {
 		etag = scopedCodexManifestETag(body)
 	}
 	c.Header("ETag", etag)
+	h.manifestSignal(c, "", etag)
 	if etagHeaderMatches(c.GetHeader("If-None-Match"), etag) {
 		c.Status(http.StatusNotModified)
 		return

@@ -52,6 +52,8 @@ func upstreamErrorConsoleBody(body []byte) string {
 
 // Handler API 路由处理器
 type Handler struct {
+	manifestSignalsMu           sync.Mutex
+	manifestSignals             map[string]*codexManifestSignal
 	windowTariffMu              sync.Mutex
 	windowTariffs               map[string]database.UserWindowGrant
 	store                       *auth.Store
@@ -1917,6 +1919,9 @@ func rawRequestBodyFromContext(c *gin.Context) ([]byte, bool) {
 
 func readRawRequestBody(c *gin.Context) ([]byte, error) {
 	if body, ok := rawRequestBodyFromContext(c); ok {
+		if err := validateCodexMetadataDuplicates(body, false, 0); err != nil {
+			return nil, err
+		}
 		c.Set(preservedInputSnapshotKey, body)
 		return body, nil
 	}
@@ -1924,9 +1929,21 @@ func readRawRequestBody(c *gin.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateCodexMetadataDuplicates(body, false, 0); err != nil {
+		return nil, err
+	}
 	setRawRequestBody(c, body)
 	c.Set(preservedInputSnapshotKey, body)
 	return body, nil
+}
+
+func requestBodyReadAPIError(err error) *api.APIError {
+	message := "Failed to read request body"
+	var identityError *Error
+	if errors.As(err, &identityError) {
+		message = identityError.Message
+	}
+	return api.NewAPIError(api.ErrCodeInvalidRequest, message, api.ErrorTypeInvalidRequest)
 }
 
 const ingressRequestBodyContextKey = "ingress_raw_body"
@@ -3999,7 +4016,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	usageRequestDiagnosticState(c).StartedAt = handlerStart.UTC()
 	rawBody, err := readRawRequestBody(c)
 	if err != nil {
-		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Failed to read request body", api.ErrorTypeInvalidRequest))
+		api.SendError(c, requestBodyReadAPIError(err))
 		return
 	}
 	h.capturePromptRequestIngress(c, rawBody)
@@ -6252,7 +6269,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	// 1. 读取请求体
 	rawBody, err := readRawRequestBody(c)
 	if err != nil {
-		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Failed to read request body", api.ErrorTypeInvalidRequest))
+		api.SendError(c, requestBodyReadAPIError(err))
 		return
 	}
 	h.capturePromptRequestIngress(c, rawBody)
@@ -6563,7 +6580,10 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		if deviceCfg == nil {
 			deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
 		}
-		downstreamHeaders := c.Request.Header.Clone()
+		// The compact body translator removes client_metadata. Keep the ingress
+		// snapshot until the selected-account mapper has rewritten history and
+		// headers; only the final compact serializer removes the body carrier.
+		downstreamHeaders := CodexRequestMetadataHeaders(c.Request.Header, rawBody)
 
 		if account.IsOpenAIResponsesAPI() {
 			relayContinuationAttempted = true
@@ -7236,7 +7256,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	// 1. 读取请求体
 	rawBody, err := readRawRequestBody(c)
 	if err != nil {
-		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Failed to read request body", api.ErrorTypeInvalidRequest))
+		api.SendError(c, requestBodyReadAPIError(err))
 		return
 	}
 	h.capturePromptRequestIngress(c, rawBody)

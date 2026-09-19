@@ -85,16 +85,19 @@ type codexInvalidTurnIdentityDiagnostic struct {
 }
 
 type codexAccountIdentity struct {
-	mode          string
-	secret        []byte
-	owner         string
-	account       string
-	epoch         string
-	preserveRoot  bool
-	windowNumbers map[string]uint64
-	aliases       map[string]string
-	turnAliases   map[string]string
-	diagnostic    codexAccountIdentityDiagnostic
+	mode            string
+	secret          []byte
+	owner           string
+	account         string
+	epoch           string
+	preserveRoot    bool
+	windowNumbers   map[string]uint64
+	aliases         map[string]string
+	turnAliases     map[string]string
+	requestAliases  map[string]string
+	diagnostic      codexAccountIdentityDiagnostic
+	protocolDB      *database.DB
+	protocolBinding database.CodexTurnStateBinding
 }
 
 var codexAccountIdentityFields = []string{
@@ -209,6 +212,7 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		return codexAccountIdentityError("出站身份映射密钥不可用，请恢复完整数据库。")
 	}
 	mapping := &codexAccountIdentity{mode: policy.Mode, secret: secret, owner: owner, account: upstreamAccount, epoch: epochKey, preserveRoot: preserveRoot, aliases: make(map[string]string)}
+	mapping.protocolDB, mapping.protocolBinding = protocolIdentityBinding(ctx, account)
 	if err := fingerprint.prepareAccountWindows(ctx, mapping, epoch); err != nil {
 		return err
 	}
@@ -353,15 +357,27 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		return err
 	}
 	claims = append(claims, turnPlan.claims...)
-	if err := store.ClaimCodexIdentityAliases(ctx, claims); err != nil {
-		if errors.Is(err, database.ErrCodexIdentityAliasCollision) {
-			return codexAccountIdentityError("出站会话标识发生冲突，已停止请求，请联系管理员。")
+	for start := 0; start < len(claims); start += 32 {
+		if err := store.ClaimCodexIdentityAliases(ctx, claims[start:min(start+32, len(claims))]); err != nil {
+			if errors.Is(err, database.ErrCodexIdentityAliasCollision) {
+				return codexAccountIdentityError("出站会话标识发生冲突，已停止请求，请联系管理员。")
+			}
+			return codexAccountIdentityError("暂时无法登记出站身份映射，请稍后重试。")
 		}
-		return codexAccountIdentityError("暂时无法登记出站身份映射，请稍后重试。")
 	}
 	if epoch == nil || !epoch.preview {
 		if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {
 			return err
+		}
+		if mapping.protocolDB != nil {
+			for original, outbound := range mapping.turnAliases {
+				if original == outbound {
+					continue
+				}
+				if err := mapping.protocolDB.PutCodexProtocolPair(ctx, mapping.protocolBinding, "turn", database.CodexProtocolPair{Public: original, Upstream: outbound}); err != nil {
+					return codexAccountIdentityError("轮次双向映射冲突或不可用，已停止发送，请重试。")
+				}
+			}
 		}
 		for identityKey, turnEpoch := range turnPlan.epochs {
 			if err := store.PublishCodexIdentityEpoch(ctx, identityKey, turnEpoch); err != nil {
@@ -396,6 +412,21 @@ func (fingerprint *CodexFingerprint) prepareAccountIdentity(ctx context.Context,
 		diagnostic.Status = "mapped_with_legacy_references"
 		if preserveRoot {
 			diagnostic.Status = "preserved_with_legacy_references"
+		}
+	}
+	mapping.diagnostic = diagnostic
+	mapping.requestAliases = make(map[string]string)
+	for _, original := range fingerprint.accountRequestIdentityInputs {
+		if strings.TrimSpace(original) == "" {
+			continue
+		}
+		mapped := mapping.rewriteValue(original)
+		if mapped == original && len(mapping.secret) > 0 {
+			mapped = DeriveStableSessionUUIDv7(mapping.digest("client-request", original))
+		}
+		mapping.requestAliases[original] = mapped
+		if mapped != original && mapping.rewriteValue(original) == original {
+			diagnostic.Changes = append(diagnostic.Changes, codexAccountIdentityChange{Original: original, Outbound: mapped, Fields: []string{"client_request_id"}, Version: "request-hmac-v1"})
 		}
 	}
 	mapping.diagnostic = diagnostic
@@ -491,6 +522,9 @@ func (mapping *codexAccountIdentity) rewriteMetadata(raw string, fallbackThreads
 			continue
 		}
 		updated := mapping.rewriteValue(value.String())
+		if field == "x-client-request-id" || field == "client_request_id" || field == "x_client_request_id" {
+			updated = mapping.rewriteRequestValue(value.String())
+		}
 		if field == "window_id" || field == "x-codex-window-id" || field == "x_codex_window_id" {
 			updated = mapping.rewriteWindow(value.String())
 		}
@@ -498,7 +532,7 @@ func (mapping *codexAccountIdentity) rewriteMetadata(raw string, fallbackThreads
 			raw, _ = sjson.Set(raw, field, updated)
 		}
 	}
-	for _, field := range []string{"turn_id", "root_turn_id"} {
+	for _, field := range []string{"turn_id", "root_turn_id", "parent_turn_id"} {
 		value := gjson.Get(raw, field)
 		if value.Type == gjson.String {
 			if alias := mapping.rewriteTurnValue(value.String()); alias != value.String() {
@@ -514,7 +548,11 @@ func (mapping *codexAccountIdentity) rewriteHeaders(headers http.Header) http.He
 	originalThread := headers.Get(codexThreadIDHeader)
 	for _, name := range []string{codexSessionIDHeader, codexLegacySessionIDHeader, codexThreadIDHeader, codexClientRequestIDHeader, codexParentThreadIDHeader, "X-Codex-Forked-From-Thread-Id"} {
 		if value := headers.Get(name); value != "" {
-			headers.Set(name, mapping.rewriteValue(value))
+			if name == codexClientRequestIDHeader {
+				headers.Set(name, mapping.rewriteRequestValue(value))
+			} else {
+				headers.Set(name, mapping.rewriteValue(value))
+			}
 		}
 	}
 	if window := headers.Get(codexWindowIDHeader); window != "" {
@@ -526,7 +564,28 @@ func (mapping *codexAccountIdentity) rewriteHeaders(headers http.Header) http.He
 	return headers
 }
 
+func codexAccountRequestIdentityInputs(headers http.Header, body []byte) []string {
+	values := []string{headers.Get(codexClientRequestIDHeader)}
+	metadata := gjson.GetBytes(body, "client_metadata")
+	for _, source := range []gjson.Result{metadata, diagnosticMetadataObject(metadata.Get("x-codex-turn-metadata")), gjson.Parse(headers.Get(codexTurnMetadataHeader))} {
+		for _, field := range []string{"x-client-request-id", "client_request_id", "x_client_request_id"} {
+			if value := source.Get(field); value.Type == gjson.String {
+				values = append(values, value.String())
+			}
+		}
+	}
+	return values
+}
+
+func (mapping *codexAccountIdentity) rewriteRequestValue(original string) string {
+	if alias := mapping.requestAliases[original]; alias != "" {
+		return alias
+	}
+	return mapping.rewriteValue(original)
+}
+
 func (mapping *codexAccountIdentity) rewriteBody(body []byte) []byte {
+	body = rewriteHistoryTurnIDs(body, mapping.rewriteTurnValue)
 	metadata := gjson.GetBytes(body, "client_metadata")
 	if !metadata.IsObject() {
 		return body
@@ -565,4 +624,8 @@ func (fingerprint *CodexFingerprint) withAccountIdentityDiagnostic(ctx context.C
 		return ctx
 	}
 	return context.WithValue(ctx, codexAccountIdentityDiagnosticKey{}, fingerprint.accountIdentityDiagnostic)
+}
+
+func (fingerprint *CodexFingerprint) WithAccountIdentityDiagnostic(ctx context.Context) context.Context {
+	return fingerprint.withAccountIdentityDiagnostic(ctx)
 }

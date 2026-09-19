@@ -201,8 +201,13 @@ func TestCodexAccountIdentityHTTPAndCompactFinalBytes(test *testing.T) {
 		require.NotEqual(test, accountIdentitySampleRoot, session)
 		require.Equal(test, session, sent.headers.Get("Thread-Id"))
 		require.Equal(test, session, sent.headers.Get("X-Client-Request-Id"))
-		require.Equal(test, session, gjson.GetBytes(sent.body, "client_metadata.session_id").String())
-		require.Equal(test, "matched", outboundSessionConsistency(&outboundIdentityDiagnostic{HTTP: CaptureOutboundIdentityHeaders(sent.headers), Body: captureOutboundIdentityBody(sent.body)}))
+		if compact {
+			require.False(test, gjson.GetBytes(sent.body, "client_metadata").Exists())
+			require.Equal(test, session, gjson.Get(sent.headers.Get(codexTurnMetadataHeader), "session_id").String())
+		} else {
+			require.Equal(test, session, gjson.GetBytes(sent.body, "client_metadata.session_id").String())
+			require.Equal(test, "matched", outboundSessionConsistency(&outboundIdentityDiagnostic{HTTP: CaptureOutboundIdentityHeaders(sent.headers), Body: captureOutboundIdentityBody(sent.body)}))
+		}
 		require.NotEqual(test, "cache", gjson.GetBytes(sent.body, "prompt_cache_key").String())
 		trace := snapshotUpstreamTrace(request.Request.Context())
 		require.NotNil(test, trace.Transport)

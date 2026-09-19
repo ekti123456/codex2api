@@ -163,7 +163,10 @@ func TestCodexEnvironmentHTTPAndCompactForwarding(test *testing.T) {
 				test.Fatal(err)
 			}
 			response.Body.Close()
-			if gjson.GetBytes(received, "tools.0.user_location.country").String() != "US" || gjson.GetBytes(received, "tools.0.user_location.city").String() != "Los Angeles" {
+			if compact && gjson.GetBytes(received, "tools").Exists() {
+				test.Fatal("compact must not send create-only tools")
+			}
+			if !compact && (gjson.GetBytes(received, "tools.0.user_location.country").String() != "US" || gjson.GetBytes(received, "tools.0.user_location.city").String() != "Los Angeles") {
 				test.Fatalf("mode=%s compact=%t location not forwarded: %s", mode, compact, received)
 			}
 			if actual := gjson.GetBytes(received, "input.0.content.0.text").String(); actual != environmentTestText("2026-09-05", location.String()) {

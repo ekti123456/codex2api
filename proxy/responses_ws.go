@@ -316,6 +316,10 @@ func stripNewAPIPolicyWebSocketEventID(payload []byte) ([]byte, string) {
 }
 
 func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.Conn, rawPayload []byte, policyEventID string, options *responsesWSForwardOptions) (returnErr error) {
+	c.Set("responses_client_stream_id", "")
+	if value := gjson.GetBytes(rawPayload, "stream_id"); value.Type == gjson.String && validCodexStreamID(value.String()) {
+		c.Set("responses_client_stream_id", value.String())
+	}
 	resetServiceErrorFrame(c)
 	defer h.finishSessionActivity(c)
 	defer h.finishSessionErrorAudit(c)
@@ -1244,6 +1248,9 @@ func (h *Handler) streamResponsesWSUpstream(
 		wsReplay = h.newContinuousRetryWSReplay()
 	}
 	writeClientMessage := func(payload []byte) error {
+		if lane := c.GetString("responses_client_stream_id"); lane != "" {
+			payload, _ = sjson.SetBytes(payload, "stream_id", lane)
+		}
 		return writeResponsesWSMessage(conn, publicResponseErrorPayload(c, payload))
 	}
 	// 首 token 前收到不可重试的 response.failed 时置位:不把原始失败帧透传给客户端,
@@ -1794,6 +1801,9 @@ func normalizeResponsesWebSocketClientPayload(raw []byte) ([]byte, string, *api.
 	if !gjson.ValidBytes(trimmed) {
 		return nil, "", api.NewAPIError(api.ErrCodeInvalidRequest, "invalid websocket request payload", api.ErrorTypeInvalidRequest)
 	}
+	if err := validateCodexMetadataDuplicates(trimmed, false, 0); err != nil {
+		return nil, "", api.NewAPIError(api.ErrCodeInvalidRequest, err.Error(), api.ErrorTypeInvalidRequest)
+	}
 
 	eventType := strings.TrimSpace(gjson.GetBytes(trimmed, "type").String())
 	normalized := trimmed
@@ -1908,6 +1918,13 @@ func writeAuditedResponsesWSError(c *gin.Context, conn *websocket.Conn, apiErr *
 			state.websocket = true
 		}
 		api.ObserveError(c, api.HTTPStatusCode(apiErr.Code), apiErr)
+	}
+	if apiErr != nil && c != nil && c.GetString("responses_client_stream_id") != "" {
+		payload, err := json.Marshal(gin.H{"type": "error", "stream_id": c.GetString("responses_client_stream_id"), "status": api.HTTPStatusCode(apiErr.Code), "error": apiErr})
+		if err != nil {
+			return err
+		}
+		return writeResponsesWSMessage(conn, payload)
 	}
 	return writeResponsesWSError(conn, apiErr)
 }

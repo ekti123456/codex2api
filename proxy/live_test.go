@@ -63,11 +63,11 @@ func TestEncryptLiveAttestationRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPrepareLiveAttestationPassthrough(t *testing.T) {
+func TestPrepareLiveAttestationUsesAccountCredential(t *testing.T) {
 	previous := generateLiveAttestation
 	t.Cleanup(func() { generateLiveAttestation = previous })
 	generateLiveAttestation = func(context.Context) (string, error) {
-		t.Fatal("should not generate when the client already sent attestation")
+		t.Fatal("should not generate when the account provides attestation")
 		return "", errors.New("unused")
 	}
 	handler := NewHandler(nil, nil, &config.Config{AdminSecret: "secret"}, nil)
@@ -101,6 +101,22 @@ func TestPrepareLiveAttestationMissingOnUnsupported(t *testing.T) {
 	}
 	if !strings.Contains(attErr.Error(), "X-Oai-Attestation") {
 		t.Fatalf("message=%q", attErr.Error())
+	}
+}
+
+func TestLiveAttestationRejectsUnverifiedPersistedSource(t *testing.T) {
+	handler := NewHandler(nil, nil, &config.Config{AdminSecret: "secret"}, nil)
+	cipher, err := encryptLiveAttestation("account-attestation", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &liveCallRecord{AttestationCiphertext: cipher}
+	if _, err := handler.decryptLiveAttestation(record); err == nil {
+		t.Fatal("legacy attestation without provenance must not be replayed")
+	}
+	record.AttestationSource = "account_or_server"
+	if plain, err := handler.decryptLiveAttestation(record); err != nil || plain != "account-attestation" {
+		t.Fatalf("trusted attestation = %q, %v", plain, err)
 	}
 }
 
@@ -165,6 +181,7 @@ func TestLiveCreateForwardsSDPAndLocation(t *testing.T) {
 	c, rec := liveTestContext(t, http.MethodPost, "/v1/live", body, &database.APIKeyRow{
 		ID: 11, Limits: database.APIKeyLimits{AllowLive: true},
 	})
+	c.Request.Header.Set(liveAttestationHeader, "untrusted-client-attestation")
 	handler.LiveCreate(c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -321,6 +338,7 @@ func TestLiveSidebandForwardsTextAndBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	record.AttestationCiphertext = cipher
+	record.AttestationSource = "account_or_server"
 	if err := handler.liveCalls().save(context.Background(), record, account, nil); err != nil {
 		t.Fatal(err)
 	}

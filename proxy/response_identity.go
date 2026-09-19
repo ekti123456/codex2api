@@ -16,12 +16,14 @@ import (
 )
 
 type responseIdentityKey struct{}
+type protocolIdentityKey struct{}
 type responseIdentityEvent = database.ResponseIdentityEvent
 type responseIdentitySession struct {
 	handler                     *Handler
 	owner, scope, root, rootKey string
 	mu                          sync.Mutex
 	incoming                    *database.CodexResponseIDRecord
+	comparison                  *database.CodexResponseIDRecord
 	issued                      map[string]database.CodexResponseIDRecord
 	events                      []responseIdentityEvent
 }
@@ -37,7 +39,7 @@ func responseIdentityFrom(ctx context.Context) *responseIdentitySession {
 func (h *Handler) bindResponseIdentity(c *gin.Context, identity requestSessionIdentity) {
 	// API relay credentials have their own provider semantics; isolate native
 	// Codex accounts here, just like the native executor response boundary.
-	if h.db == nil || apiRelaySessionExempt(c) {
+	if h.db == nil {
 		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), responseIdentityKey{}, (*responseIdentitySession)(nil)))
 		return
 	}
@@ -48,6 +50,11 @@ func (h *Handler) bindResponseIdentity(c *gin.Context, identity requestSessionId
 		rootKey = hashRiskIdentity("response-owner:" + owner)
 	}
 	s := &responseIdentitySession{handler: h, owner: owner, scope: codexIdentityDigest("response-id-owner-v1", owner), root: root, rootKey: rootKey, issued: make(map[string]database.CodexResponseIDRecord)}
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), protocolIdentityKey{}, s))
+	if apiRelaySessionExempt(c) {
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), responseIdentityKey{}, (*responseIdentitySession)(nil)))
+		return
+	}
 	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), responseIdentityKey{}, s))
 }
 
@@ -164,7 +171,12 @@ func validateResponseIdentityIngress(c *gin.Context, body []byte) error {
 	return nil
 }
 
-func prepareResponseIdentityOutbound(ctx context.Context, account *auth.Account, body []byte) ([]byte, error) {
+func prepareResponseIdentityOutbound(ctx context.Context, account *auth.Account, body []byte) (out []byte, err error) {
+	defer func() {
+		if err == nil {
+			out, err = prepareComparisonResponseIdentity(ctx, account, out)
+		}
+	}()
 	s := responseIdentityFrom(ctx)
 	value := gjson.GetBytes(body, "previous_response_id")
 	if s == nil || !value.Exists() || value.Type == gjson.Null {
@@ -182,6 +194,66 @@ func prepareResponseIdentityOutbound(ctx context.Context, account *auth.Account,
 	}
 	s.log(responseIdentityEvent{Action: "restored_outbound", Alias: r.Alias, Original: r.Real, AccountID: r.AccountID, Generation: r.Generation})
 	return sjson.SetBytes(body, "previous_response_id", r.Real)
+}
+
+// A cache comparison is a reference, not a continuation/routing hint. Authenticate
+// it against the selected account without replacing the previous-response record.
+func prepareComparisonResponseIdentity(ctx context.Context, account *auth.Account, body []byte) ([]byte, error) {
+	s := responseIdentityFrom(ctx)
+	v := gjson.GetBytes(body, "prompt_cache_options.comparison_response_id")
+	if s == nil || !v.Exists() || v.Type == gjson.Null {
+		return body, nil
+	}
+	id := v.String()
+	reject := func() ([]byte, error) {
+		s.log(responseIdentityEvent{Action: "rejected_cache_comparison_binding", Received: id})
+		return nil, &Error{Code: "comparison_response_not_found", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: "缓存比较引用不可用，请移除 comparison_response_id 后重试。"}
+	}
+	if v.Type != gjson.String || id == "" || len(id) > 256 || strings.TrimSpace(id) != id || account == nil || account.IsRelayStyle() || s.handler.db == nil {
+		return reject()
+	}
+	generation := uint64(0)
+	if epoch := outboundEpochFromContext(ctx); epoch != nil {
+		generation = epoch.record.FailoverCount
+	}
+	var record database.CodexResponseIDRecord
+	if r := s.comparison; r != nil && (id == r.Alias || id == r.Real) {
+		record = *r
+	} else if r := s.incoming; r != nil && (id == r.Alias || id == r.Real) {
+		record = *r
+	} else {
+		lookup, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		var found bool
+		var err error
+		record, found, err = s.handler.db.ReadCodexResponseID(lookup, id)
+		if err != nil {
+			return reject()
+		}
+		if s.handler.db.IsManagedCodexResponseID(id) {
+			if !found {
+				return reject()
+			}
+		} else {
+			affinity, known := lookupResponseAccountAffinity(lookup, s.handler.cache, s.owner, id)
+			if !known || affinity.LocalAlias || affinity.AffinityKey != s.root || affinity.AccountID != account.ID() {
+				return reject()
+			}
+			if generation > 0 {
+				epoch := outboundEpochFromContext(ctx)
+				if epoch == nil || epoch.identityKey() == "" || affinity.OutboundSegment != epoch.identityKey() {
+					return reject()
+				}
+			}
+			record = database.CodexResponseIDRecord{CodexTurnStateBinding: database.CodexTurnStateBinding{Scope: s.scope, RootKey: s.rootKey, AccountID: account.ID(), AccountHash: turnStateAccountHash(account), Generation: generation}, Real: id}
+		}
+	}
+	if record.Scope != s.scope || record.RootKey != s.rootKey || record.AccountID != account.ID() || record.AccountHash != turnStateAccountHash(account) || record.Generation != generation {
+		return reject()
+	}
+	s.comparison = &record
+	s.log(responseIdentityEvent{Action: "restored_cache_comparison", Alias: record.Alias, Original: record.Real, AccountID: record.AccountID, Generation: record.Generation})
+	return sjson.SetBytes(body, "prompt_cache_options.comparison_response_id", record.Real)
 }
 
 func trustedResponseIdentity(ctx context.Context, record database.SessionContinuityRecord, value string) bool {
@@ -216,6 +288,12 @@ func (s *responseIdentitySession) publicErrorReference(ctx context.Context, acco
 	}
 	s.mu.Unlock()
 	if record := s.incoming; record != nil && matches(*record) {
+		if record.Alias != "" {
+			return record.Alias, nil
+		}
+		return s.issue(ctx, account, real)
+	}
+	if record := s.comparison; record != nil && matches(*record) {
 		if record.Alias != "" {
 			return record.Alias, nil
 		}

@@ -125,6 +125,8 @@ func (fingerprint *CodexFingerprint) ClaimSessionIdentity(ctx context.Context, a
 	defer func() {
 		if requestErr != nil {
 			UpstreamTransportObserver(ctx).Failure("gateway", "identity_validation", 0)
+		} else {
+			fingerprint.preparePrivateRequestIdentity(ctx, account, apiKey)
 		}
 	}()
 	if err := ValidateBackgroundAccountMatch(ctx, account); err != nil {

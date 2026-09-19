@@ -15,6 +15,8 @@ import (
 type codexTurnIdentityInput struct {
 	Turn    bool
 	Root    bool
+	Parent  bool
+	History bool
 	Sources []string
 }
 
@@ -28,7 +30,7 @@ func codexAccountTurnIdentityInputs(headers http.Header, body []byte) map[string
 	inputs := make(map[string]codexTurnIdentityInput)
 	metadata := gjson.GetBytes(body, "client_metadata")
 	for index, source := range []gjson.Result{metadata, diagnosticMetadataObject(metadata.Get("x-codex-turn-metadata")), gjson.Parse(headers.Get(codexTurnMetadataHeader))} {
-		for _, field := range []string{"turn_id", "root_turn_id"} {
+		for _, field := range []string{"turn_id", "root_turn_id", "parent_turn_id"} {
 			value := source.Get(field)
 			original := strings.ToLower(strings.TrimSpace(value.String()))
 			if value.Type != gjson.String || original == "" {
@@ -40,17 +42,39 @@ func codexAccountTurnIdentityInputs(headers http.Header, body []byte) map[string
 			input := inputs[original]
 			input.Turn = input.Turn || field == "turn_id"
 			input.Root = input.Root || field == "root_turn_id"
+			input.Parent = input.Parent || field == "parent_turn_id"
 			location := []string{"client_metadata", "client_metadata.x-codex-turn-metadata", "headers.X-Codex-Turn-Metadata"}[index]
 			input.Sources = append(input.Sources, location+"."+field)
 			inputs[original] = input
 		}
+	}
+	for index, item := range gjson.GetBytes(body, "input").Array() {
+		metadata, _ := historyItemMetadata(item)
+		value := gjson.ParseBytes(metadata["turn_id"])
+		if value.Type != gjson.String || strings.TrimSpace(value.String()) == "" {
+			continue
+		}
+		original := strings.TrimSpace(value.String())
+		if id, err := uuid.Parse(original); err == nil {
+			original = id.String()
+		}
+		input := inputs[original]
+		input.History = true
+		input.Sources = append(input.Sources, fmt.Sprintf("input[%d].internal_chat_message_metadata_passthrough.turn_id", index))
+		inputs[original] = input
 	}
 	return inputs
 }
 
 func (fingerprint *CodexFingerprint) prepareAccountTurnIdentity(ctx context.Context, store CodexIdentityStore, mapping *codexAccountIdentity, rootKey string, currentEpoch database.CodexIdentityEpoch, diagnostic *codexAccountIdentityDiagnostic) (*codexTurnIdentityPlan, error) {
 	plan := &codexTurnIdentityPlan{epochs: make(map[string]database.CodexIdentityEpoch), references: make(map[string]database.CodexIdentityEpoch)}
-	if len(fingerprint.accountTurnIdentityInputs) > 32 {
+	controls := 0
+	for _, input := range fingerprint.accountTurnIdentityInputs {
+		if input.Turn || input.Root || input.Parent {
+			controls++
+		}
+	}
+	if controls > 32 || len(fingerprint.accountTurnIdentityInputs) > 4096 {
 		return nil, codexAccountIdentityError("出站轮次身份数量无效，请检查客户端元数据。")
 	}
 	ordered := make([]string, 0, len(fingerprint.accountTurnIdentityInputs))
@@ -67,6 +91,20 @@ func (fingerprint *CodexFingerprint) prepareAccountTurnIdentity(ctx context.Cont
 		}
 		parsed, err := uuid.Parse(original)
 		if err != nil || parsed.Version() != 7 || parsed.Variant() != uuid.RFC4122 {
+			// Older item history can use a local counter/string rather than the
+			// current transport UUID. Keep that optional historical grouping
+			// usable without weakening the transport metadata validation.
+			if input.History && !input.Turn && !input.Root && !input.Parent && len(original) <= 256 {
+				key := codexIdentityDigest("history-turn-v1", rootKey, original)
+				outbound, mapErr := store.ResolveCodexIdentityUUIDv7(ctx, key, mapping.digest("history-turn:"+rootKey, original))
+				if mapErr != nil {
+					return nil, codexAccountIdentityError("历史轮次映射暂时不可用，请重试。")
+				}
+				mapping.turnAliases[original] = outbound
+				diagnostic.Changes = append(diagnostic.Changes, mapping.identityChange(original, outbound, "input[].internal_chat_message_metadata_passthrough.turn_id"))
+				plan.claims = append(plan.claims, database.CodexIdentityAliasClaim{AliasKey: codexIdentityDigest("codex-account-alias-v1", outbound), SourceKey: key})
+				continue
+			}
 			failure := &codexInvalidTurnIdentityDiagnostic{Stage: "normalized_pre_mapping", Sources: append([]string(nil), input.Sources...), Reason: "invalid_uuid", Expected: "UUIDv7/RFC4122", ValueHash: hashRiskIdentity(original), ValueLength: len(original)}
 			description := "不是有效 UUID"
 			if err == nil {
@@ -93,7 +131,7 @@ func (fingerprint *CodexFingerprint) prepareAccountTurnIdentity(ctx context.Cont
 		if err != nil {
 			return nil, codexAccountIdentityError("暂时无法核实出站轮次映射，请稍后重试。")
 		}
-		if !found || !bound && turnEpoch.RootKey == currentEpoch.RootKey && turnEpoch.Generation < currentEpoch.Generation {
+		if !found || !input.Parent && !bound && turnEpoch.RootKey == currentEpoch.RootKey && turnEpoch.Generation < currentEpoch.Generation {
 			turnEpoch = currentEpoch
 		}
 		turnMapping := *mapping
@@ -114,6 +152,12 @@ func (fingerprint *CodexFingerprint) prepareAccountTurnIdentity(ctx context.Cont
 		if input.Root {
 			fields = append(fields, "root_turn_id")
 		}
+		if input.Parent {
+			fields = append(fields, "parent_turn_id")
+		}
+		if input.History {
+			fields = append(fields, "input[].internal_chat_message_metadata_passthrough.turn_id")
+		}
 		diagnostic.Changes = append(diagnostic.Changes, turnMapping.identityChange(original, outbound, fields...))
 		plan.claims = append(plan.claims, database.CodexIdentityAliasClaim{
 			AliasKey:  codexIdentityDigest("codex-account-alias-v1", outbound),
@@ -128,6 +172,9 @@ func (fingerprint *CodexFingerprint) prepareAccountTurnIdentity(ctx context.Cont
 }
 
 func (mapping *codexAccountIdentity) rewriteTurnValue(original string) string {
+	if alias := mapping.turnAliases[strings.TrimSpace(original)]; alias != "" {
+		return alias
+	}
 	if parsed, err := uuid.Parse(strings.TrimSpace(original)); err == nil {
 		if alias := mapping.turnAliases[parsed.String()]; alias != "" {
 			return alias

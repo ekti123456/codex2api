@@ -137,6 +137,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	if cacheKey := gjson.GetBytes(wsBody, "prompt_cache_key").String(); cacheKey != "" {
 		wsBody, _ = sjson.SetBytes(wsBody, "prompt_cache_key", proxy.ScopeCodexPromptCacheKey(ctx, cacheKey))
 	}
+	wsBody, ginHeaders = proxy.PrepareCodexOutboundMetadata(account, wsBody, ginHeaders)
 	ginHeaders = proxy.CodexRequestMetadataHeaders(ginHeaders, wsBody)
 	wsBody = applyCodexFrameMetadata(wsBody, ginHeaders)
 	wsBody, ginHeaders = proxy.ApplyCodexAnalyticsMetadata(wsBody, ginHeaders)
@@ -146,7 +147,16 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		return nil, err
 	}
 	ginHeaders = fingerprint.DownstreamHeaders()
+	ctx = fingerprint.WithAccountIdentityDiagnostic(ctx)
 	wsBody = fingerprint.ApplyBody(wsBody)
+	wsBody, resultErr = proxy.PrepareCodexFunctionalFields(ctx, account, wsBody, ginHeaders, apiKey)
+	if resultErr != nil {
+		return nil, resultErr
+	}
+	wsBody, clientStreamID, upstreamStreamID, streamErr := proxy.PrepareCodexStreamID(ctx, account, wsBody, ginHeaders, apiKey)
+	if streamErr != nil {
+		return nil, streamErr
+	}
 	if cacheKey := gjson.GetBytes(wsBody, "prompt_cache_key"); cacheKey.Type == gjson.String {
 		wsBody, _ = sjson.SetBytes(wsBody, "prompt_cache_key", fingerprint.ScopeCacheKey(ctx, cacheKey.String()))
 	}
@@ -175,12 +185,16 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	wsBody, headers = proxy.PrepareCodexTurnStateOutbound(ctx, account, wsBody, headers)
 	wsBody = applyCodexFrameMetadata(wsBody, headers)
 	wsBody, headers = proxy.PrepareCodexTurnStateOutbound(ctx, account, wsBody, headers)
+	wsBody, headers = proxy.FinalizeCodexOutboundMetadata(wsBody, headers)
 	if fingerprint.PreservesSessionIdentity() {
 		prepareCodexHandshakeSnapshot(headers)
 	} else if !proxy.IsStatelessWebsocketSessionID(sessionID) || !statelessOneShotEnabled() {
 		stripCodexFrameScopedHandshakeHeaders(headers)
 	}
 	proxy.ClearCodexTurnStateHeaders(headers)
+	if err := proxy.ValidateCodexOutboundMetadata(wsBody, headers); err != nil {
+		return nil, err
+	}
 	// Record the attempted handshake UA immediately so failed handshakes are
 	// still auditable. A reused connection replaces this below with the UA that
 	// was actually sent when that connection was established.
@@ -335,6 +349,8 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	e.manager.StartHeartbeat(wc)
 
 	return &WsResponse{
+		clientStreamID:   clientStreamID,
+		upstreamStreamID: upstreamStreamID,
 		observeTelemetry: observeTelemetry,
 		connectionLocal:  connectionLocal,
 		oneShot:          oneShot,
@@ -589,12 +605,11 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 		headers.Set("X-Codex-Beta-Features", "remote_compaction_v2")
 	}
 
-	// Originator：与 HTTP 路径同规则——生成 UA 时跟随生成的客户端前缀，
-	// 透传官方客户端时沿用下游值。
+	// Originator 与 HTTP 路径相同，跟随账号/服务端 UA 的客户端前缀。
 	headers.Set("Originator", originator)
-	// X-Oai-Attestation：DeviceCheck 设备认证头（上游 openai/codex#20619），
-	// 仅在下游携带时透传，本代理不伪造（假 token 服务端验证必败，反而暴露）。
-	for _, name := range []string{"X-Codex-Turn-State", "X-Codex-Turn-Metadata", "X-Codex-Window-Id", "X-Client-Request-Id", "X-Codex-Parent-Thread-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "X-Responsesapi-Include-Timing-Metrics", "X-Oai-Attestation"} {
+	// Client attestation is never forwarded. Account credentials are applied
+	// separately after the compatibility headers.
+	for _, name := range []string{"X-Codex-Turn-State", "X-Codex-Turn-Metadata", "X-Codex-Window-Id", "X-Client-Request-Id", "X-Codex-Parent-Thread-Id", "X-OpenAI-Subagent", "X-OpenAI-Memgen-Request", "X-Responsesapi-Include-Timing-Metrics"} {
 		if value := strings.TrimSpace(ginHeaders.Get(name)); value != "" {
 			headers.Set(name, value)
 		}
@@ -630,6 +645,8 @@ func (e *Executor) prepareWebsocketHeaders(accessToken string, account *auth.Acc
 	}
 
 	proxy.StripCodexProjectMetadataHeaders(headers)
+	proxy.ApplyCodexAccountAttestation(headers, account)
+	proxy.ApplyCodexAccountClientIdentity(headers, account, apiKey, deviceCfg, shouldSendWebsocketUserAgent())
 	// routing hint 由网关按最终 WS 帧体合成，在账号自定义头之后设置。
 	// 握手头逐连接冻结：复用连接沿用建连时的 hint，语义为拨号期软亲和。
 	proxy.ApplyCodexRoutingHint(headers, account, wsBody)
@@ -657,6 +674,8 @@ func (e *Executor) sendRequest(wc *WsConnection, body []byte, requestID string, 
 
 // WsResponse WebSocket 响应包装器
 type WsResponse struct {
+	clientStreamID   string
+	upstreamStreamID string
 	observeTelemetry func(*http.Response, error)
 	connectionLocal  bool
 	oneShot          bool
@@ -740,6 +759,23 @@ func (r *WsResponse) ReadStream(callback func(data []byte) bool) error {
 // handleMessage 处理单条 WebSocket 消息
 func (r *WsResponse) handleMessage(payload []byte, callback func(data []byte) bool) error {
 	r.observer.Event(payload)
+	// A pooled connection has one active read lease. A frame from another lane
+	// must not be relabelled and delivered to the current user.
+	if r.upstreamStreamID != "" || bytes.Contains(payload, []byte("stream_id")) {
+		var err error
+		payload, err = restoreStreamIdentity(payload, r.clientStreamID, r.upstreamStreamID, false, 0)
+		if err != nil {
+			r.markConnBroken()
+			return proxy.BlockTransportReplay(err)
+		}
+	}
+	if r.clientStreamID != "" {
+		deliver := callback
+		callback = func(data []byte) bool {
+			data, _ = sjson.SetBytes(data, "stream_id", r.clientStreamID)
+			return deliver(data)
+		}
+	}
 	if isConnLimitErrorFrame(payload) {
 		r.conn.noteExit("upstream_connection_limit", nil)
 		r.markConnBroken()
@@ -824,11 +860,21 @@ func (r *WsResponse) buildErrorEvent(payload []byte) ([]byte, bool) {
 	errObj := compactJSONOneLine(gjson.GetBytes(payload, "error").Raw)
 	if errObj == "" {
 		errObj = fmt.Sprintf(`{"message":%q,"code":%d}`, errMsg, status)
+		for _, key := range []string{"code", "param"} {
+			if v := gjson.GetBytes(payload, key); v.Exists() {
+				errObj, _ = sjson.SetRaw(errObj, key, v.Raw)
+			}
+		}
 	}
 	createdAt := time.Now().Unix()
 	event := fmt.Sprintf(`{"type":"response.failed","response":{"created_at":%d,"status":"failed","error":%s}}`, createdAt, errObj)
 	if status > 0 {
 		event = fmt.Sprintf(`{"type":"response.failed","response":{"created_at":%d,"status":"failed","status_code":%d,"error":%s}}`, createdAt, status, errObj)
+	}
+	for _, key := range []string{"stream_id", "sequence_number", "status"} {
+		if v := gjson.GetBytes(payload, key); v.Exists() {
+			event, _ = sjson.SetRaw(event, key, v.Raw)
+		}
 	}
 	return []byte(event), true
 }

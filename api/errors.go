@@ -73,6 +73,7 @@ type APIError struct {
 	Message string      `json:"message"`
 	Type    ErrorType   `json:"type"`
 	Details interface{} `json:"details,omitempty"`
+	Param   *string     `json:"param,omitempty"`
 }
 
 // ErrorResponse wraps APIError for consistent JSON structure

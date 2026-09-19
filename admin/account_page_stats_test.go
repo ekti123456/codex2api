@@ -95,6 +95,10 @@ func TestGetAccountPageStatsBackfillsMissingOfficialUsage(t *testing.T) {
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 	ageAccountForOfficialUsage(t, store, codexID)
 
 	var mu sync.Mutex
@@ -166,6 +170,10 @@ func TestGetAccountPageStatsMarksSyncedWhenUpstreamHasNoData(t *testing.T) {
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 	ageAccountForOfficialUsage(t, store, id)
 
 	var mu sync.Mutex
@@ -232,6 +240,10 @@ func TestWhamDailyBackfillFailureCooldownSkipsRetry(t *testing.T) {
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 	ageAccountForOfficialUsage(t, store, id)
 
 	var mu sync.Mutex
@@ -313,6 +325,10 @@ func TestGetAccountPageStatsSkipsOfficialBackfillForNewAccounts(t *testing.T) {
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 	handler.queryWhamDailyUsage = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyUsageResponse, *http.Response, error) {
 		t.Fatal("new account must not hit official usage upstream")
 		return nil, nil, nil
@@ -342,6 +358,10 @@ func TestGetAccountPageStatsSkipsOfficialBackfillForCodexAT(t *testing.T) {
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 	ageAccountForOfficialUsage(t, store, id)
 	handler.queryWhamDailyUsage = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyUsageResponse, *http.Response, error) {
 		t.Fatal("codex_at account must not hit official usage upstream")
@@ -390,6 +410,10 @@ func TestGetAccountPageStatsSkipsOfficialBackfillWhenSnapshotExists(t *testing.T
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 	handler.queryWhamDailyUsage = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyUsageResponse, *http.Response, error) {
 		t.Fatal("existing snapshot must not hit upstream")
 		return nil, nil, nil
@@ -432,6 +456,10 @@ func TestGetAccountPageStatsOfficialUSDIncludesOlderSnapshots(t *testing.T) {
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 	handler.queryWhamDailyUsage = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyUsageResponse, *http.Response, error) {
 		t.Fatal("existing snapshot must not hit upstream")
 		return nil, nil, nil
@@ -486,6 +514,10 @@ func TestGetAccountPageStatsIncludesTodayModelCounts(t *testing.T) {
 	tokenCache := cache.NewMemory(1)
 	t.Cleanup(func() { _ = tokenCache.Close() })
 	handler := NewHandler(store, db, tokenCache, nil, "")
+	// Counts and token breakdown run concurrently; neither may contact the network.
+	handler.queryWhamDailyTokenBreakdown = func(context.Context, *auth.Account, string, string, string) (*proxy.WhamDailyTokenBreakdownResponse, *http.Response, error) {
+		return &proxy.WhamDailyTokenBreakdownResponse{}, nil, nil
+	}
 
 	stats := invokeAccountPageStats(t, handler, []int64{id})
 	today := stats[strconv.FormatInt(id, 10)].UsageTodayDetail

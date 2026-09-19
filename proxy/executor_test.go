@@ -443,7 +443,7 @@ func TestApplyCodexRequestHeadersUsesSessionIDWithoutConversationID(t *testing.T
 	if got := req.Header.Get("Version"); got != "0.120.0" {
 		t.Fatalf("Version = %q", got)
 	}
-	if got := req.Header.Get("Originator"); got != Originator {
+	if got := req.Header.Get("Originator"); got != CodexOriginatorForGeneratedUserAgent(req.Header.Get("User-Agent")) {
 		t.Fatalf("Originator = %q, want fallback %q", got, Originator)
 	}
 	if got := req.Header.Get("Chatgpt-Account-Id"); got != "acct-42" {
@@ -485,19 +485,17 @@ func TestApplyCodexRequestHeadersAppliesAccountCustomHeadersLast(t *testing.T) {
 	}
 }
 
-// TestApplyCodexRequestHeadersForwardsAttestationOnlyWhenPresent 验证 DeviceCheck
-// 设备认证头（openai/codex#20619）的透传策略：下游携带真实 token 时原样转发，
-// 缺失时绝不伪造/补空——假 token 服务端向 Apple 验证必败，比不携带更暴露特征。
-func TestApplyCodexRequestHeadersForwardsAttestationOnlyWhenPresent(t *testing.T) {
+// Client DeviceCheck tokens must not be reused as upstream account credentials.
+func TestApplyCodexRequestHeadersRejectsClientAttestation(t *testing.T) {
 	acc := &auth.Account{DBID: 42, AccountID: "acct-42"}
 
-	// 下游携带真实 token → 原样透传
+	// 下游提供 token 仍必须删除；账号配置由独立用例验证。
 	withToken, _ := http.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
 	applyCodexRequestHeaders(withToken, acc, "token-123", "cache-key-1", "api-key-1", nil, http.Header{
 		"X-Oai-Attestation": []string{"v1.real-devicecheck-token"},
 	})
-	if got := withToken.Header.Get("X-Oai-Attestation"); got != "v1.real-devicecheck-token" {
-		t.Fatalf("X-Oai-Attestation = %q, want passthrough of downstream token", got)
+	if got := withToken.Header.Get("X-Oai-Attestation"); got != "" {
+		t.Fatalf("X-Oai-Attestation = %q, user attestation must not be forwarded", got)
 	}
 
 	// 下游未携带 → 不注入（保持与合法 CLI 一致的"干净缺失"）
@@ -1003,7 +1001,7 @@ func TestApplyCodexRequestHeadersRepairsBlankStabilizedProfileUserAgent(t *testi
 	}
 }
 
-func TestApplyCodexRequestHeadersPreservesOfficialClientHeaders(t *testing.T) {
+func TestApplyCodexRequestHeadersUsesAccountProfileForOfficialClient(t *testing.T) {
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{ClientCompatMode: ClientCompatModePreserve})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
@@ -1024,13 +1022,13 @@ func TestApplyCodexRequestHeadersPreservesOfficialClientHeaders(t *testing.T) {
 
 	applyCodexRequestHeaders(req, acc, "token-123", "cache-key-1", "api-key-1", nil, downstreamHeaders)
 
-	if got := req.Header.Get("User-Agent"); got != "codex_vscode/1.2.3" {
+	if got := req.Header.Get("User-Agent"); got != defaultCodexCLIUserAgent {
 		t.Fatalf("User-Agent = %q", got)
 	}
-	if got := req.Header.Get("Originator"); got != "codex_vscode" {
+	if got := req.Header.Get("Originator"); got != Originator {
 		t.Fatalf("Originator = %q", got)
 	}
-	if got := req.Header.Get("Version"); got != "1.2.3" {
+	if got := req.Header.Get("Version"); got != latestCodexCLIVersion {
 		t.Fatalf("Version = %q", got)
 	}
 	if got := req.Header.Get("X-Codex-Turn-State"); got != "" {
@@ -1043,7 +1041,7 @@ func TestApplyCodexRequestHeadersPreservesOfficialClientHeaders(t *testing.T) {
 	}
 }
 
-func TestApplyCodexRequestHeadersAutoDerivesVersionFromDesktopUserAgent(t *testing.T) {
+func TestApplyCodexRequestHeadersDoesNotUseDesktopClientIdentity(t *testing.T) {
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
 		ClientCompatMode:   ClientCompatModeAuto,
@@ -1063,13 +1061,13 @@ func TestApplyCodexRequestHeadersAutoDerivesVersionFromDesktopUserAgent(t *testi
 
 	applyCodexRequestHeaders(req, &auth.Account{DBID: 42}, "token-123", "", "api-key-1", nil, downstreamHeaders)
 
-	if got := req.Header.Get("User-Agent"); got != desktopUserAgent {
+	if got := req.Header.Get("User-Agent"); got != defaultCodexCLIUserAgent {
 		t.Fatalf("User-Agent = %q, want %q", got, desktopUserAgent)
 	}
-	if got := req.Header.Get("Originator"); got != "Codex Desktop" {
+	if got := req.Header.Get("Originator"); got != Originator {
 		t.Fatalf("Originator = %q, want Codex Desktop", got)
 	}
-	if got := req.Header.Get("Version"); got != "0.153.3" {
+	if got := req.Header.Get("Version"); got != latestCodexCLIVersion {
 		t.Fatalf("Version = %q, want 0.153.3 derived from desktop User-Agent", got)
 	}
 }
@@ -1132,7 +1130,7 @@ func TestApplyCodexRequestHeadersAutoUpgradesOldCodexCLI(t *testing.T) {
 	}
 }
 
-func TestApplyCodexRequestHeadersAutoDoesNotUpgradeEmbeddedCodexToken(t *testing.T) {
+func TestApplyCodexRequestHeadersDropsEmbeddedClientIdentity(t *testing.T) {
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
 		ClientCompatMode:   ClientCompatModeAuto,
@@ -1153,10 +1151,10 @@ func TestApplyCodexRequestHeadersAutoDoesNotUpgradeEmbeddedCodexToken(t *testing
 
 	applyCodexRequestHeaders(req, acc, "token-123", "", "api-key-1", nil, downstreamHeaders)
 
-	if got := req.Header.Get("User-Agent"); got != spoofedUA {
-		t.Fatalf("User-Agent = %q, want legacy-preserved spoofed UA %q", got, spoofedUA)
+	if got := req.Header.Get("User-Agent"); got != defaultCodexCLIUserAgent {
+		t.Fatalf("User-Agent = %q, client identity must not be forwarded: %q", got, spoofedUA)
 	}
-	if got := req.Header.Get("Version"); got != "0.117.0" {
+	if got := req.Header.Get("Version"); got != latestCodexCLIVersion {
 		t.Fatalf("Version = %q, want parsed legacy version 0.117.0", got)
 	}
 }
@@ -1185,7 +1183,7 @@ func TestApplyCodexRequestHeadersFallsBackForNonOfficialClient(t *testing.T) {
 	}
 }
 
-func TestApplyCodexRequestHeadersPreservesOpenCodeClient(t *testing.T) {
+func TestApplyCodexRequestHeadersUsesAccountProfileForOpenCode(t *testing.T) {
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{ClientCompatMode: ClientCompatModePreserve})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
@@ -1202,10 +1200,10 @@ func TestApplyCodexRequestHeadersPreservesOpenCodeClient(t *testing.T) {
 
 	applyCodexRequestHeaders(req, acc, "token-123", "", "api-key-1", nil, downstreamHeaders)
 
-	if got := req.Header.Get("User-Agent"); got != "opencode/0.5.0" {
+	if got := req.Header.Get("User-Agent"); got != defaultCodexCLIUserAgent {
 		t.Fatalf("User-Agent = %q, want %q", got, "opencode/0.5.0")
 	}
-	if got := req.Header.Get("Originator"); got != "opencode" {
+	if got := req.Header.Get("Originator"); got != Originator {
 		t.Fatalf("Originator = %q, want %q", got, "opencode")
 	}
 }
@@ -1246,7 +1244,7 @@ func TestApplyOpenAIResponsesRequestHeadersSetsCodexUserAgent(t *testing.T) {
 	}
 }
 
-func TestApplyOpenAIResponsesRequestHeadersPassthroughAutoPreservesOfficialIdentity(t *testing.T) {
+func TestApplyOpenAIResponsesRequestHeadersPassthroughUsesAccountProfile(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://relay.example/v1/responses", nil)
 	if err != nil {
 		t.Fatalf("http.NewRequest() error = %v", err)
@@ -1265,13 +1263,13 @@ func TestApplyOpenAIResponsesRequestHeadersPassthroughAutoPreservesOfficialIdent
 
 	applyOpenAIResponsesRequestHeaders(req, account, "relay-token", headers)
 
-	if got := req.Header.Get("User-Agent"); got != downstreamUA {
+	if got := req.Header.Get("User-Agent"); got != defaultCodexCLIUserAgent {
 		t.Fatalf("User-Agent = %q, want downstream official UA %q", got, downstreamUA)
 	}
-	if got := req.Header.Get("Version"); got != "0.150.0" {
+	if got := req.Header.Get("Version"); got != latestCodexCLIVersion {
 		t.Fatalf("Version = %q, want 0.150.0", got)
 	}
-	if got := req.Header.Get("Originator"); got != "codex-tui" {
+	if got := req.Header.Get("Originator"); got != Originator {
 		t.Fatalf("Originator = %q, want codex-tui", got)
 	}
 	if got := req.Header.Get("Session-Id"); got != "sess-123" {
@@ -1288,7 +1286,7 @@ func TestApplyOpenAIResponsesRequestHeadersPassthroughAutoPreservesOfficialIdent
 	}
 }
 
-func TestApplyOpenAIResponsesRequestHeadersPassthroughAlwaysForwardsAnyDownstream(t *testing.T) {
+func TestApplyOpenAIResponsesRequestHeadersPassthroughDoesNotForwardUserProfile(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://relay.example/v1/responses", nil)
 	if err != nil {
 		t.Fatalf("http.NewRequest() error = %v", err)
@@ -1301,7 +1299,7 @@ func TestApplyOpenAIResponsesRequestHeadersPassthroughAlwaysForwardsAnyDownstrea
 
 	applyOpenAIResponsesRequestHeaders(req, account, "relay-token", headers)
 
-	if got := req.Header.Get("User-Agent"); got != "claude-cli/2.0.0" {
+	if got := req.Header.Get("User-Agent"); got != defaultCodexCLIUserAgent {
 		t.Fatalf("User-Agent = %q, want downstream claude-cli/2.0.0", got)
 	}
 	if got := req.Header.Get("Session-Id"); got != "sess-xyz" {
@@ -1564,7 +1562,7 @@ func TestExecuteOpenAIResponsesRequestHonorsCodexClientMetadataMode(t *testing.T
 	}
 }
 
-func TestExecuteOpenAIResponsesRequestPreservesClientInstallationIDWithoutLearningRequirement(t *testing.T) {
+func TestExecuteOpenAIResponsesRequestReplacesClientInstallationWithoutLearningRequirement(t *testing.T) {
 	var mu sync.Mutex
 	installationIDs := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1605,8 +1603,8 @@ func TestExecuteOpenAIResponsesRequestPreservesClientInstallationIDWithoutLearni
 	mu.Lock()
 	gotIDs := append([]string(nil), installationIDs...)
 	mu.Unlock()
-	if len(gotIDs) != 2 || gotIDs[0] != "client-installation-id" || gotIDs[1] != "" {
-		t.Fatalf("installation IDs = %#v, want preserved client ID then no injected ID", gotIDs)
+	if len(gotIDs) != 2 || gotIDs[0] == "" || gotIDs[0] == "client-installation-id" || gotIDs[1] != "" {
+		t.Fatalf("installation IDs = %#v, want account-owned ID then no unnecessary injection", gotIDs)
 	}
 }
 
