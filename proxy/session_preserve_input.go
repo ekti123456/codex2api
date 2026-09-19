@@ -10,6 +10,7 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -17,22 +18,78 @@ import (
 const preservedInputSnapshotKey = "session_preserved_input_snapshot"
 
 type preservedInputPreparedKey struct{}
+type preservedInputReplayKey struct{}
 
-// Restore the original input once after protocol translation, before payload
-// rules. Final outbound input consistency enforcement is temporarily disabled.
-func PreparePreservedInputTransport(ctx context.Context, body []byte) (context.Context, []byte) {
+type preservedInputReplay struct {
+	previousID string
+	original   []byte
+	expanded   []byte
+}
+
+// Capture only the owner-scoped cache expansion, before payload rules and
+// identity rewriting. Keep raw client items (including opaque history and large
+// integers); the translator's other edits are not implicitly authorized here.
+func capturePreservedInputReplay(request *gin.Context, prepared responsesBodyPreparation) {
+	var replay *preservedInputReplay
+	if raw, ok := request.Get(preservedInputSnapshotKey); ok {
+		if body, ok := raw.([]byte); ok && prepared.PreviousResponseID != "" &&
+			gjson.GetBytes(body, "previous_response_id").String() == prepared.PreviousResponseID &&
+			prepared.CacheLookup.Kind == responseCacheLookupHit && !prepared.Bypassed {
+			input := gjson.GetBytes(body, "input")
+			validInput := !input.Exists() || input.Type == gjson.Null || input.IsArray() || input.Type == gjson.String
+			items := append([]json.RawMessage(nil), prepared.CacheLookup.Items...)
+			switch {
+			case input.IsArray():
+				for _, item := range input.Array() {
+					items = append(items, json.RawMessage(item.Raw))
+				}
+			case input.Type == gjson.String:
+				items = append(items, json.RawMessage(`{"role":"user","content":`+input.Raw+`}`))
+			}
+			if expanded, err := json.Marshal(items); err == nil && validInput {
+				replay = &preservedInputReplay{prepared.PreviousResponseID, []byte(input.Raw), expanded}
+			}
+		}
+	}
+	request.Request = request.Request.WithContext(context.WithValue(request.Request.Context(), preservedInputReplayKey{}, replay))
+}
+
+// Restore protected input once, retaining an authenticated cache expansion.
+// Final outbound input consistency enforcement is temporarily disabled.
+func PreparePreservedInputTransport(ctx context.Context, body []byte) (context.Context, []byte, error) {
 	if !PreserveSessionInput(ctx) || ctx.Value(preservedInputPreparedKey{}) != nil {
-		return ctx, body
+		return ctx, body, nil
 	}
 	epoch := outboundEpochFromContext(ctx)
-	if epoch == nil || len(epoch.preservedInput) == 0 {
-		return ctx, body
+	if epoch == nil {
+		return ctx, body, nil
+	}
+	if replay, _ := ctx.Value(preservedInputReplayKey{}).(*preservedInputReplay); replay != nil {
+		if !bytes.Equal(replay.original, epoch.preservedInput) {
+			return ctx, nil, preserveInputError("续写输入快照发生变化，请恢复完整历史后重试。")
+		}
+		if epoch.handler == nil {
+			return ctx, nil, preserveInputError("无法核实续写历史归属，请恢复完整历史后重试。")
+		}
+		known, cancel := epoch.restartContextVerifier(ctx)
+		allowed := known("previous_response_id", replay.previousID)
+		cancel()
+		if !allowed {
+			return ctx, nil, preserveInputError("续写历史不属于当前账号或会话代次，请恢复完整历史后重试。")
+		}
+		copyEpoch := *epoch
+		copyEpoch.preservedInput = replay.expanded
+		epoch = &copyEpoch
+		ctx = context.WithValue(ctx, sessionOutboundEpochContextKey{}, epoch)
+	}
+	if len(epoch.preservedInput) == 0 {
+		return ctx, body, nil
 	}
 	updated, err := sjson.SetRawBytes(body, "input", epoch.preservedInput)
 	if err != nil {
-		return ctx, body
+		return ctx, nil, preserveInputError("无法恢复完整输入，请恢复完整历史后重试。")
 	}
-	return context.WithValue(ctx, preservedInputPreparedKey{}, true), updated
+	return context.WithValue(ctx, preservedInputPreparedKey{}, true), updated, nil
 }
 
 func ValidateSessionOutboundRequest(ctx context.Context, account *auth.Account, body []byte) error {
@@ -66,11 +123,13 @@ func preserveInputError(message string) *Error {
 
 func preserveSessionRestartInput(payload map[string]json.RawMessage, headers http.Header, original []byte, report *database.SessionContextCleanup) ([]byte, http.Header, *database.SessionContextCleanup, error) {
 	input := gjson.ParseBytes(payload["input"])
-	hasPrevious := gjson.ParseBytes(payload["previous_response_id"]).String() != ""
-	if !hasPrevious && !(input.Type == gjson.String && strings.TrimSpace(input.String()) != "" || input.IsArray() && len(input.Array()) > 0) {
+	_, hasConversation := conversationReferenceID(gjson.ParseBytes(payload["conversation"]))
+	// cleanSessionRestartContext has already authenticated these references.
+	hasContinuation := gjson.ParseBytes(payload["previous_response_id"]).String() != "" || hasConversation
+	if !hasContinuation && !(input.Type == gjson.String && strings.TrimSpace(input.String()) != "" || input.IsArray() && len(input.Array()) > 0) {
 		return nil, headers, report, preserveInputError("完整保留 input 模式需要客户端提供完整输入数组或文本，不能仅依赖旧账号的续写状态。")
 	}
-	if input.IsArray() && !hasPrevious {
+	if input.IsArray() && !hasContinuation {
 		pairing, missingOutput := inspectPreservedToolPairing(input)
 		if pairing != nil {
 			report.ToolPairing = pairing

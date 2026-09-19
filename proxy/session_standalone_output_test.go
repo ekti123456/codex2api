@@ -34,13 +34,13 @@ func TestSessionStandaloneOutputsKeepWireShape(t *testing.T) {
 	}
 }
 
-func TestSessionStandaloneOutputDoesNotRequireMissingCallCache(t *testing.T) {
+func TestSessionStandaloneOutputRequiresHistoryOnlyWhenReferencingResponse(t *testing.T) {
 	resetResponseCacheStateForTest(testResponseCacheConfig())
 	body := []byte(`{"model":"gpt-5.6-sol","previous_response_id":"resp_missing_standalone","input":[{"type":"function_call_output","name":"notify","output":"message"}]}`)
 	prepared := prepareResponsesBodyForOwnerDetailed(body, "standalone-test")
-	require.False(t, prepared.RequiresLocalContext)
+	require.True(t, prepared.RequiresLocalContext)
 	_, _, unavailable := responseCachePreparationFailure(prepared)
-	require.False(t, unavailable)
+	require.True(t, unavailable)
 	require.Equal(t, "function_call_output", gjson.GetBytes(prepared.Body, "input.0.type").String())
 	paired, err := sjson.SetBytes(body, "input.0.call_id", "missing")
 	require.NoError(t, err)
@@ -48,6 +48,12 @@ func TestSessionStandaloneOutputDoesNotRequireMissingCallCache(t *testing.T) {
 	require.True(t, dependent.RequiresLocalContext)
 	_, _, unavailable = responseCachePreparationFailure(dependent)
 	require.True(t, unavailable)
+	standalone, err := sjson.DeleteBytes(body, "previous_response_id")
+	require.NoError(t, err)
+	independent := prepareResponsesBodyForOwnerDetailed(standalone, "standalone-test")
+	_, _, unavailable = responseCachePreparationFailure(independent)
+	require.False(t, unavailable)
+	require.Equal(t, "function_call_output", gjson.GetBytes(independent.Body, "input.0.type").String())
 }
 
 func TestSessionStandaloneFunctionOutputsPreservedAcrossContextModes(t *testing.T) {

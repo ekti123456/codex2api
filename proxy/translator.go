@@ -2286,7 +2286,9 @@ func prepareResponsesBodyForOwnerDetailed(rawBody []byte, owner string) response
 		if currentInput.IsArray() && inputHasToolCallContext(currentInput) {
 			preparation.Bypassed = true
 		} else {
-			preparation.RequiresLocalContext = currentInput.IsArray() && inputHasFunctionCallOutput(currentInput)
+			// Any incremental continuation depends on its ancestry, including
+			// plain text and standalone notifications without a tool call_id.
+			preparation.RequiresLocalContext = true
 			preparation.CacheLookup = getResponseCacheForReplay(owner, prevID)
 		}
 	}

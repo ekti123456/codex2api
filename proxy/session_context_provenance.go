@@ -37,6 +37,9 @@ func (handler *Handler) sessionContextVerifier(request *gin.Context, record data
 	}
 	known, cancel := handler.sessionContextVerifierForScope(request.Request.Context(), scope)
 	return func(kind, value string) bool {
+		if kind == "conversation" {
+			return trustedConversationIdentity(request.Request.Context(), record, value)
+		}
 		if kind == "previous_response_id" && trustedResponseIdentity(request.Request.Context(), record, value) {
 			return true
 		}

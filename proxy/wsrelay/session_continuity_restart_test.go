@@ -95,9 +95,10 @@ func TestWebsocketContinuityOffRestartsIdentityAndConnection(t *testing.T) {
 	previousResponse := ""
 	for i, step := range []struct{ incoming, outgoing int }{{47, 0}, {47, 0}, {48, 1}, {55, 0}, {56, 1}} {
 		body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":true,"input":"full plaintext context","client_metadata":{"session_id":"%s","thread_id":"%s","x-codex-turn-metadata":{"session_id":"%s","thread_id":"%s","thread_source":"user","request_kind":"turn","window_id":"%s:%d","window_number":%d}}}`, root, root, root, root, root, step.incoming, step.incoming))
-		// The first request starts a fresh session. Later requests carry an alias
-		// actually issued to this owner, so admission reaches restart cleanup.
-		if previousResponse != "" {
+		// Full-context requests have no dependency on a previous response. The
+		// window-gap request carries an issued alias to exercise restart cleanup;
+		// it must remove that old-segment reference before establishing a new one.
+		if previousResponse != "" && i == 3 {
 			body, err = sjson.SetBytes(body, "previous_response_id", previousResponse)
 			require.NoError(t, err)
 		}

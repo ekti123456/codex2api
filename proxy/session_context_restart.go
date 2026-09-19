@@ -49,7 +49,15 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 	for _, field := range []string{"previous_response_id", "conversation", "conversation_id"} {
 		currentPath, currentType = field, ""
 		value := gjson.ParseBytes(payload[field])
-		if value.Exists() && value.Type != gjson.Null && value.String() != "" && !allowed(field, value.String()) {
+		token := value.String()
+		if field == "conversation" && value.Exists() && value.Type != gjson.Null {
+			var valid bool
+			token, valid = conversationReferenceID(value)
+			if !valid {
+				return nil, nil, report, codexAccountIdentityError("对话句柄格式无效或包含重复 ID，请重新发起请求。")
+			}
+		}
+		if value.Exists() && value.Type != gjson.Null && token != "" && !allowed(field, token) {
 			if preserve {
 				return nil, nil, report, &Error{Code: "codex_session_failover_context_required", Type: ErrorTypeInvalidRequest, HTTPStatus: http.StatusBadRequest, Message: "完整保留 input 模式无法跨账号复用 " + field + "，请让客户端提供完整历史并移除此续写引用后重试。"}
 			}
@@ -192,6 +200,9 @@ func cleanSessionRestartContext(headers http.Header, body []byte, known sessionC
 func (epoch *sessionOutboundEpoch) restartContextVerifier(ctx context.Context) (sessionContextTokenVerifier, context.CancelFunc) {
 	known, cancel := epoch.handler.sessionContextVerifierForScope(ctx, sessionContextScope(epoch.owner, epoch.key, epoch.upstreamAccount, epoch.record))
 	return func(kind, value string) bool {
+		if kind == "conversation" {
+			return trustedConversationIdentity(ctx, epoch.record, value)
+		}
 		if kind == "turn_state" && trustedMappedTurnState(ctx, epoch.record, value) {
 			return true
 		}

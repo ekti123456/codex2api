@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/codex2api/cache"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
 
@@ -54,16 +56,18 @@ func TestPrepareResponsesBodyDetailedCompleteContextBypassesLookup(t *testing.T)
 	}
 }
 
-func TestPrepareResponsesBodyDetailedOrdinaryMissWithoutDependentOutputIsLegacy(t *testing.T) {
+func TestPrepareResponsesBodyDetailedPlainContinuationRequiresHistory(t *testing.T) {
 	resetResponseCacheStateForTest(testResponseCacheConfig())
 	raw := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_unknown","input":[{"role":"user","content":"continue"}]}`)
 	got := prepareResponsesBodyForOwnerDetailed(raw, "key:1")
-	if got.CacheLookup.Kind != responseCacheLookupMiss || got.RequiresLocalContext {
-		t.Fatalf("preparation = kind:%v required:%v, want non-blocking legacy miss", got.CacheLookup.Kind, got.RequiresLocalContext)
-	}
+	require.Equal(t, responseCacheLookupMiss, got.CacheLookup.Kind)
+	require.True(t, got.RequiresLocalContext)
+	status, _, unavailable := responseCachePreparationFailure(got)
+	require.True(t, unavailable)
+	require.Equal(t, http.StatusConflict, status)
 }
 
-func TestPrepareResponsesBodyDetailedBackendErrorWithoutDependentOutputIsLegacy(t *testing.T) {
+func TestPrepareResponsesBodyDetailedPlainContinuationBackendFailure(t *testing.T) {
 	resetResponseCacheStateForTest(testResponseCacheConfig())
 	backend := newRecordingResponseContextBackend(true)
 	backend.boundedErr = errSyntheticBackend
@@ -74,12 +78,11 @@ func TestPrepareResponsesBodyDetailedBackendErrorWithoutDependentOutputIsLegacy(
 	})
 	raw := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_unknown","input":[{"role":"user","content":"continue"}]}`)
 	got := prepareResponsesBodyForOwnerDetailed(raw, "key:1")
-	if got.CacheLookup.Kind != responseCacheLookupBackendError || got.RequiresLocalContext {
-		t.Fatalf("preparation = kind:%v required:%v, want non-dependent backend error", got.CacheLookup.Kind, got.RequiresLocalContext)
-	}
-	if _, _, unavailable := responseCachePreparationFailure(got); unavailable {
-		t.Fatal("backend error without dependent output must preserve legacy routing")
-	}
+	require.Equal(t, responseCacheLookupBackendError, got.CacheLookup.Kind)
+	require.True(t, got.RequiresLocalContext)
+	status, _, unavailable := responseCachePreparationFailure(got)
+	require.True(t, unavailable)
+	require.Equal(t, http.StatusServiceUnavailable, status)
 }
 
 func TestPrepareCompactResponsesBodyDetailedMatchesResponseSemantics(t *testing.T) {

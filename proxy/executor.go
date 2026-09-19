@@ -533,7 +533,10 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	resetUpstreamUserAgentAudit(ctx)
 	ctx = ensureTransportTrace(ctx)
 	resetWsAcquireAudit(ctx)
-	ctx, requestBody = PreparePreservedInputTransport(ctx, requestBody)
+	ctx, requestBody, upstreamErr = PreparePreservedInputTransport(ctx, requestBody)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
 	var encryptedAttempt *encryptedContentAttempt
 	requestBody, encryptedAttempt = prepareEncryptedContentAttempt(ctx, account, requestBody, sessionID, headers)
 	defer func() { encryptedAttempt.observeResponse(upstreamResponse, requestBody) }()
@@ -1048,7 +1051,10 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	}
 	resetUpstreamUserAgentAudit(ctx)
 	resetWsAcquireAudit(ctx)
-	ctx, requestBody = PreparePreservedInputTransport(ctx, requestBody)
+	ctx, requestBody, upstreamErr = PreparePreservedInputTransport(ctx, requestBody)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
 	var encryptedAttempt *encryptedContentAttempt
 	requestBody, encryptedAttempt = prepareEncryptedContentAttempt(ctx, account, requestBody, sessionID, headers)
 	defer func() { encryptedAttempt.observeResponse(upstreamResponse, requestBody) }()

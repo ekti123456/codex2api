@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
@@ -148,6 +149,24 @@ func (w responsePrivacyWalker) conversation(raw json.RawMessage) (json.RawMessag
 	return json.Marshal(map[string]string{"id": public})
 }
 
+func conversationReferenceID(value gjson.Result) (string, bool) {
+	if value.IsObject() {
+		var id gjson.Result
+		count := 0
+		value.ForEach(func(key, child gjson.Result) bool {
+			if key.String() == "id" {
+				id, count = child, count+1
+			}
+			return true
+		})
+		if count != 1 {
+			return "", false
+		}
+		value = id
+	}
+	return value.String(), value.Type == gjson.String && value.String() != "" && len(value.String()) <= 256
+}
+
 func prepareConversationOutbound(ctx context.Context, account *auth.Account, body []byte) ([]byte, error) {
 	v := gjson.GetBytes(body, "conversation")
 	if !v.Exists() || v.Type == gjson.Null {
@@ -155,27 +174,50 @@ func prepareConversationOutbound(ctx context.Context, account *auth.Account, bod
 	}
 	path := "conversation"
 	if v.IsObject() {
-		v = v.Get("id")
 		path += ".id"
 	}
-	if v.Type != gjson.String || v.String() == "" || len(v.String()) > 256 {
+	id, valid := conversationReferenceID(v)
+	if !valid {
 		return nil, codexAccountIdentityError("对话句柄格式无效，请重新发起请求。")
 	}
 	db, binding := protocolIdentityBinding(ctx, account)
 	if db == nil {
 		return body, nil
 	}
-	pair, found, err := db.ReadCodexProtocolPair(ctx, binding, "conversation", v.String(), true)
+	pair, found, err := db.ReadCodexProtocolPair(ctx, binding, "conversation", id, true)
 	if err != nil {
 		return nil, errTurnStateMapping
 	}
 	if found {
 		return sjson.SetBytes(body, path, pair.Upstream)
 	}
-	if db.IsManagedCodexConversationAlias(v.String()) {
+	if db.IsManagedCodexConversationAlias(id) {
 		return nil, codexAccountIdentityError("对话句柄不属于当前账号或会话，无法继续，请新建对话。")
 	}
 	// Public API callers may already own a conversation created through its
 	// resource endpoint. Opaque upstream handles cannot be arbitrarily remapped.
 	return body, nil
+}
+
+// Both directions can occur at executor boundaries. Authenticate either against
+// the same user/root/account/generation mapping that issued the public handle;
+// a known token in another segment must never authorize this continuation.
+func trustedConversationIdentity(ctx context.Context, record database.SessionContinuityRecord, value string) bool {
+	epoch := outboundEpochFromContext(ctx)
+	if epoch == nil || epoch.handler == nil || epoch.handler.store == nil || value == "" || len(value) > 256 {
+		return false
+	}
+	account := epoch.handler.store.FindByID(record.AccountID)
+	db, binding := protocolIdentityBinding(ctx, account)
+	if db == nil || binding.AccountID != record.AccountID || binding.Generation != record.FailoverCount {
+		return false
+	}
+	lookup, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	_, found, err := db.ReadCodexProtocolPair(lookup, binding, "conversation", value, true)
+	if err != nil || found {
+		return err == nil && found
+	}
+	_, found, err = db.ReadCodexProtocolPair(lookup, binding, "conversation", value, false)
+	return err == nil && found
 }
