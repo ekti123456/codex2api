@@ -11131,7 +11131,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if req.CodexInitialSessionMaxAgeSeconds != nil {
 		if *req.CodexInitialSessionMaxAgeSeconds < 1 || *req.CodexInitialSessionMaxAgeSeconds > 86400 {
-			writeError(c, http.StatusBadRequest, "首次会话 ID 最大年龄须为 1–86400 秒")
+			writeError(c, http.StatusBadRequest, "首次会话 ID 时间差容限须为 1–86400 秒")
 			return
 		}
 		runtimeCfg.CodexInitialSessionMaxAgeSeconds = *req.CodexInitialSessionMaxAgeSeconds

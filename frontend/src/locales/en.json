@@ -2080,18 +2080,18 @@
     "accountTrendEmpty": "No account events in the selected range"
   },
   "runtime": {
-    "initialSessionAge": "Initial session ID age",
-    "initialSessionAgeHint": "Limit: {{limit}} s. This process since {{started}}; resets on restart. Includes allowed and blocked admissions. Average/max exclude invalid and future IDs. Internal retries count once; client resubmissions count separately. Recent hour uses second buckets.",
+    "initialSessionAge": "Initial session ID time difference",
+    "initialSessionAgeHint": "Tolerance: ±{{limit}} s. This process since {{started}}; resets on restart. Average/max use absolute time differences, including allowed and out-of-range IDs, excluding invalid IDs. Internal retries count once; client resubmissions count separately. Recent hour uses second buckets.",
     "initialAge_recent_hour": "Last hour",
     "initialAge_since_start": "Since process start",
     "initialAge_samples": "Requests checked",
-    "initialAge_valid": "Valid age samples",
-    "initialAge_average": "Average age",
-    "initialAge_max": "Maximum age",
+    "initialAge_valid": "Valid time samples",
+    "initialAge_average": "Average absolute difference",
+    "initialAge_max": "Maximum absolute difference",
     "initialAge_allowed": "Allowed",
-    "initialAge_rejected": "Over age limit",
+    "initialAge_rejected": "Too old (blocked)",
     "initialAge_invalid": "Invalid ID",
-    "initialAge_future": "Future ID",
+    "initialAge_future": "Too far ahead (blocked)",
 
     "title": "Runtime Status",
     "description": "Live checks for runtime dependencies, writers, probes, and storage.",
@@ -4112,8 +4112,8 @@
     }
   },
   "settings": {
-    "initialSessionAge": "Maximum initial session ID age (seconds)",
-    "initialSessionAgeHint": "Default 60; range 1–86400. Checks unbound Codex main sessions before initial account selection. Existing bindings are exempt. Independent of sequence validation. Invalid or future IDs are rejected.",
+    "initialSessionAge": "Initial session ID time tolerance (±seconds)",
+    "initialSessionAgeHint": "Default ±60 seconds; enter 1–86400. The ID timestamp may be up to this many seconds before or after gateway receipt, including both boundaries. Out-of-range or invalid IDs are rejected. Checks unbound Codex main sessions before initial account selection. Existing bindings are exempt. Independent of sequence validation.",
 
     "title": "Settings",
     "description": "Manage system configuration and runtime parameters. Most toggles auto-save immediately.",

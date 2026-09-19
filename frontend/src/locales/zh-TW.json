@@ -2087,16 +2087,16 @@
   },
   "runtime": {
     "initialSessionAge": "首次會話 ID 時間差統計",
-    "initialSessionAgeHint": "目前閾值 {{limit}} 秒；本程序自 {{started}} 開始統計，重新啟動後歸零。包含放行與攔截；平均值、最大值不含無效及未來 ID。內部重試只計一次，用戶端重新請求另計。最近一小時按秒分桶。",
+    "initialSessionAgeHint": "目前容限 ±{{limit}} 秒；本程序自 {{started}} 開始統計，重新啟動後歸零。平均值、最大值依時間差絕對值統計，包含放行與超限攔截，不含無效 ID。內部重試只計一次，用戶端重新請求另計。最近一小時按秒分桶。",
     "initialAge_recent_hour": "最近 1 小時",
     "initialAge_since_start": "本次程序啟動以來",
     "initialAge_samples": "檢查請求數",
     "initialAge_valid": "有效時間樣本",
-    "initialAge_average": "平均時間差",
-    "initialAge_max": "最大時間差",
+    "initialAge_average": "平均絕對時間差",
+    "initialAge_max": "最大絕對時間差",
     "initialAge_allowed": "放行次數",
-    "initialAge_rejected": "超限攔截",
+    "initialAge_rejected": "過舊攔截",
     "initialAge_invalid": "無效 ID",
-    "initialAge_future": "未來時間 ID"
+    "initialAge_future": "超前超限攔截"
   }
 }

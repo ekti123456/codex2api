@@ -52,10 +52,16 @@ func (s *InitialSessionAgeSummary) add(d initialSessionDiagnostic) {
 	default:
 		s.Invalid++
 	}
-	if d.Result == "allowed" || d.Result == "expired" {
+	if d.Result == "allowed" || d.Result == "expired" || d.Result == "future" {
+		// Keep signed age in request diagnostics, but aggregate the magnitude so
+		// clocks ahead of and behind the gateway do not cancel each other out.
+		deviation := d.AgeMillis
+		if deviation < 0 {
+			deviation = -deviation
+		}
 		s.ValidSamples++
-		s.sumMillis += float64(d.AgeMillis)
-		s.MaxMillis = max(s.MaxMillis, d.AgeMillis)
+		s.sumMillis += float64(deviation)
+		s.MaxMillis = max(s.MaxMillis, deviation)
 	}
 }
 
@@ -135,10 +141,13 @@ func evaluateInitialSessionAge(id string, received time.Time, limit int) initial
 	idTime := time.UnixMilli(int64(binary.BigEndian.Uint64(timestamp[:]))).UTC()
 	d.IDTime = &idTime
 	d.AgeMillis = received.UnixMilli() - idTime.UnixMilli()
+	// The configured limit applies equally to older IDs and client clocks
+	// ahead of the gateway. Both exact boundaries are inclusive.
+	limitMillis := int64(limit) * 1000
 	switch {
-	case d.AgeMillis < 0:
+	case d.AgeMillis < -limitMillis:
 		d.Result = "future"
-	case d.AgeMillis > int64(limit)*1000:
+	case d.AgeMillis > limitMillis:
 		d.Result = "expired"
 	default:
 		d.Result = "allowed"
