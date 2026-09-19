@@ -604,14 +604,11 @@ func (h *Handler) Messages(c *gin.Context) {
 			account, stickyProxyURL, affinityGuard = h.nextRetryAccountForSessionWithGuard(c.Request.Context(), affinityKey, apiKeyID, retryExclusions, accountFilter)
 		}
 		if account == nil {
-			if !claimContinuousRetryTerminal(c, continuousRetryProtocolAnthropic) {
+			if modelError := sessionModelErrorForRequest(c); modelError != nil {
+				sendSessionModelError(c, modelError, continuousRetryProtocolAnthropic)
 				return
 			}
-			if modelError := sessionModelErrorForRequest(c); modelError != nil {
-				if isStream && writeCommittedAnthropicRetryError(c, string(modelError.Type), modelError.Message) {
-					return
-				}
-				c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": modelError})
+			if !claimContinuousRetryTerminal(c, continuousRetryProtocolAnthropic) {
 				return
 			}
 			if lastClaudePolicyErr != nil {

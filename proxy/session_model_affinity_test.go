@@ -8,12 +8,15 @@ import (
 	"time"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
 
 func TestSessionModelMismatchReturnsGuidanceWithoutChangingAccount(test *testing.T) {
+	const expectedMessage = "当前对话无法继续使用 gpt-5.6-terra。可尝试切换至 gpt-5.6-sol 继续当前任务；如需使用 gpt-5.6-terra，请新建对话后重试。"
 	for _, path := range []string{"/v1/responses", "/v1/responses/compact", "/v1/chat/completions", "/v1/messages", "websocket"} {
 		test.Run(path, func(test *testing.T) {
 			handler := newRootlessPassiveModelTestHandler(test)
@@ -29,6 +32,7 @@ func TestSessionModelMismatchReturnsGuidanceWithoutChangingAccount(test *testing
 				router := gin.New()
 				router.GET("/v1/responses", func(requestContext *gin.Context) {
 					requestContext.Set(contextAPIKeyID, int64(101))
+					requestContext.Set(contextAPIKeyRow, &database.APIKeyRow{ID: 101})
 					handler.ResponsesWebSocket(requestContext)
 				})
 				server := httptest.NewServer(router)
@@ -47,13 +51,18 @@ func TestSessionModelMismatchReturnsGuidanceWithoutChangingAccount(test *testing
 				if err != nil || gjson.GetBytes(response, "error.code").String() != "session_model_unavailable" {
 					test.Fatalf("unexpected model switch event=%s error=%v", response, err)
 				}
+				require.Equal(test, expectedMessage, gjson.GetBytes(response, "error.message").String())
+				_, _, closeErr := connection.ReadMessage()
+				require.True(test, websocket.IsCloseError(closeErr, websocket.ClosePolicyViolation), "%v", closeErr)
 			} else {
 				requestContext, recorder := signedRootlessPassiveModelContext(test, http.MethodPost, path, body, meta)
+				requestContext.Set(contextAPIKeyRow, &database.APIKeyRow{ID: 101})
 				endpoint := map[string]func(*gin.Context){"/v1/responses": handler.Responses, "/v1/responses/compact": handler.ResponsesCompact, "/v1/chat/completions": handler.ChatCompletions, "/v1/messages": handler.Messages}[path]
 				endpoint(requestContext)
-				if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), sessionModelUnavailableMessage) {
+				if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), expectedMessage) {
 					test.Fatalf("unexpected model switch response=%d %s", recorder.Code, recorder.Body.String())
 				}
+				require.Equal(test, "false", recorder.Header().Get("X-Should-Retry"))
 			}
 			if accountID, found := handler.store.AccountSessionAccountID(rootKey, time.Now()); !found || accountID != bound.ID() {
 				test.Fatalf("model switch changed the window owner: %d %v", accountID, found)

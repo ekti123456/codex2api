@@ -128,7 +128,8 @@ func TestSessionContinuityModelSwitchAfterIdleKeepsPersistentOwner(test *testing
 				require.NotNil(test, apiErr)
 				require.Equal(test, api.ErrCodeSessionModelUnavailable, apiErr.Code)
 				require.Equal(test, http.StatusBadRequest, api.HTTPStatusCode(apiErr.Code))
-				require.Equal(test, sessionModelUnavailableMessage, apiErr.Message)
+				require.Contains(test, apiErr.Message, "当前对话无法继续使用 gpt-5.6-terra")
+				require.Contains(test, apiErr.Message, "请新建对话后重试")
 			}
 			trace := selectionTraceForRequest(request)
 			require.Equal(test, owner.ID(), trace.PinnedAccount())

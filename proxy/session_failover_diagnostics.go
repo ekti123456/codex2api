@@ -10,7 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const sessionFailoverUnavailableMessage = "暂无可用账号。请稍后手动重试或联系管理员。"
+const sessionFailoverUnavailableMessage = "当前对话暂时无法继续处理请求，请稍后手动重试；若持续失败，请联系服务提供方。"
+const sessionFailoverCapacityMessage = "当前对话的处理容量暂时不足，本次请求未能继续。请稍后手动重试；若持续失败，请联系服务提供方。"
 
 func failoverSelectionLabels(ctx *gin.Context, groups []int64, tags []string) ([]int64, []string, bool) {
 	groups = slices.Clone(groups)
@@ -42,10 +43,17 @@ func sessionFailoverNoCandidate(ctx *gin.Context) bool {
 }
 
 func sessionFailoverUnavailableAPIError(ctx *gin.Context) *api.APIError {
-	if plan, _ := ctx.Request.Context().Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan); plan != nil && plan.Failure != nil {
-		return plan.Failure
+	message := sessionFailoverUnavailableMessage
+	if plan, _ := ctx.Request.Context().Value(sessionAccountFailoverContextKey{}).(*sessionAccountFailoverPlan); plan != nil {
+		if plan.Failure != nil {
+			return plan.Failure
+		}
+		if plan.Diagnostic != nil && plan.Diagnostic.Result == "no_safe_candidate" &&
+			(plan.Diagnostic.TriggerReason == "account_session_capacity_full" || plan.Diagnostic.Reason == "account_session_capacity_full") {
+			message = sessionFailoverCapacityMessage
+		}
 	}
-	return api.NewAPIErrorWithDetails(api.ErrCodeNoAvailableAccount, sessionFailoverUnavailableMessage, api.ErrorTypeInvalidRequest,
+	return api.NewAPIErrorWithDetails(api.ErrCodeNoAvailableAccount, message, api.ErrorTypeInvalidRequest,
 		gin.H{"request_id": diagnosticRequestID(snapshotUpstreamTrace(ctx.Request.Context()).RequestID), "retryable": false})
 }
 

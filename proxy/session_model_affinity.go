@@ -11,20 +11,39 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const sessionModelUnavailableMessage = "当前会话绑定的上游账号不支持所选模型，请新开对话后使用该模型。"
+const sessionModelUnavailableMessage = "当前对话无法继续使用所选模型。请选择其他可用模型继续当前任务；如需使用所选模型，请新建对话后重试。"
+const sessionModelGuidanceKey = "session_model_guidance"
 
-func sessionModelUnavailableError() *api.APIError {
-	return api.NewAPIError(api.ErrCodeSessionModelUnavailable, sessionModelUnavailableMessage, api.ErrorTypeInvalidRequest)
+func sessionModelUnavailableError(c *gin.Context) *api.APIError {
+	message := sessionModelUnavailableMessage
+	if value, ok := c.Get(sessionModelGuidanceKey); ok {
+		if guidance, ok := value.(func() string); ok {
+			message = guidance()
+		}
+	}
+	if !c.Writer.Written() {
+		c.Header("X-Should-Retry", "false")
+	}
+	return api.NewAPIError(api.ErrCodeSessionModelUnavailable, message, api.ErrorTypeInvalidRequest)
 }
 
 func sessionModelErrorForRequest(requestContext *gin.Context) *api.APIError {
 	if selectionTraceForRequest(requestContext).SessionModelDenied() {
-		return sessionModelUnavailableError()
+		return sessionModelUnavailableError(requestContext)
 	}
 	return nil
 }
 
 func (handler *Handler) configureSessionModelAffinity(requestContext *gin.Context, identity requestSessionIdentity, key, originalModel, effectiveModel string, compact bool, bodies ...[]byte) (apiError *api.APIError) {
+	// Evaluate after selection rejects the bound owner, including a restored
+	// failover owner. Never recommend a model from an unrelated pool account.
+	publicModel := originalModel
+	if requested := gjson.GetBytes(ingressRequestBody(requestContext, nil), "model"); requested.Type == gjson.String {
+		publicModel = requested.String()
+	}
+	requestContext.Set(sessionModelGuidanceKey, func() string {
+		return handler.sessionModelGuidance(requestContext, key, publicModel, effectiveModel, compact)
+	})
 	if _, exists := requestContext.Get(preservedInputSnapshotKey); !exists && len(bodies) > 0 {
 		requestContext.Set(preservedInputSnapshotKey, bodies[0])
 	}
@@ -66,14 +85,14 @@ func (handler *Handler) configureSessionModelAffinity(requestContext *gin.Contex
 			}
 		}
 		if !trace.CheckSessionModel(handler.store.FindByID(owner)) {
-			return sessionModelUnavailableError()
+			return sessionModelUnavailableError(requestContext)
 		}
 		return handler.pinnedSessionCapacityError(requestContext, key)
 	}
 	if accountID, found := handler.store.LiveSessionAccountID(key, time.Now()); found {
 		if !trace.CheckSessionModel(handler.store.FindByID(accountID)) {
 			recordUsageRootAccount(requestContext, accountID, true)
-			return sessionModelUnavailableError()
+			return sessionModelUnavailableError(requestContext)
 		}
 	}
 	return nil

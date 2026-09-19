@@ -66,7 +66,7 @@ func TestSessionFailoverCandidateDetailsAndTerminalTransports(t *testing.T) {
 			}
 			h.sendDispatchUnavailable(ctx, stream, protocol == "chat_sse")
 			require.Contains(t, recorder.Body.String(), "no_available_account")
-			require.Contains(t, recorder.Body.String(), "暂无可用账号")
+			require.Contains(t, recorder.Body.String(), "请稍后手动重试")
 			require.Contains(t, recorder.Body.String(), `"retryable":false`)
 			require.NotContains(t, recorder.Body.String(), "private-pool")
 			require.NotContains(t, recorder.Body.String(), "account_groups_mismatch")

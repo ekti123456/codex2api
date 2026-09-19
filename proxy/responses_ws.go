@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/codex2api/api"
 	"github.com/codex2api/auth"
@@ -1986,7 +1987,11 @@ func truncateWebSocketCloseReason(reason string) string {
 	if len(reason) <= 120 {
 		return reason
 	}
-	return reason[:120]
+	end := 120
+	for end > 0 && !utf8.RuneStart(reason[end]) {
+		end--
+	}
+	return reason[:end]
 }
 
 func newResponsesWSCloseError(code int, reason string, err error) error {

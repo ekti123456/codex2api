@@ -119,16 +119,11 @@ func (handler *Handler) sendDispatchUnavailable(ctx *gin.Context, stream bool, c
 		return
 	}
 	if modelError := sessionModelErrorForRequest(ctx); modelError != nil {
-		api.ObserveError(ctx, api.HTTPStatusCode(modelError.Code), modelError)
-		if stream && ctx.Writer.Written() {
-			if chat && writeCommittedChatRetryError(ctx, modelError.Message) {
-				return
-			}
-			if !chat && writeCommittedResponsesRetryError(ctx, modelError.Message) {
-				return
-			}
+		protocol := continuousRetryProtocolResponses
+		if chat {
+			protocol = continuousRetryProtocolChat
 		}
-		api.SendError(ctx, modelError)
+		sendSessionModelError(ctx, modelError, protocol)
 		return
 	}
 	if !ctx.Writer.Written() {
