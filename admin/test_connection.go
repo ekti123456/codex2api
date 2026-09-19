@@ -423,6 +423,7 @@ func buildClaudeConnectionTestPayload(store *auth.Store, model string, securityC
 // buildAccountConnectionTestPayload 按账号渠道构造测连请求体：Claude 走原生 Messages
 // 形状，其余走 Responses 形状；用户输入取渠道自定义测活内容，留空沿用全局。
 func (h *Handler) codexAccountTestContext(ctx context.Context, account *auth.Account) context.Context {
+	ctx = proxy.WithCodexAccountTestRawResponse(ctx, account)
 	if h.db == nil {
 		return proxy.WithCodexAccountTestIdentityStore(ctx, nil, account)
 	}

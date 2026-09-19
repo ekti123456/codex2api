@@ -22,6 +22,12 @@ WS 的“隐藏上游错误”开关控制是否使用统一友好提示，不�
 
 公开 Key 用量接口使用独立的 `publicAPIKeyLimits` 结构，保留用户自己的预算、模型和功能限制；不再直接返回内部限制对象中的账号 scope ID 和分组 ID。后台配置不被修改。
 
+## 账号测连
+
+后台账号测连通过内部 `WithCodexAccountTestRawResponse` 上下文保留原始上游响应，跳过面向普通用户的身份清理。这样诊断记录可显示真实 Turn-State、响应 ID、请求标识及正文中的嵌套元数据；现有凭据脱敏、响应头白名单和正文预览大小限制继续生效。
+
+此上下文只在测连入口设置，并绑定所选账号。请求头、请求正文及运行配置无法开启它；如果上下文已有普通用户的 Turn-State 或响应 ID 映射，仍然执行用户响应清理。该选项不改变出站请求的身份映射或 Turn-State 校验。
+
 ## 保持的边界
 
 - API relay 的响应 ID 继续使用该供应商的续链协议，不纳入原生 Codex 的 ID 映射。
@@ -39,3 +45,5 @@ WS 的“隐藏上游错误”开关控制是否使用统一友好提示，不�
 `response_privacy_compatibility_test.go` 另外验证业务内容保持、请求 input/tools 字节及大整数保持、首个 SSE 事件不等待 EOF。HTTP/SSE/compact/客户端 WS 边界同时断言推理摘要、工具参数、模型及 usage 保持不变。
 
 自助字段投影由 `admin/key_usage_public_privacy_test.go` 验证。所有样例均为虚构标记，不需要真实账号或生产模型调用。
+
+`admin/codex_test_raw_response_test.go` 将本地 HTTP/WS 上游、原生执行器和测连诊断串联，覆盖成功及失败响应，验证原始身份可诊断且凭据仍脱敏。`proxy/codex_account_test_response_test.go` 验证测连开关不能绕过普通用户响应隐私，也不放宽出站状态校验。

@@ -16,7 +16,7 @@ import (
 var errTurnStateMapping = errors.New("turn-state mapping unavailable")
 
 func finishTurnStateResponse(ctx context.Context, account *auth.Account, response **http.Response, requestErr *error) {
-	if *response == nil {
+	if *response == nil || preserveCodexAccountTestResponse(ctx, account) {
 		return
 	}
 	if err := maskTurnStateResponse(ctx, account, *response); err != nil {

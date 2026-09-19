@@ -1,0 +1,125 @@
+package admin
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/codex2api/auth"
+	"github.com/codex2api/database"
+	"github.com/codex2api/proxy"
+	"github.com/codex2api/proxy/wsrelay"
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+)
+
+// Exercise native execution and the actual diagnostic recorder together; a
+// recorder-only test misses response filtering performed by ExecuteRequest.
+func TestConnectionCodexPreservesRawDiagnosticResponse(t *testing.T) {
+	for _, transport := range []string{"http", "websocket"} {
+		for _, status := range []string{"completed", "failed"} {
+			t.Run(transport+"_"+status, func(t *testing.T) {
+				t.Setenv("CODEX_REQUEST_COMPRESSION", "off")
+				oldResin, oldSettings, oldExecutor := proxy.GetResinConfig(), proxy.CurrentRuntimeSettings(), proxy.WebsocketExecuteFunc
+				t.Cleanup(func() {
+					wsrelay.ShutdownManager()
+					proxy.SetResinConfig(oldResin)
+					proxy.ApplyRuntimeSettings(oldSettings)
+					proxy.WebsocketExecuteFunc = oldExecutor
+				})
+				settings := proxy.DefaultRuntimeSettings()
+				settings.CodexForceWebsocket = transport == "websocket"
+				proxy.ApplyRuntimeSettings(settings)
+				proxy.WebsocketExecuteFunc = wsrelay.ExecuteRequestWebsocket
+				const secret = "connection-test-access-token-123456"
+				const state = "original-connection-test-turn-state"
+				metadata := `{"type":"codex.response.metadata","headers":{"x-codex-turn-state":"` + state + `","x-request-id":"original-request","cf-ray":"original-ray","set-cookie":"private-cookie","authorization":"Bearer ` + secret + `"}}`
+				response := map[string]any{
+					"id": "resp_original_diagnostic", "model": "gpt-5.5", "status": status,
+					"session_id": "original-session", "metadata": map[string]any{"nested": map[string]any{"account_id": "original-account"}},
+					"credential_echo": secret,
+					"usage":           map[string]int{"input_tokens": 23, "output_tokens": 144},
+				}
+				if status == "failed" {
+					response["error"] = map[string]string{"type": "server_error", "code": "server_error", "message": "diagnostic failure"}
+				}
+				terminal, err := json.Marshal(map[string]any{"type": "response." + status, "response": response})
+				require.NoError(t, err)
+				frames := []string{metadata, string(terminal)}
+				if status == "completed" {
+					frames = []string{metadata, `{"type":"response.output_text.delta","delta":"OK"}`, string(terminal)}
+				}
+				received := make(chan []byte, 1)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if transport == "websocket" {
+						conn, err := (&websocket.Upgrader{EnableCompression: true}).Upgrade(w, r, nil)
+						if err != nil {
+							return
+						}
+						defer conn.Close()
+						_, body, err := conn.ReadMessage()
+						if err != nil {
+							return
+						}
+						received <- body
+						for _, frame := range frames {
+							if conn.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
+								return
+							}
+						}
+						return
+					}
+					body, _ := io.ReadAll(r.Body)
+					received <- body
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("X-Codex-Turn-State", state)
+					w.Header().Set("X-Request-ID", "original-request")
+					for _, frame := range frames {
+						_, _ = io.WriteString(w, "data: "+frame+"\n\n")
+					}
+				}))
+				t.Cleanup(server.Close)
+				proxy.SetResinConfig(&proxy.ResinConfig{BaseURL: server.URL, PlatformName: "raw-diagnostic-test"})
+				store := auth.NewStore(nil, nil, &database.SystemSettings{TestModel: "gpt-5.5"})
+				t.Cleanup(store.Stop)
+				store.AddAccount(&auth.Account{DBID: 42, AccessToken: secret, AccountID: "selected-account", Status: auth.StatusReady})
+				events := decodeCodexTestEvents(t, serveCodexDiagnosticsTest(&Handler{store: store}).Body.String())
+				require.GreaterOrEqual(t, len(events), 4)
+				d := events[len(events)-1].CodexDiagnostics
+				require.NotNil(t, d)
+				require.Equal(t, "diagnostics", events[len(events)-1].Type)
+				require.Equal(t, transport, d.Transport)
+				require.Equal(t, "resp_original_diagnostic", d.ResponseID)
+				require.Equal(t, "original-request", d.RequestID)
+				require.Equal(t, "original-ray", d.CFRay)
+				require.Equal(t, status, d.ResponseStatus)
+				require.NotNil(t, d.Usage)
+				require.EqualValues(t, 23, *d.Usage.InputTokens)
+				require.EqualValues(t, 144, *d.Usage.OutputTokens)
+				headers := make(map[string]string)
+				for _, header := range d.ResponseHeaders {
+					headers[header.Name] = header.Value
+				}
+				require.Equal(t, state, headers["x-codex-turn-state"])
+				require.NotContains(t, headers, "authorization")
+				require.NotContains(t, headers, "set-cookie")
+				for _, value := range []string{state, "original-account", "resp_original_diagnostic"} {
+					require.Contains(t, d.ResponseBody, value)
+				}
+				// The existing diagnostic text redactor masks session values;
+				// preserve that behavior rather than the user filter deleting fields.
+				require.Contains(t, d.ResponseBody, `"session_id":"[REDACTED]"`)
+				require.NotContains(t, d.ResponseBody, secret)
+				require.Contains(t, d.ResponseBody, "[REDACTED]")
+				require.Len(t, received, 1)
+				outbound := <-received
+				require.Equal(t, "gpt-5.5", gjson.GetBytes(outbound, "model").String())
+				require.False(t, strings.Contains(string(outbound), state), "response opt-out must not copy upstream state into the test request")
+			})
+		}
+	}
+}
