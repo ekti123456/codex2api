@@ -44,7 +44,7 @@ test('filtered exports preserve query filters and all exports discard every filt
     calls.push({ url: new URL(url, 'http://localhost'), options })
     return new Response('{"logs":[],"total":0,"complete":true}', { headers: { 'Content-Type': 'application/json' } })
   })
-  const filters = { start: '2026-09-11T00:00:00Z', end: '2026-09-12T00:00:00Z', q: '01a09012', requestType: 'compaction', channel: 'codex', status: '500', viaWebsocket: 'true', retry: 'false', accountId: '42', page: 99, pageSize: 1 }
+  const filters = { start: '2026-09-11T00:00:00Z', end: '2026-09-12T00:00:00Z', q: '01a09012', requestType: 'compaction', channel: 'codex', status: '500', viaWebsocket: 'true', retry: 'false', turnFirst: 'true', accountId: '42', page: 99, pageSize: 1 }
   const signal = new AbortController().signal
   await api.downloadUsageLogs('filtered', filters, signal)
   const first = calls[0]
@@ -53,7 +53,7 @@ test('filtered exports preserve query filters and all exports discard every filt
   assert.equal(first.options.signal, signal)
   assert.equal(first.options.headers.get('X-Admin-Key'), 'test-admin-key')
   assert.deepEqual(Object.fromEntries(first.url.searchParams), {
-    start: filters.start, end: filters.end, q: filters.q, request_type: 'compaction', channel: 'codex', status: '500', via_websocket: 'true', retry: 'false', account_id: '42', scope: 'filtered', confirmed: 'true',
+    start: filters.start, end: filters.end, q: filters.q, request_type: 'compaction', channel: 'codex', status: '500', via_websocket: 'true', retry: 'false', turn_first: 'true', account_id: '42', scope: 'filtered', confirmed: 'true',
   })
   const blob = await api.downloadUsageLogs('all', filters, signal)
   assert.deepEqual(Object.fromEntries(calls[1].url.searchParams), { scope: 'all', confirmed: 'true' })

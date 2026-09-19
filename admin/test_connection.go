@@ -172,7 +172,7 @@ func (h *Handler) TestConnection(c *gin.Context) {
 	} else if isAntigravityAccount {
 		resp, reqErr = h.executeAntigravityConnectionTest(c.Request.Context(), account, testModel, payload, h.store.ResolveProxyForAccount(account), !isTransient)
 	} else if isOpenAIResponsesAccount {
-		resp, reqErr = proxy.ExecuteRelayStyleRequest(c.Request.Context(), account, payload, h.store.ResolveProxyForAccount(account), nil)
+		resp, reqErr = proxy.ExecuteRelayStyleRequest(proxy.WithCodexAccountTestRawResponse(c.Request.Context(), account), account, payload, h.store.ResolveProxyForAccount(account), nil)
 	} else {
 		resp, reqErr = proxy.ExecuteRequest(h.codexAccountTestContext(c.Request.Context(), account), account, payload, proxy.ResolveExplicitSessionID(nil, payload), h.store.ResolveProxyForAccount(account), "", nil, nil)
 	}

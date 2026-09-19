@@ -8329,6 +8329,13 @@ func parseUsageLogsFilter(c *gin.Context, startTime, endTime time.Time) (databas
 	if !ok {
 		return database.UsageLogFilter{}, false
 	}
+	filter.TurnFirst = strings.TrimSpace(c.Query("turn_first"))
+	switch filter.TurnFirst {
+	case "", "true", "false", "unknown":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "turn_first must be true, false, or unknown"})
+		return database.UsageLogFilter{}, false
+	}
 	filter.ViaWebsocketOnly, ok = parseUsageLogBoolFilter(c, "via_websocket")
 	if !ok {
 		return database.UsageLogFilter{}, false

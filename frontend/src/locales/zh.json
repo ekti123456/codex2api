@@ -2412,6 +2412,12 @@
     "userAgentNotSent": "未发送",
     "userAgentWebSocketHint": "WebSocket 请求显示的是实际复用或新建连接在握手时发送给上游的 User-Agent。",
     "turnStartBadge": "首轮",
+    "turnFirst": {
+      "all": "全部轮内请求",
+      "first": "首轮",
+      "followup": "后续请求",
+      "unknown": "未判定"
+    },
     "tableEndpoint": "端点",
     "tableType": "类型",
     "tableToken": "TOKEN",

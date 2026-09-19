@@ -512,6 +512,7 @@ export type UsageLogQueryParams = {
   errorOnly?: string
   errorKind?: string
   retry?: string
+  turnFirst?: string
   viaWebsocket?: string
   includeCanceled?: string
 }
@@ -539,6 +540,7 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   if (params.errorOnly) search.set('error_only', params.errorOnly)
   if (params.errorKind) search.set('error_kind', params.errorKind)
   if (params.retry) search.set('retry', params.retry)
+  if (params.turnFirst) search.set('turn_first', params.turnFirst)
   if (params.viaWebsocket) search.set('via_websocket', params.viaWebsocket)
   if (params.includeCanceled) search.set('include_canceled', params.includeCanceled)
   return search

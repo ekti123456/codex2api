@@ -28,6 +28,7 @@ export interface CodexTestDiagnostics {
   response_id?: string;
   cf_ray?: string;
   plan_type?: string;
+  turn_state_length?: number;
   safety_buffering_enabled?: boolean;
   safety_buffering_faster_model?: string;
   safety_buffered?: boolean;

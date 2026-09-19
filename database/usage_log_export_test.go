@@ -10,6 +10,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func waitUsageLogExportFixtureRows(t *testing.T, db *DB, count int) {
+	t.Helper()
+	// A background writer may still own a dequeued batch after FlushUsageLogs.
+	// Export snapshots exclude later commits, so finish fixture setup first.
+	require.Eventually(t, func() bool {
+		var actual int
+		err := db.conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM usage_logs").Scan(&actual)
+		return err == nil && actual == count
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
 func TestUsageLogExportAllRetainedAndFilteredWithoutPageLimit(test *testing.T) {
 	db := newGrokStateTestDB(test)
 	now := time.Now().UTC()
@@ -21,6 +32,7 @@ func TestUsageLogExportAllRetainedAndFilteredWithoutPageLimit(test *testing.T) {
 		}))
 	}
 	db.FlushUsageLogs()
+	waitUsageLogExportFixtureRows(test, db, 503)
 	for _, row := range []struct {
 		status   int
 		internal string
@@ -72,6 +84,7 @@ func TestUsageLogExportPropagatesCancellationAndConsumerFailure(test *testing.T)
 	db := newGrokStateTestDB(test)
 	require.NoError(test, db.InsertUsageLog(test.Context(), &UsageLogInput{StatusCode: 200, Endpoint: "/v1/responses"}))
 	db.FlushUsageLogs()
+	waitUsageLogExportFixtureRows(test, db, 1)
 	consumerError := errors.New("disk full")
 	err := db.WalkUsageLogsForExport(test.Context(), nil, func(*UsageLogExportEntry) error { return consumerError })
 	require.ErrorIs(test, err, consumerError)

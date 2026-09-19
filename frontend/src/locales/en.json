@@ -2411,6 +2411,12 @@
     "userAgentNotSent": "Not sent",
     "userAgentWebSocketHint": "For WebSocket requests, the upstream value is the User-Agent sent when the actual reused or new connection was established.",
     "turnStartBadge": "Turn start",
+    "turnFirst": {
+      "all": "All turn positions",
+      "first": "Turn start",
+      "followup": "Follow-up requests",
+      "unknown": "Undetermined"
+    },
     "tableEndpoint": "Endpoint",
     "tableType": "Type",
     "tableToken": "Tokens",

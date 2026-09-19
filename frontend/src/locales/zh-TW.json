@@ -1502,6 +1502,12 @@
   },
   "usage": {
     "turnStartBadge": "首輪",
+    "turnFirst": {
+      "all": "全部輪內請求",
+      "first": "首輪",
+      "followup": "後續請求",
+      "unknown": "未判定"
+    },
     "turnState": {
       "column": "Turn-State",
       "all": "全部狀態",

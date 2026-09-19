@@ -830,6 +830,11 @@ export default function TestConnectionModal({
                               <tr key={`${header.name}-${index}`} className="border-b border-border/40 last:border-0">
                                 <th scope="row" className="w-[44%] break-all px-3 py-1.5 align-top font-normal text-muted-foreground" style={monoStyle}>
                                   {header.name}
+                                  {header.name.toLowerCase() === "x-codex-turn-state" && typeof diagnostics.turn_state_length === "number" && (
+                                    <span className="mt-1 block w-fit rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-foreground">
+                                      {t("usage.turnState.characters", { count: diagnostics.turn_state_length })}
+                                    </span>
+                                  )}
                                 </th>
                                 <td className="break-all px-3 py-1.5 align-top" style={monoStyle}>
                                   {header.value}

@@ -6421,6 +6421,7 @@ type UsageLogFilter struct {
 	SearchScope           string // empty/all searches all supported fields
 	Channel               string // 上游渠道（codex/grok），空=全部
 	RetryOnly             *bool  // nil=全部, true=仅重试请求, false=仅首次请求
+	TurnFirst             string // empty=全部, true=首轮, false=后续, unknown=未判定
 	ViaWebsocketOnly      *bool  // nil=全部, true=仅 WebSocket, false=仅 HTTP
 }
 
@@ -6515,6 +6516,12 @@ func (db *DB) buildUsageLogWhere(f UsageLogFilter) (string, []interface{}) {
 	if f.RetryOnly != nil {
 		p := addArg(*f.RetryOnly)
 		parts = append(parts, fmt.Sprintf(`COALESCE(u.is_retry_attempt, false) = %s`, p))
+	}
+	switch f.TurnFirst {
+	case "true", "false":
+		parts = append(parts, "u.is_turn_first_request = "+addArg(f.TurnFirst == "true"))
+	case "unknown":
+		parts = append(parts, "u.is_turn_first_request IS NULL")
 	}
 	if f.ViaWebsocketOnly != nil {
 		p := addArg(*f.ViaWebsocketOnly)

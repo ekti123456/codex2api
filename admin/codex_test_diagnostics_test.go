@@ -84,9 +84,36 @@ func TestCodexTestRecorderWithoutWindowHeadersLeavesWindowsAbsent(t *testing.T) 
 		t.Fatalf("absent headers must stay absent: %+v", r.details)
 	}
 	raw, _ := json.Marshal(r.details)
-	for _, forbidden := range []string{"primary_window", "secondary_window", "usage", "duration_ms", "first_content_ms"} {
+	for _, forbidden := range []string{"primary_window", "secondary_window", "usage", "duration_ms", "first_content_ms", "turn_state_length"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("unobserved field %q must be omitted: %s", forbidden, raw)
+		}
+	}
+}
+
+func TestCodexTestRecorderCountsFullTurnStateBeforePreviewTruncation(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("X-Codex-Turn-State", strings.Repeat("a", 4096))
+	r := newCodexTestRecorder(&http.Response{StatusCode: 200, Header: headers}, "gpt-5.4", nil, time.Now())
+	if r.details.TurnStateLength == nil || *r.details.TurnStateLength != 4096 {
+		t.Fatal("must count the full HTTP header value before preview truncation")
+	}
+	if len(r.details.ResponseHeaders) != 1 || len(r.details.ResponseHeaders[0].Value) >= 4096 {
+		t.Fatal("the diagnostic header preview must remain bounded")
+	}
+	// Metadata updates the displayed value and count together, counting Unicode
+	// characters rather than bytes. An observed empty value differs from absence.
+	for _, scenario := range []struct {
+		value string
+		count int
+	}{{"新值😀", 3}, {"", 0}} {
+		frame, err := json.Marshal(map[string]any{"type": "codex.response.metadata", "headers": map[string]string{"X-Codex-Turn-State": scenario.value}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.observe(frame)
+		if r.details.TurnStateLength == nil || *r.details.TurnStateLength != scenario.count || r.details.ResponseHeaders[0].Value != scenario.value {
+			t.Fatalf("metadata value and character count must match: %+v", r.details)
 		}
 	}
 }

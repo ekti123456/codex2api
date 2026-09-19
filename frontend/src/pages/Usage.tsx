@@ -134,6 +134,7 @@ const USAGE_TIME_RANGE_OPTIONS: UsagePresetRangeKey[] = ['today', '1h', '6h', '2
 type UsageTypeFilter = '' | 'stream' | 'sync' | 'compact' | 'history'
 type UsageStatusFilter = '' | '2xx' | 'error' | '4xx' | '5xx' | `${number}`
 type UsageRetryFilter = '' | 'false' | 'true'
+type UsageTurnFirstFilter = '' | 'true' | 'false' | 'unknown'
 type UsageTransportFilter = '' | 'http' | 'ws'
 
 // 本页面局部的"自定义"区间标记。不污染全局 TimeRangeKey 类型 (Dashboard 等仍只识别预设档)。
@@ -1811,6 +1812,7 @@ export default function Usage() {
   const [filterType, setFilterType] = useState<UsageTypeFilter>('')
   const [filterErrorKind, setFilterErrorKind] = useState('')
   const [filterRetry, setFilterRetry] = useState<UsageRetryFilter>('')
+  const [filterTurnFirst, setFilterTurnFirst] = useState<UsageTurnFirstFilter>('')
   const [filterTransport, setFilterTransport] = useState<UsageTransportFilter>('')
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
   const [apiKeys, setAPIKeys] = useState<APIKeyRow[]>([])
@@ -1911,9 +1913,10 @@ export default function Usage() {
       errorOnly: filterStatus === 'error' ? 'true' : undefined,
       errorKind: filterErrorKind || undefined,
       retry: filterRetry || undefined,
+      turnFirst: filterTurnFirst || undefined,
       viaWebsocket: filterTransport === 'ws' ? 'true' : filterTransport === 'http' ? 'false' : undefined,
     }
-  }, [timeRange, customRange, searchQuery, searchScope, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterType, channel, filterStatus, filterRequestType, filterTurnState, filterTurnStateLength, filterErrorKind, filterRetry, filterTransport])
+  }, [timeRange, customRange, searchQuery, searchScope, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterType, channel, filterStatus, filterRequestType, filterTurnState, filterTurnStateLength, filterErrorKind, filterRetry, filterTurnFirst, filterTransport])
 
   const downloadLogs = async (scope: 'filtered' | 'all') => {
     if (exportController.current) return
@@ -2107,6 +2110,7 @@ export default function Usage() {
     filterFast,
     filterErrorKind,
     filterRetry,
+    filterTurnFirst,
     filterTransport,
   ].filter(Boolean).length
   const hasActiveFilters = Boolean(
@@ -2123,6 +2127,7 @@ export default function Usage() {
     || filterFast
     || filterErrorKind
     || filterRetry
+    || filterTurnFirst
     || filterTransport,
   )
   const statusFilterOptions: Array<{ value: UsageStatusFilter; label: string; tone?: string }> = [
@@ -2174,6 +2179,7 @@ export default function Usage() {
     setFilterFast('')
     setFilterErrorKind('')
     setFilterRetry('')
+    setFilterTurnFirst('')
     setFilterTransport('')
     setPage(1)
   }
@@ -2699,6 +2705,18 @@ export default function Usage() {
                       { label: 'cyber_policy', value: 'cyber_policy' },
                       { label: 'upstream_error', value: 'upstream_error' },
                       { label: 'upstream_timeout', value: 'upstream_timeout' },
+                    ]}
+                  />
+                  <Select
+                    compact
+                    value={filterTurnFirst}
+                    onValueChange={(value) => { setFilterTurnFirst(value as UsageTurnFirstFilter); setPage(1) }}
+                    placeholder={t('usage.turnFirst.all')}
+                    options={[
+                      { label: t('usage.turnFirst.all'), value: '' },
+                      { label: t('usage.turnFirst.first'), value: 'true' },
+                      { label: t('usage.turnFirst.followup'), value: 'false' },
+                      { label: t('usage.turnFirst.unknown'), value: 'unknown' },
                     ]}
                   />
                   <Select

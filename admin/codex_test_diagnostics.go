@@ -50,18 +50,19 @@ type codexTestUsage struct {
 }
 
 type codexTestDiagnostics struct {
-	HTTPStatus     int    `json:"http_status,omitempty"`
-	DurationMS     *int64 `json:"duration_ms,omitempty"`
-	HeadersMS      *int64 `json:"headers_ms,omitempty"`
-	FirstFrameMS   *int64 `json:"first_frame_ms,omitempty"`
-	FirstContentMS *int64 `json:"first_content_ms,omitempty"`
-	Model          string `json:"model"`
-	ResponseModel  string `json:"response_model,omitempty"`
-	Transport      string `json:"transport,omitempty"`
-	RequestID      string `json:"request_id,omitempty"`
-	ResponseID     string `json:"response_id,omitempty"`
-	CFRay          string `json:"cf_ray,omitempty"`
-	PlanType       string `json:"plan_type,omitempty"`
+	HTTPStatus      int    `json:"http_status,omitempty"`
+	DurationMS      *int64 `json:"duration_ms,omitempty"`
+	HeadersMS       *int64 `json:"headers_ms,omitempty"`
+	FirstFrameMS    *int64 `json:"first_frame_ms,omitempty"`
+	FirstContentMS  *int64 `json:"first_content_ms,omitempty"`
+	Model           string `json:"model"`
+	ResponseModel   string `json:"response_model,omitempty"`
+	Transport       string `json:"transport,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
+	ResponseID      string `json:"response_id,omitempty"`
+	CFRay           string `json:"cf_ray,omitempty"`
+	PlanType        string `json:"plan_type,omitempty"`
+	TurnStateLength *int   `json:"turn_state_length,omitempty"`
 	// 安全缓冲:上游可能为额外审查而扣住输出;enabled 只说明该模型开着这项能力,
 	// faster_model 是官方 CLI "Retry with a faster model" 的切换目标,buffered
 	// 才表示本轮真的被缓冲过(事件级 safety_buffering=true)。
@@ -254,7 +255,14 @@ func (r *codexTestRecorder) appendHeaders(header http.Header) {
 		if !codexTestHeaderAllowed(name) {
 			continue
 		}
-		value := r.safeValue(strings.Join(header[key], ", "))
+		rawValue := strings.Join(header[key], ", ")
+		if name == "x-codex-turn-state" {
+			// Count the observed value before the diagnostic preview is redacted
+			// or truncated. Metadata frames update the value and count together.
+			length := utf8.RuneCountInString(rawValue)
+			r.details.TurnStateLength = &length
+		}
+		value := r.safeValue(rawValue)
 		replaced := false
 		for i := range r.details.ResponseHeaders {
 			if r.details.ResponseHeaders[i].Name == name {

@@ -17,10 +17,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Exercise native execution and the actual diagnostic recorder together; a
-// recorder-only test misses response filtering performed by ExecuteRequest.
+// Exercise native and API relay execution with the actual diagnostic recorder;
+// recorder-only tests miss response filtering performed by either executor.
 func TestConnectionCodexPreservesRawDiagnosticResponse(t *testing.T) {
-	for _, transport := range []string{"http", "websocket"} {
+	for _, transport := range []string{"http", "websocket", "api_relay"} {
 		for _, status := range []string{"completed", "failed"} {
 			t.Run(transport+"_"+status, func(t *testing.T) {
 				t.Setenv("CODEX_REQUEST_COMPRESSION", "off")
@@ -86,13 +86,19 @@ func TestConnectionCodexPreservesRawDiagnosticResponse(t *testing.T) {
 				proxy.SetResinConfig(&proxy.ResinConfig{BaseURL: server.URL, PlatformName: "raw-diagnostic-test"})
 				store := auth.NewStore(nil, nil, &database.SystemSettings{TestModel: "gpt-5.5"})
 				t.Cleanup(store.Stop)
-				store.AddAccount(&auth.Account{DBID: 42, AccessToken: secret, AccountID: "selected-account", Status: auth.StatusReady})
+				account := &auth.Account{DBID: 42, AccessToken: secret, AccountID: "selected-account", Status: auth.StatusReady}
+				wantTransport := transport
+				if transport == "api_relay" {
+					account = &auth.Account{DBID: 42, UpstreamType: auth.UpstreamOpenAIResponses, BaseURL: server.URL, APIKey: secret, Status: auth.StatusReady, Models: []string{"gpt-5.5"}}
+					wantTransport = "http"
+				}
+				store.AddAccount(account)
 				events := decodeCodexTestEvents(t, serveCodexDiagnosticsTest(&Handler{store: store}).Body.String())
 				require.GreaterOrEqual(t, len(events), 4)
 				d := events[len(events)-1].CodexDiagnostics
 				require.NotNil(t, d)
 				require.Equal(t, "diagnostics", events[len(events)-1].Type)
-				require.Equal(t, transport, d.Transport)
+				require.Equal(t, wantTransport, d.Transport)
 				require.Equal(t, "resp_original_diagnostic", d.ResponseID)
 				require.Equal(t, "original-request", d.RequestID)
 				require.Equal(t, "original-ray", d.CFRay)
@@ -105,6 +111,8 @@ func TestConnectionCodexPreservesRawDiagnosticResponse(t *testing.T) {
 					headers[header.Name] = header.Value
 				}
 				require.Equal(t, state, headers["x-codex-turn-state"])
+				require.NotNil(t, d.TurnStateLength)
+				require.Equal(t, len(state), *d.TurnStateLength)
 				require.NotContains(t, headers, "authorization")
 				require.NotContains(t, headers, "set-cookie")
 				for _, value := range []string{state, "original-account", "resp_original_diagnostic"} {

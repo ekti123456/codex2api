@@ -74,6 +74,18 @@ test("usage log search params omit empty optional filters", () => {
   });
 });
 
+test("turn-start filters remain independent of retry filters", () => {
+  for (const turnFirst of ["true", "false", "unknown"]) {
+    const params = buildUsageLogSearchParams({
+      start: "2026-09-19T00:00:00Z", end: "2026-09-20T00:00:00Z",
+      retry: "false", turnFirst,
+    });
+    assert.equal(params.get("turn_first"), turnFirst);
+    assert.equal(params.get("retry"), "false");
+  }
+  assert.equal(buildUsageLogSearchParams({ turnFirst: "" }).has("turn_first"), false);
+});
+
 test("turn-state zero means inspected but absent, not unrecorded", () => {
   const params = buildUsageLogSearchParams({ turnState: "missing", turnStateLength: "0" });
   assert.equal(params.get("turn_state_length"), "0");
